@@ -6,7 +6,7 @@ Demiurge 的待办与方向，欢迎认领。✅ 已完成 · ⬜ 待做 · 💡
 ## MVP 现状 ✅
 - [x] OpenAI 兼容流式 LLM 适配器（默认 DeepSeek）
 - [x] Agent 循环（调用→工具→喂回→重复）+ 流式 + 中断
-- [x] 工具：`open_path` / `read_file` / `write_file` / `web_search` / `system_info`
+- [x] 工具：`open_path` / `read_file` / `write_file` / `web_search` / `system_info` / `glob` / `grep` / `git_status`
 - [x] 权限门（auto / confirm + 前端确认弹窗）
 - [x] 文件沙盒（词法 + canonicalize 双重校验，防链接逃逸）
 - [x] 上下文裁剪、会话/设置持久化（重启恢复）
@@ -16,7 +16,8 @@ Demiurge 的待办与方向，欢迎认领。✅ 已完成 · ⬜ 待做 · 💡
 
 ## 近期打磨 ⬜
 - [x] **Claude Code-like Agent Core 地基首阶段**：工具 metadata、权限决策骨架、`tool_call_id` 事件关联、ProviderProfile 骨架
-- [ ] **Phase 1 编程工具**：`edit_file`（diff preview）、`glob`、`grep`、`git_status`
+- [x] **Phase 1 只读编程工具**：`glob`、`grep`、`git_status`
+- [ ] **Phase 1 编辑工具**：`edit_file`（diff preview / apply-reject / undo）
 - [ ] **权限系统 2.0 UI**：确认弹窗支持允许本次 / 本会话 / 本项目，并记录 decision/audit
 - [ ] **Project Context Builder**：读取 `DEMIURGE.md` / `CLAUDE.md`、git 快照、README/项目结构摘要
 - [ ] **Provider Adapter 拆分**：从 OpenAI-compatible profile 演进到 Anthropic / Gemini / local adapters

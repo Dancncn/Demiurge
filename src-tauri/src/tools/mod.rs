@@ -5,6 +5,9 @@ use serde::Serialize;
 use serde_json::{json, Value};
 use std::path::{Component, Path, PathBuf};
 
+mod git_status;
+mod glob;
+mod grep;
 mod open_path;
 mod read_file;
 mod system_info;
@@ -123,6 +126,51 @@ pub fn registry() -> Vec<ToolDefinition> {
             }),
         },
         ToolDefinition {
+            name: "glob",
+            description: "在沙盒目录内按 glob pattern 搜索文件路径。适合了解目录结构、查找代码或文档文件。",
+            risk: ToolRisk::ReadOnly,
+            concurrency: ToolConcurrency::ParallelSafe,
+            permission: PermissionPolicy::allow("只列出沙盒目录内匹配的文件路径。"),
+            output_policy: ToolOutputPolicy::TruncateForUi,
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "pattern": { "type": "string", "description": "glob 模式，如 **/*.rs、notes/*.md；不能包含 .. 或绝对路径" },
+                    "base": { "type": "string", "description": "可选：相对沙盒目录的搜索根目录，默认沙盒根" },
+                    "limit": { "type": "integer", "description": "可选：最多返回多少条，默认 200，最大 500" }
+                },
+                "required": ["pattern"]
+            }),
+        },
+        ToolDefinition {
+            name: "grep",
+            description: "在沙盒目录内搜索文本内容，返回匹配文件、行号和行摘要。默认按普通文本搜索，可开启 regex。",
+            risk: ToolRisk::ReadOnly,
+            concurrency: ToolConcurrency::ParallelSafe,
+            permission: PermissionPolicy::allow("只读取沙盒目录内的文本文件并返回匹配摘要。"),
+            output_policy: ToolOutputPolicy::TruncateForUi,
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "query": { "type": "string", "description": "要搜索的文本或正则表达式" },
+                    "path": { "type": "string", "description": "可选：相对沙盒目录的文件或目录，默认沙盒根" },
+                    "case_sensitive": { "type": "boolean", "description": "可选：是否大小写敏感，默认 false" },
+                    "regex": { "type": "boolean", "description": "可选：是否把 query 当作正则表达式，默认 false" },
+                    "limit": { "type": "integer", "description": "可选：最多返回多少条匹配，默认 100，最大 300" }
+                },
+                "required": ["query"]
+            }),
+        },
+        ToolDefinition {
+            name: "git_status",
+            description: "读取沙盒目录的 Git 状态摘要（git status --short --branch）。只读，不会修改仓库。",
+            risk: ToolRisk::ReadOnly,
+            concurrency: ToolConcurrency::ParallelSafe,
+            permission: PermissionPolicy::allow("只读取 Git 工作区状态。"),
+            output_policy: ToolOutputPolicy::TruncateForUi,
+            parameters: json!({ "type": "object", "properties": {} }),
+        },
+        ToolDefinition {
             name: "write_file",
             description: "在沙盒目录内创建或覆盖一个文本文件（不可逆，需用户确认）。路径相对于沙盒目录。",
             risk: ToolRisk::Mutating,
@@ -211,6 +259,9 @@ pub async fn execute(state: &crate::AppState, name: &str, args: Value) -> Result
     match name {
         "open_path" => open_path::run(args),
         "read_file" => read_file::run(state, args),
+        "glob" => glob::run(state, args),
+        "grep" => grep::run(state, args),
+        "git_status" => git_status::run(state, args),
         "write_file" => write_file::run(state, args),
         "web_search" => web_search::run(state, args).await,
         "system_info" => system_info::run(),
