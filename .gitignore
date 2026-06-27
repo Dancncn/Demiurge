@@ -1,0 +1,21 @@
+# 依赖与构建产物
+node_modules/
+dist/
+src-tauri/target/
+src-tauri/gen/
+
+# 本地编译加速：把 target 指向另一个项目以复用已编译依赖（含绝对路径，仅本机有效，不入库）
+src-tauri/.cargo/
+
+# 本地角色包（不把具体角色素材提交进仓库）；保留通用 default 作为格式参考
+packs/*
+!packs/default/
+
+# 本地配置
+.env
+.env.local
+
+# 编辑器
+.vscode/
+.idea/
+.DS_Store

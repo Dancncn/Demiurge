@@ -1,0 +1,19 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "demiurge-dev",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev"],
+      "port": 41430,
+      "autoPort": false
+    },
+    {
+      "name": "demiurge-preview",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["vite", "preview", "--port", "41431", "--strictPort"],
+      "port": 41431,
+      "autoPort": false
+    }
+  ]
+}
