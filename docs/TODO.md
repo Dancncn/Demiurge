@@ -25,7 +25,8 @@ Demiurge 的待办与方向，欢迎认领。✅ 已完成 · ⬜ 待做 · 💡
 - [x] **Phase 2 Token-aware Budget**：用启发式 token 估算统一 system prompt、工具 schema、历史消息与输出预留预算
 - [x] **Phase 2 自动记忆提取**：保守提取用户偏好 / 项目长期约束，写入沙盒 `.demiurge/memory.md`
 - [x] **编辑工具 undo 栈**：`undo_edit` 撤销本进程内最近一次 `edit_file`，执行前展示反向 diff 并校验文件未漂移
-- [ ] **编辑工具后续增强**：高级 patch 引擎 / 跨文件批量编辑
+- [x] **跨文件批量编辑**：`multi_edit` 批量精确替换 + 聚合 preview + undo 记录
+- [ ] **编辑工具后续增强**：高级 patch 引擎
 - [ ] **Provider Adapter 拆分**：从 OpenAI-compatible profile 演进到 Anthropic / Gemini / local adapters
 - [ ] **API Key 安全存储**：从明文 `settings.json` 改为系统凭据管理器（Windows keyring）
 - [ ] **会话重命名**：手动改会话标题

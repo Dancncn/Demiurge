@@ -226,6 +226,34 @@ pub fn registry() -> Vec<ToolDefinition> {
             }),
         },
         ToolDefinition {
+            name: "multi_edit",
+            description: "批量编辑沙盒内多个已有文本文件：每个 edit 使用 old_string/new_string 精确替换。执行前会全量预检并展示聚合 diff 预览。",
+            risk: ToolRisk::Mutating,
+            concurrency: ToolConcurrency::SerialOnly,
+            permission: PermissionPolicy::ask("会批量修改沙盒目录内的已有文件。"),
+            output_policy: ToolOutputPolicy::Inline,
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "edits": {
+                        "type": "array",
+                        "description": "要应用的编辑列表，最多 20 个。任一 edit 预检失败则不会写入任何文件。",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "path": { "type": "string", "description": "相对沙盒目录的已有文本文件路径" },
+                                "old_string": { "type": "string", "description": "要被替换的原文。默认必须在当前文件内容中唯一出现" },
+                                "new_string": { "type": "string", "description": "替换后的新文本" },
+                                "replace_all": { "type": "boolean", "description": "可选：是否替换全部出现位置，默认 false" }
+                            },
+                            "required": ["path", "old_string", "new_string"]
+                        }
+                    }
+                },
+                "required": ["edits"]
+            }),
+        },
+        ToolDefinition {
             name: "undo_edit",
             description: "撤销本进程内最近一次成功的 edit_file 修改。撤销前会确认目标文件未被后续外部修改，并展示反向 diff 预览。",
             risk: ToolRisk::Mutating,
@@ -306,6 +334,7 @@ pub async fn execute(state: &crate::AppState, name: &str, args: Value) -> Result
         "shell" => shell::run(state, args),
         "write_file" => write_file::run(state, args),
         "edit_file" => edit_file::run(state, args),
+        "multi_edit" => edit_file::multi_run(state, args),
         "undo_edit" => edit_file::undo(state, args),
         "web_search" => web_search::run(state, args).await,
         "system_info" => system_info::run(),
@@ -318,6 +347,10 @@ pub fn confirmation_preview(state: &crate::AppState, name: &str, args: Value) ->
         "edit_file" => Some(
             edit_file::preview(state, args)
                 .unwrap_or_else(|e| format!("无法生成 diff preview：{e}")),
+        ),
+        "multi_edit" => Some(
+            edit_file::multi_preview(state, args)
+                .unwrap_or_else(|e| format!("无法生成 multi_edit preview：{e}")),
         ),
         "undo_edit" => Some(
             edit_file::undo_preview(state, args)

@@ -1,9 +1,12 @@
 //! edit_file：在沙盒内对已有 UTF-8 文本文件做精确替换（confirm 类）。
+use std::collections::HashMap;
+
 use serde_json::Value;
 
 const MAX_EDIT: u64 = 256 * 1024;
 const MAX_PREVIEW_CHARS: usize = 12_000;
 const MAX_UNDO_ENTRIES: usize = 20;
+const MAX_MULTI_EDITS: usize = 20;
 
 #[derive(Clone, Debug)]
 pub struct EditUndoEntry {
@@ -15,6 +18,7 @@ pub struct EditUndoEntry {
     pub replacements: usize,
 }
 
+#[derive(Clone, Debug)]
 struct EditRequest {
     rel: String,
     old_string: String,
@@ -22,23 +26,56 @@ struct EditRequest {
     replace_all: bool,
 }
 
+#[derive(Clone, Debug)]
+struct PlannedEdit {
+    rel: String,
+    before: String,
+    after: String,
+    replacements: usize,
+}
+
 pub fn preview(state: &crate::AppState, args: Value) -> Result<String, String> {
-    let req = parse_args(&args)?;
-    let original = read_target(state, &req.rel)?;
-    let (updated, count) = apply_edit(&original, &req)?;
-    Ok(build_preview(&req.rel, &original, &updated, count))
+    let req = parse_edit_args(&args)?;
+    let planned = plan_edit(state, &req)?;
+    Ok(build_preview(
+        &planned.rel,
+        &planned.before,
+        &planned.after,
+        planned.replacements,
+    ))
 }
 
 pub fn run(state: &crate::AppState, args: Value) -> Result<String, String> {
-    let req = parse_args(&args)?;
-    let sandbox = state.sandbox_dir.lock().unwrap().clone();
-    let path = super::resolve_in_sandbox(&sandbox, &req.rel)?;
-    let original = read_target(state, &req.rel)?;
-    let (updated, count) = apply_edit(&original, &req)?;
+    let req = parse_edit_args(&args)?;
+    let planned = plan_edit(state, &req)?;
+    write_planned_edit(state, &planned)?;
+    Ok(format!(
+        "已编辑沙盒文件：{}（替换 {} 处）",
+        planned.rel, planned.replacements
+    ))
+}
 
-    std::fs::write(&path, &updated).map_err(|e| format!("写入失败：{e}"))?;
-    push_undo_entry(state, req.rel.clone(), original, updated, count);
-    Ok(format!("已编辑沙盒文件：{}（替换 {} 处）", req.rel, count))
+pub fn multi_preview(state: &crate::AppState, args: Value) -> Result<String, String> {
+    let edits_count = edits_count(&args)?;
+    let planned = plan_multi_edit(state, &args)?;
+    Ok(build_multi_preview(&planned, edits_count))
+}
+
+pub fn multi_run(state: &crate::AppState, args: Value) -> Result<String, String> {
+    let edits_count = edits_count(&args)?;
+    let planned = plan_multi_edit(state, &args)?;
+    let total_replacements = planned.iter().map(|p| p.replacements).sum::<usize>();
+
+    for edit in &planned {
+        write_planned_edit(state, edit)?;
+    }
+
+    Ok(format!(
+        "已批量编辑 {} 个文件（{} 个 edit，替换 {} 处）",
+        planned.len(),
+        edits_count,
+        total_replacements
+    ))
 }
 
 pub fn undo_preview(state: &crate::AppState, _args: Value) -> Result<String, String> {
@@ -77,12 +114,20 @@ pub fn undo(state: &crate::AppState, _args: Value) -> Result<String, String> {
     }
 }
 
-fn parse_args(args: &Value) -> Result<EditRequest, String> {
+fn parse_edit_args(args: &Value) -> Result<EditRequest, String> {
     let rel = super::args::required_non_empty_str(args, "path")?.to_string();
     let old_string = super::args::required_str(args, "old_string")?.to_string();
     let new_string = super::args::required_str(args, "new_string")?.to_string();
     let replace_all = super::args::optional_bool(args, "replace_all", false);
+    validate_edit_args(rel, old_string, new_string, replace_all)
+}
 
+fn validate_edit_args(
+    rel: String,
+    old_string: String,
+    new_string: String,
+    replace_all: bool,
+) -> Result<EditRequest, String> {
     if old_string.is_empty() {
         return Err("old_string 不能为空".to_string());
     }
@@ -96,6 +141,43 @@ fn parse_args(args: &Value) -> Result<EditRequest, String> {
         new_string,
         replace_all,
     })
+}
+
+fn parse_multi_args(args: &Value) -> Result<Vec<EditRequest>, String> {
+    let edits = args
+        .get("edits")
+        .and_then(Value::as_array)
+        .ok_or_else(|| "edits 必须是数组".to_string())?;
+    if edits.is_empty() {
+        return Err("edits 不能为空".to_string());
+    }
+    if edits.len() > MAX_MULTI_EDITS {
+        return Err(format!(
+            "一次最多允许 {MAX_MULTI_EDITS} 个 edit，当前为 {} 个",
+            edits.len()
+        ));
+    }
+
+    edits
+        .iter()
+        .enumerate()
+        .map(|(idx, edit)| {
+            let rel = super::args::required_non_empty_str(edit, "path")?.to_string();
+            let old_string = super::args::required_str(edit, "old_string")?.to_string();
+            let new_string = super::args::required_str(edit, "new_string")?.to_string();
+            let replace_all = super::args::optional_bool(edit, "replace_all", false);
+            validate_edit_args(rel, old_string, new_string, replace_all)
+                .map_err(|e| format!("第 {} 个 edit 无效：{e}", idx + 1))
+        })
+        .collect()
+}
+
+fn edits_count(args: &Value) -> Result<usize, String> {
+    Ok(args
+        .get("edits")
+        .and_then(Value::as_array)
+        .ok_or_else(|| "edits 必须是数组".to_string())?
+        .len())
 }
 
 fn read_target(state: &crate::AppState, rel: &str) -> Result<String, String> {
@@ -115,6 +197,38 @@ fn read_target(state: &crate::AppState, rel: &str) -> Result<String, String> {
     std::fs::read_to_string(&path).map_err(|e| format!("读取失败（可能不是 UTF-8 文本）：{e}"))
 }
 
+fn plan_edit(state: &crate::AppState, req: &EditRequest) -> Result<PlannedEdit, String> {
+    let before = read_target(state, &req.rel)?;
+    let (after, replacements) = apply_edit(&before, req)?;
+    Ok(PlannedEdit {
+        rel: req.rel.clone(),
+        before,
+        after,
+        replacements,
+    })
+}
+
+fn plan_multi_edit(state: &crate::AppState, args: &Value) -> Result<Vec<PlannedEdit>, String> {
+    let requests = parse_multi_args(args)?;
+    let mut planned = Vec::<PlannedEdit>::new();
+    let mut by_path = HashMap::<String, usize>::new();
+
+    for req in requests {
+        if let Some(idx) = by_path.get(&req.rel).copied() {
+            let (after, replacements) = apply_edit(&planned[idx].after, &req)
+                .map_err(|e| format!("{} 后续 edit 失败：{e}", req.rel))?;
+            planned[idx].after = after;
+            planned[idx].replacements += replacements;
+        } else {
+            let edit = plan_edit(state, &req)?;
+            by_path.insert(req.rel.clone(), planned.len());
+            planned.push(edit);
+        }
+    }
+
+    Ok(planned)
+}
+
 fn apply_edit(original: &str, req: &EditRequest) -> Result<(String, usize), String> {
     let count = original.matches(&req.old_string).count();
     if count == 0 {
@@ -132,6 +246,20 @@ fn apply_edit(original: &str, req: &EditRequest) -> Result<(String, usize), Stri
         original.replacen(&req.old_string, &req.new_string, 1)
     };
     Ok((updated, if req.replace_all { count } else { 1 }))
+}
+
+fn write_planned_edit(state: &crate::AppState, edit: &PlannedEdit) -> Result<(), String> {
+    let sandbox = state.sandbox_dir.lock().unwrap().clone();
+    let path = super::resolve_in_sandbox(&sandbox, &edit.rel)?;
+    std::fs::write(&path, &edit.after).map_err(|e| format!("写入失败：{e}"))?;
+    push_undo_entry(
+        state,
+        edit.rel.clone(),
+        edit.before.clone(),
+        edit.after.clone(),
+        edit.replacements,
+    );
+    Ok(())
 }
 
 fn push_undo_entry(
@@ -177,6 +305,32 @@ fn ensure_undo_safe(current: &str, entry: &EditUndoEntry) -> Result<(), String> 
         ));
     }
     Ok(())
+}
+
+fn build_multi_preview(planned: &[PlannedEdit], edits_count: usize) -> String {
+    let total_replacements = planned.iter().map(|p| p.replacements).sum::<usize>();
+    let mut out = format!(
+        "批量编辑预览：{} 个文件，{} 个 edit，替换 {} 处\n\n",
+        planned.len(),
+        edits_count,
+        total_replacements
+    );
+
+    for edit in planned {
+        out.push_str(&build_preview(
+            &edit.rel,
+            &edit.before,
+            &edit.after,
+            edit.replacements,
+        ));
+        out.push('\n');
+        if out.chars().count() > MAX_PREVIEW_CHARS {
+            out.push_str("…multi_edit preview 已截断\n");
+            break;
+        }
+    }
+
+    out
 }
 
 fn build_preview(path: &str, original: &str, updated: &str, count: usize) -> String {
@@ -227,7 +381,7 @@ mod tests {
     use serde_json::json;
     use tokio::sync::oneshot;
 
-    use super::{run, undo, undo_preview};
+    use super::{multi_preview, multi_run, run, undo, undo_preview};
     use crate::permission::{PermissionResponse, PermissionRule};
     use crate::store::{SessionStore, Settings};
 
@@ -315,6 +469,126 @@ mod tests {
 
         let err = undo(&state, json!({})).unwrap_err();
         assert!(err.contains("undo 栈为空"));
+
+        let _ = std::fs::remove_dir_all(&sandbox);
+    }
+
+    #[test]
+    fn multi_edit_updates_two_files_and_records_undo_entries() {
+        let sandbox = temp_sandbox("multi_two_files");
+        let a = sandbox.join("a.txt");
+        let b = sandbox.join("b.txt");
+        std::fs::write(&a, "alpha\n").unwrap();
+        std::fs::write(&b, "beta\n").unwrap();
+        let state = test_state(sandbox.clone());
+
+        let result = multi_run(
+            &state,
+            json!({
+                "edits": [
+                    { "path": "a.txt", "old_string": "alpha", "new_string": "ALPHA" },
+                    { "path": "b.txt", "old_string": "beta", "new_string": "BETA" }
+                ]
+            }),
+        )
+        .unwrap();
+
+        assert!(result.contains("2 个文件"));
+        assert_eq!(std::fs::read_to_string(&a).unwrap(), "ALPHA\n");
+        assert_eq!(std::fs::read_to_string(&b).unwrap(), "BETA\n");
+        assert_eq!(state.edit_undo_stack.lock().unwrap().len(), 2);
+
+        let _ = std::fs::remove_dir_all(&sandbox);
+    }
+
+    #[test]
+    fn multi_edit_applies_multiple_edits_to_same_file_as_one_plan() {
+        let sandbox = temp_sandbox("multi_same_file");
+        let file = sandbox.join("note.txt");
+        std::fs::write(&file, "one two three\n").unwrap();
+        let state = test_state(sandbox.clone());
+
+        multi_run(
+            &state,
+            json!({
+                "edits": [
+                    { "path": "note.txt", "old_string": "one", "new_string": "1" },
+                    { "path": "note.txt", "old_string": "two", "new_string": "2" }
+                ]
+            }),
+        )
+        .unwrap();
+
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "1 2 three\n");
+        let stack = state.edit_undo_stack.lock().unwrap();
+        assert_eq!(stack.len(), 1);
+        assert_eq!(stack[0].replacements, 2);
+
+        let _ = std::fs::remove_dir_all(&sandbox);
+    }
+
+    #[test]
+    fn multi_edit_failure_writes_nothing() {
+        let sandbox = temp_sandbox("multi_failure");
+        let a = sandbox.join("a.txt");
+        let b = sandbox.join("b.txt");
+        std::fs::write(&a, "alpha\n").unwrap();
+        std::fs::write(&b, "beta\n").unwrap();
+        let state = test_state(sandbox.clone());
+
+        let err = multi_run(
+            &state,
+            json!({
+                "edits": [
+                    { "path": "a.txt", "old_string": "alpha", "new_string": "ALPHA" },
+                    { "path": "b.txt", "old_string": "missing", "new_string": "BETA" }
+                ]
+            }),
+        )
+        .unwrap_err();
+
+        assert!(err.contains("未找到 old_string"));
+        assert_eq!(std::fs::read_to_string(&a).unwrap(), "alpha\n");
+        assert_eq!(std::fs::read_to_string(&b).unwrap(), "beta\n");
+        assert!(state.edit_undo_stack.lock().unwrap().is_empty());
+
+        let _ = std::fs::remove_dir_all(&sandbox);
+    }
+
+    #[test]
+    fn multi_preview_contains_each_file_diff() {
+        let sandbox = temp_sandbox("multi_preview");
+        std::fs::write(sandbox.join("a.txt"), "alpha\n").unwrap();
+        std::fs::write(sandbox.join("b.txt"), "beta\n").unwrap();
+        let state = test_state(sandbox.clone());
+
+        let preview = multi_preview(
+            &state,
+            json!({
+                "edits": [
+                    { "path": "a.txt", "old_string": "alpha", "new_string": "ALPHA" },
+                    { "path": "b.txt", "old_string": "beta", "new_string": "BETA" }
+                ]
+            }),
+        )
+        .unwrap();
+
+        assert!(preview.contains("批量编辑预览"));
+        assert!(preview.contains("--- a.txt"));
+        assert!(preview.contains("--- b.txt"));
+        assert!(preview.contains("+ ALPHA"));
+        assert!(preview.contains("+ BETA"));
+
+        let _ = std::fs::remove_dir_all(&sandbox);
+    }
+
+    #[test]
+    fn multi_edit_rejects_empty_edits() {
+        let sandbox = temp_sandbox("multi_empty");
+        let state = test_state(sandbox.clone());
+
+        let err = multi_run(&state, json!({ "edits": [] })).unwrap_err();
+        assert!(err.contains("edits 不能为空"));
 
         let _ = std::fs::remove_dir_all(&sandbox);
     }
