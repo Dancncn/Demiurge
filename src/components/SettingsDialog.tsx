@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { PackManifest, Settings } from "../lib/types";
+import type { PackManifest, ProviderKind, Settings } from "../lib/types";
 import { CloseIcon } from "./Icons";
 
 interface Props {
@@ -14,6 +14,33 @@ const inputCls =
   "w-full rounded-xl border border-[#e5e5e5] bg-white px-3 py-2.5 text-[#171717] outline-none transition focus:border-[#10a37f]";
 const labelCls = "mb-1.5 block text-sm font-medium text-[#3f3f3f]";
 
+const providerOptions: { value: ProviderKind; label: string; baseUrl: string; apiKeyHelp: string }[] = [
+  {
+    value: "open_ai_compatible",
+    label: "OpenAI-compatible / DeepSeek",
+    baseUrl: "例如：https://api.deepseek.com/v1",
+    apiKeyHelp: "MVP 以明文存于本地配置文件，仅本机使用。",
+  },
+  {
+    value: "local",
+    label: "Local OpenAI-compatible",
+    baseUrl: "例如：http://localhost:11434/v1 或 LM Studio endpoint",
+    apiKeyHelp: "本地服务通常可留空；如服务要求 token，也可填写。",
+  },
+  {
+    value: "anthropic",
+    label: "Anthropic",
+    baseUrl: "例如：https://api.anthropic.com/v1",
+    apiKeyHelp: "用于 Anthropic x-api-key header，仍以明文存于本地配置文件。",
+  },
+  {
+    value: "gemini",
+    label: "Gemini",
+    baseUrl: "例如：https://generativelanguage.googleapis.com/v1beta",
+    apiKeyHelp: "用于 Google AI Studio API key，仍以明文存于本地配置文件。",
+  },
+];
+
 export default function SettingsDialog({ open, settings, packs, onClose, onSave }: Props) {
   const [form, setForm] = useState<Settings>(settings);
 
@@ -24,6 +51,7 @@ export default function SettingsDialog({ open, settings, packs, onClose, onSave 
   if (!open) return null;
 
   const set = <K extends keyof Settings>(k: K, v: Settings[K]) => setForm((f) => ({ ...f, [k]: v }));
+  const selectedProvider = providerOptions.find((p) => p.value === form.provider) ?? providerOptions[0];
 
   return (
     <div
@@ -46,6 +74,17 @@ export default function SettingsDialog({ open, settings, packs, onClose, onSave 
 
         <div className="space-y-4">
           <label className="block">
+            <span className={labelCls}>Provider</span>
+            <select className={inputCls} value={form.provider} onChange={(e) => set("provider", e.target.value as ProviderKind)}>
+              {providerOptions.map((p) => (
+                <option key={p.value} value={p.value}>
+                  {p.label}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label className="block">
             <span className={labelCls}>LLM 接口地址 (base_url)</span>
             <input
               className={inputCls}
@@ -53,6 +92,7 @@ export default function SettingsDialog({ open, settings, packs, onClose, onSave 
               placeholder="https://api.deepseek.com/v1"
               onChange={(e) => set("base_url", e.target.value)}
             />
+            <span className="mt-1.5 block text-xs text-[#9a9a9a]">{selectedProvider.baseUrl}</span>
           </label>
 
           <label className="block">
@@ -64,7 +104,7 @@ export default function SettingsDialog({ open, settings, packs, onClose, onSave 
               placeholder="sk-..."
               onChange={(e) => set("api_key", e.target.value)}
             />
-            <span className="mt-1.5 block text-xs text-[#9a9a9a]">MVP 以明文存于本地配置文件，仅本机使用。</span>
+            <span className="mt-1.5 block text-xs text-[#9a9a9a]">{selectedProvider.apiKeyHelp}</span>
           </label>
 
           <label className="block">

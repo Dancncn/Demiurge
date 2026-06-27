@@ -17,8 +17,9 @@ pub async fn update_session_summary(
     removed_messages: &[Message],
     cancel: &AtomicBool,
 ) -> Result<Option<String>, String> {
+    let profile = llm::ProviderProfile::for_kind(settings.provider);
     if removed_messages.is_empty()
-        || settings.api_key.trim().is_empty()
+        || (profile.requires_api_key && settings.api_key.trim().is_empty())
         || cancel.load(Ordering::Relaxed)
     {
         return Ok(existing_summary.map(str::to_string));

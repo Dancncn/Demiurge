@@ -14,6 +14,10 @@ pub const DEFAULT_MAX_INPUT_TOKENS: usize = 32_000;
 pub const DEFAULT_RESERVED_OUTPUT_TOKENS: usize = 4_000;
 pub const DEFAULT_AUTO_MEMORY_ENABLED: bool = true;
 
+fn default_provider() -> ProviderKind {
+    ProviderKind::OpenAiCompatible
+}
+
 fn default_max_context_chars() -> usize {
     DEFAULT_MAX_CONTEXT_CHARS
 }
@@ -30,10 +34,21 @@ fn default_auto_memory_enabled() -> bool {
     DEFAULT_AUTO_MEMORY_ENABLED
 }
 
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderKind {
+    OpenAiCompatible,
+    Local,
+    Anthropic,
+    Gemini,
+}
+
 /// 运行时设置。MVP 直接以 JSON 落盘（含 api_key 明文）。
 /// 注：更安全的做法是把 api_key 存进系统凭据管理器（如 Windows 凭据管理器 / keyring），后续可平滑替换。
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Settings {
+    #[serde(default = "default_provider")]
+    pub provider: ProviderKind,
     pub base_url: String,
     pub api_key: String,
     pub model: String,
@@ -51,6 +66,7 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Settings {
+            provider: ProviderKind::OpenAiCompatible,
             // 默认 DeepSeek（OpenAI 兼容）。换 LM Studio 等本地端点只改 base_url + model。
             base_url: "https://api.deepseek.com/v1".to_string(),
             api_key: String::new(),
@@ -188,6 +204,27 @@ pub fn save_sessions(dir: &Path, store: &SessionStore) -> Result<(), String> {
     let p = dir.join("sessions.json");
     let json = serde_json::to_string_pretty(store).map_err(|e| e.to_string())?;
     fs::write(&p, json).map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn settings_without_provider_defaults_to_openai_compatible() {
+        let json = r#"{
+            "base_url": "https://example.test/v1",
+            "api_key": "sk-test",
+            "model": "test-model",
+            "current_pack": "default",
+            "max_context_chars": 24000,
+            "max_input_tokens": 32000,
+            "reserved_output_tokens": 4000,
+            "auto_memory_enabled": true
+        }"#;
+        let settings = serde_json::from_str::<Settings>(json).unwrap();
+        assert_eq!(settings.provider, ProviderKind::OpenAiCompatible);
+    }
 }
 
 /// 用首条用户消息生成标题（截断）。

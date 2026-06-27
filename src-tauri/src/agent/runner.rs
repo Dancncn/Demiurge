@@ -41,7 +41,8 @@ pub async fn run_turn(
         Ok(p) => p.persona_text,
         Err(_) => String::new(),
     };
-    let tools_schema = tools::schemas_json();
+    let profile = llm::ProviderProfile::for_kind(settings.provider);
+    let tools_schema = tools::schemas_json_for(profile.tool_schema_dialect);
     let original_user_text = user_text.clone();
 
     // 向目标会话追加一条消息（并刷新 updated_at）

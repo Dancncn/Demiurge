@@ -36,8 +36,9 @@ pub async fn extract_and_update(
     assistant_text: &str,
     cancel: &AtomicBool,
 ) -> Result<(), String> {
+    let profile = llm::ProviderProfile::for_kind(settings.provider);
     if !settings.auto_memory_enabled
-        || settings.api_key.trim().is_empty()
+        || (profile.requires_api_key && settings.api_key.trim().is_empty())
         || cancel.load(Ordering::Relaxed)
     {
         return Ok(());

@@ -17,7 +17,10 @@ export interface Message {
   name?: string;
 }
 
+export type ProviderKind = "open_ai_compatible" | "local" | "anthropic" | "gemini";
+
 export interface Settings {
+  provider: ProviderKind;
   base_url: string;
   api_key: string;
   model: string;

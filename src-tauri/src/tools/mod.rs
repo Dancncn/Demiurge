@@ -322,7 +322,20 @@ pub fn definition_for(name: &str) -> Option<ToolDefinition> {
 }
 
 /// 转成 OpenAI tools 数组，发给 LLM。
+#[allow(dead_code)]
 pub fn schemas_json() -> Value {
+    schemas_json_for(crate::llm::ToolSchemaDialect::OpenAiCompatible)
+}
+
+pub fn schemas_json_for(dialect: crate::llm::ToolSchemaDialect) -> Value {
+    match dialect {
+        crate::llm::ToolSchemaDialect::OpenAiCompatible => openai_schemas_json(),
+        crate::llm::ToolSchemaDialect::Anthropic => anthropic_schemas_json(),
+        crate::llm::ToolSchemaDialect::Gemini => gemini_schemas_json(),
+    }
+}
+
+fn openai_schemas_json() -> Value {
     let arr: Vec<Value> = registry()
         .iter()
         .map(|t| {
@@ -337,6 +350,34 @@ pub fn schemas_json() -> Value {
         })
         .collect();
     Value::Array(arr)
+}
+
+fn anthropic_schemas_json() -> Value {
+    let arr: Vec<Value> = registry()
+        .iter()
+        .map(|t| {
+            json!({
+                "name": t.name,
+                "description": t.description,
+                "input_schema": t.parameters,
+            })
+        })
+        .collect();
+    Value::Array(arr)
+}
+
+fn gemini_schemas_json() -> Value {
+    let declarations: Vec<Value> = registry()
+        .iter()
+        .map(|t| {
+            json!({
+                "name": t.name,
+                "description": t.description,
+                "parameters": t.parameters,
+            })
+        })
+        .collect();
+    Value::Array(vec![json!({ "function_declarations": declarations })])
 }
 
 /// 直接用系统默认程序打开某路径（供「打开沙盒目录」按钮复用 open_path 逻辑）。
