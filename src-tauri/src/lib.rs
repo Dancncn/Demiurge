@@ -31,6 +31,8 @@ pub struct AppState {
     pub pending_confirms: Mutex<HashMap<String, oneshot::Sender<PermissionResponse>>>,
     /// 本会话内的权限规则：tool -> rule
     pub session_permission_rules: Mutex<HashMap<String, PermissionRule>>,
+    /// 本进程内最近 edit_file 修改记录，用于 undo_edit 安全撤销
+    pub edit_undo_stack: Mutex<Vec<tools::EditUndoEntry>>,
     /// 用户中断标志
     pub cancel: AtomicBool,
     /// 是否正在处理一轮对话（防止并发 send）
@@ -48,6 +50,7 @@ impl AppState {
             sessions: Mutex::new(SessionStore::default()),
             pending_confirms: Mutex::new(HashMap::new()),
             session_permission_rules: Mutex::new(HashMap::new()),
+            edit_undo_stack: Mutex::new(Vec::new()),
             cancel: AtomicBool::new(false),
             busy: AtomicBool::new(false),
             data_dir: Mutex::new(PathBuf::new()),

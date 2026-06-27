@@ -17,6 +17,8 @@ mod system_info;
 mod web_search;
 mod write_file;
 
+pub use edit_file::EditUndoEntry;
+
 #[allow(dead_code)]
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -224,6 +226,15 @@ pub fn registry() -> Vec<ToolDefinition> {
             }),
         },
         ToolDefinition {
+            name: "undo_edit",
+            description: "撤销本进程内最近一次成功的 edit_file 修改。撤销前会确认目标文件未被后续外部修改，并展示反向 diff 预览。",
+            risk: ToolRisk::Mutating,
+            concurrency: ToolConcurrency::SerialOnly,
+            permission: PermissionPolicy::ask("会把沙盒目录内最近一次 edit_file 修改恢复到编辑前内容。"),
+            output_policy: ToolOutputPolicy::Inline,
+            parameters: json!({ "type": "object", "properties": {} }),
+        },
+        ToolDefinition {
             name: "web_search",
             description: "联网搜索，返回若干结果摘要（基于 DuckDuckGo，无需密钥）。适合查事实、找资料。",
             risk: ToolRisk::External,
@@ -295,6 +306,7 @@ pub async fn execute(state: &crate::AppState, name: &str, args: Value) -> Result
         "shell" => shell::run(state, args),
         "write_file" => write_file::run(state, args),
         "edit_file" => edit_file::run(state, args),
+        "undo_edit" => edit_file::undo(state, args),
         "web_search" => web_search::run(state, args).await,
         "system_info" => system_info::run(),
         other => Err(format!("未实现的工具：{other}")),
@@ -306,6 +318,10 @@ pub fn confirmation_preview(state: &crate::AppState, name: &str, args: Value) ->
         "edit_file" => Some(
             edit_file::preview(state, args)
                 .unwrap_or_else(|e| format!("无法生成 diff preview：{e}")),
+        ),
+        "undo_edit" => Some(
+            edit_file::undo_preview(state, args)
+                .unwrap_or_else(|e| format!("无法生成 undo preview：{e}")),
         ),
         "shell" => Some(
             shell::preview(state, args).unwrap_or_else(|e| format!("无法生成 shell preview：{e}")),
