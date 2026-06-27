@@ -5,6 +5,7 @@ use serde::Serialize;
 use serde_json::{json, Value};
 use std::path::{Component, Path, PathBuf};
 
+mod edit_file;
 mod git_status;
 mod glob;
 mod grep;
@@ -64,11 +65,19 @@ pub struct PermissionPolicy {
 
 impl PermissionPolicy {
     pub const fn allow(reason: &'static str) -> Self {
-        PermissionPolicy { effect: PermissionEffect::Allow, scope: PermissionScope::Once, reason }
+        PermissionPolicy {
+            effect: PermissionEffect::Allow,
+            scope: PermissionScope::Once,
+            reason,
+        }
     }
 
     pub const fn ask(reason: &'static str) -> Self {
-        PermissionPolicy { effect: PermissionEffect::Ask, scope: PermissionScope::Once, reason }
+        PermissionPolicy {
+            effect: PermissionEffect::Ask,
+            scope: PermissionScope::Once,
+            reason,
+        }
     }
 }
 
@@ -187,6 +196,24 @@ pub fn registry() -> Vec<ToolDefinition> {
             }),
         },
         ToolDefinition {
+            name: "edit_file",
+            description: "在沙盒目录内编辑已有文本文件：用 new_string 精确替换 old_string。默认要求 old_string 唯一，执行前会展示 diff 预览并请求确认。",
+            risk: ToolRisk::Mutating,
+            concurrency: ToolConcurrency::SerialOnly,
+            permission: PermissionPolicy::ask("会修改沙盒目录内的已有文件。"),
+            output_policy: ToolOutputPolicy::Inline,
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "相对沙盒目录的已有文本文件路径" },
+                    "old_string": { "type": "string", "description": "要被替换的原文。默认必须在文件中唯一出现" },
+                    "new_string": { "type": "string", "description": "替换后的新文本" },
+                    "replace_all": { "type": "boolean", "description": "可选：是否替换全部出现位置，默认 false" }
+                },
+                "required": ["path", "old_string", "new_string"]
+            }),
+        },
+        ToolDefinition {
             name: "web_search",
             description: "联网搜索，返回若干结果摘要（基于 DuckDuckGo，无需密钥）。适合查事实、找资料。",
             risk: ToolRisk::External,
@@ -263,9 +290,20 @@ pub async fn execute(state: &crate::AppState, name: &str, args: Value) -> Result
         "grep" => grep::run(state, args),
         "git_status" => git_status::run(state, args),
         "write_file" => write_file::run(state, args),
+        "edit_file" => edit_file::run(state, args),
         "web_search" => web_search::run(state, args).await,
         "system_info" => system_info::run(),
         other => Err(format!("未实现的工具：{other}")),
+    }
+}
+
+pub fn confirmation_preview(state: &crate::AppState, name: &str, args: Value) -> Option<String> {
+    match name {
+        "edit_file" => Some(
+            edit_file::preview(state, args)
+                .unwrap_or_else(|e| format!("无法生成 diff preview：{e}")),
+        ),
+        _ => None,
     }
 }
 

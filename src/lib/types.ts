@@ -73,6 +73,7 @@ export interface ConfirmRequestEvent {
   scope?: PermissionScope;
   reason?: string;
   summary?: string;
+  preview?: string;
 }
 
 // ---- 前端聊天展示项 ----

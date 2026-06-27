@@ -48,9 +48,17 @@ export default function ConfirmDialog({ req, onRespond }: Props) {
             </div>
           )}
         </div>
-        <pre className="mb-4 max-h-48 overflow-auto whitespace-pre-wrap rounded-xl border border-[#ececec] bg-[#f7f7f7] p-3 text-xs text-[#3f3f3f]">
+        <pre className="mb-3 max-h-48 overflow-auto whitespace-pre-wrap rounded-xl border border-[#ececec] bg-[#f7f7f7] p-3 text-xs text-[#3f3f3f]">
           {req.args}
         </pre>
+        {req.preview && (
+          <div className="mb-4">
+            <div className="mb-1 text-xs font-medium text-[#6f6f6f]">Diff 预览</div>
+            <pre className="max-h-64 overflow-auto whitespace-pre-wrap rounded-xl border border-[#e5e5e5] bg-[#111] p-3 font-mono text-xs leading-relaxed text-[#f2f2f2]">
+              {req.preview}
+            </pre>
+          </div>
+        )}
         <div className="flex justify-end gap-2">
           <button
             className="rounded-full border border-[#e5e5e5] px-4 py-2 text-sm text-[#3f3f3f] transition hover:bg-[#f7f7f7]"

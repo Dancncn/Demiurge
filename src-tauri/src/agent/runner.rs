@@ -24,7 +24,11 @@ fn truncate_ui(s: &str) -> String {
     }
 }
 
-pub async fn run_turn(app: &AppHandle, state: &crate::AppState, user_text: String) -> Result<(), String> {
+pub async fn run_turn(
+    app: &AppHandle,
+    state: &crate::AppState,
+    user_text: String,
+) -> Result<(), String> {
     state.cancel.store(false, Ordering::Relaxed);
 
     let settings = state.settings.lock().unwrap().clone();
@@ -116,8 +120,15 @@ pub async fn run_turn(app: &AppHandle, state: &crate::AppState, user_text: Strin
         }
 
         // 有工具调用 → 先把带 tool_calls 的 assistant 消息入历史
-        let content_opt = if turn.content.is_empty() { None } else { Some(turn.content.clone()) };
-        push(Message::assistant_tools(content_opt, turn.tool_calls.clone()));
+        let content_opt = if turn.content.is_empty() {
+            None
+        } else {
+            Some(turn.content.clone())
+        };
+        push(Message::assistant_tools(
+            content_opt,
+            turn.tool_calls.clone(),
+        ));
 
         // 逐个执行工具。注意：带 tool_calls 的 assistant 消息已入历史，
         // 因此必须为「每一个」tool_call 都补一条 tool 结果，否则下一轮请求会因配对缺失而被判 400。
@@ -126,7 +137,11 @@ pub async fn run_turn(app: &AppHandle, state: &crate::AppState, user_text: Strin
 
             // 已被用户中断：不再执行后续工具，但仍补一条结果以保持 tool_calls/结果配对
             if state.cancel.load(Ordering::Relaxed) {
-                push(Message::tool_result(tc.id.clone(), name, "[已被用户中断，未执行]"));
+                push(Message::tool_result(
+                    tc.id.clone(),
+                    name,
+                    "[已被用户中断，未执行]",
+                ));
                 continue;
             }
 
@@ -154,9 +169,17 @@ pub async fn run_turn(app: &AppHandle, state: &crate::AppState, user_text: Strin
                 tools::Permission::Auto => true,
                 tools::Permission::Confirm => {
                     let pretty = serde_json::to_string_pretty(&args).unwrap_or_default();
-                    let decision = PermissionDecision::from_policy(tools::permission_policy_for(&name));
-                    let description = tool_def.as_ref().map(|t| t.description).unwrap_or("未知工具");
-                    let risk = tool_def.as_ref().map(|t| t.risk).unwrap_or(tools::ToolRisk::Privileged);
+                    let decision =
+                        PermissionDecision::from_policy(tools::permission_policy_for(&name));
+                    let description = tool_def
+                        .as_ref()
+                        .map(|t| t.description)
+                        .unwrap_or("未知工具");
+                    let risk = tool_def
+                        .as_ref()
+                        .map(|t| t.risk)
+                        .unwrap_or(tools::ToolRisk::Privileged);
+                    let preview = tools::confirmation_preview(state, &name, args.clone());
                     permission::confirm(
                         app,
                         state,
@@ -166,6 +189,7 @@ pub async fn run_turn(app: &AppHandle, state: &crate::AppState, user_text: Strin
                             description,
                             risk,
                             decision,
+                            preview,
                         },
                     )
                     .await
@@ -203,7 +227,10 @@ pub async fn run_turn(app: &AppHandle, state: &crate::AppState, user_text: Strin
     }
 
     // 达到步数上限
-    let _ = app.emit("assistant-done", "（已达到本轮工具调用次数上限）".to_string());
+    let _ = app.emit(
+        "assistant-done",
+        "（已达到本轮工具调用次数上限）".to_string(),
+    );
     state.persist_sessions();
     Ok(())
 }

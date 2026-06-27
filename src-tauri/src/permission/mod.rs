@@ -49,6 +49,7 @@ pub struct PermissionRequest<'a> {
     pub description: &'a str,
     pub risk: ToolRisk,
     pub decision: PermissionDecision,
+    pub preview: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -62,6 +63,7 @@ pub struct PermissionPromptPayload<'a> {
     pub scope: PermissionScope,
     pub reason: &'a str,
     pub summary: String,
+    pub preview: Option<&'a str>,
 }
 
 /// 向前端发起一次确认请求并 await 结果。
@@ -71,7 +73,11 @@ pub struct PermissionPromptPayload<'a> {
 pub async fn confirm(app: &AppHandle, state: &crate::AppState, req: PermissionRequest<'_>) -> bool {
     let id = next_id();
     let (tx, rx) = oneshot::channel::<bool>();
-    state.pending_confirms.lock().unwrap().insert(id.clone(), tx);
+    state
+        .pending_confirms
+        .lock()
+        .unwrap()
+        .insert(id.clone(), tx);
 
     let payload = PermissionPromptPayload {
         id: &id,
@@ -83,6 +89,7 @@ pub async fn confirm(app: &AppHandle, state: &crate::AppState, req: PermissionRe
         scope: req.decision.scope,
         reason: &req.decision.reason,
         summary: format!("{}：{}", req.tool, req.decision.reason),
+        preview: req.preview.as_deref(),
     };
 
     let _ = app.emit("tool-confirm-request", payload);
