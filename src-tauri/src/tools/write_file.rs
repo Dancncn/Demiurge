@@ -2,8 +2,8 @@
 use serde_json::Value;
 
 pub fn run(state: &crate::AppState, args: Value) -> Result<String, String> {
-    let rel = args["path"].as_str().ok_or("缺少参数 path")?;
-    let content = args["content"].as_str().ok_or("缺少参数 content")?;
+    let rel = super::args::required_non_empty_str(&args, "path")?;
+    let content = super::args::required_str(&args, "content")?;
     let sandbox = state.sandbox_dir.lock().unwrap().clone();
     let path = super::resolve_in_sandbox(&sandbox, rel)?;
 

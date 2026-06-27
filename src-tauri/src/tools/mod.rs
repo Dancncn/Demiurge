@@ -5,12 +5,14 @@ use serde::Serialize;
 use serde_json::{json, Value};
 use std::path::{Component, Path, PathBuf};
 
+mod args;
 mod edit_file;
 mod git_status;
 mod glob;
 mod grep;
 mod open_path;
 mod read_file;
+mod shell;
 mod system_info;
 mod web_search;
 mod write_file;
@@ -180,6 +182,23 @@ pub fn registry() -> Vec<ToolDefinition> {
             parameters: json!({ "type": "object", "properties": {} }),
         },
         ToolDefinition {
+            name: "shell",
+            description: "在沙盒目录内执行短时 shell 命令。适合运行构建、测试、脚本和只在项目内生效的命令；执行前会请求确认。",
+            risk: ToolRisk::Privileged,
+            concurrency: ToolConcurrency::SerialOnly,
+            permission: PermissionPolicy::ask("会启动本机 shell 进程并可能修改沙盒目录内文件。"),
+            output_policy: ToolOutputPolicy::TruncateForUi,
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "command": { "type": "string", "description": "要执行的 shell 命令，例如 npm test 或 cargo check" },
+                    "cwd": { "type": "string", "description": "可选：相对沙盒目录的工作目录，默认沙盒根" },
+                    "timeout_secs": { "type": "integer", "description": "可选：超时时间，默认 15 秒，最大 60 秒" }
+                },
+                "required": ["command"]
+            }),
+        },
+        ToolDefinition {
             name: "write_file",
             description: "在沙盒目录内创建或覆盖一个文本文件（不可逆，需用户确认）。路径相对于沙盒目录。",
             risk: ToolRisk::Mutating,
@@ -289,6 +308,7 @@ pub async fn execute(state: &crate::AppState, name: &str, args: Value) -> Result
         "glob" => glob::run(state, args),
         "grep" => grep::run(state, args),
         "git_status" => git_status::run(state, args),
+        "shell" => shell::run(state, args),
         "write_file" => write_file::run(state, args),
         "edit_file" => edit_file::run(state, args),
         "web_search" => web_search::run(state, args).await,
@@ -302,6 +322,9 @@ pub fn confirmation_preview(state: &crate::AppState, name: &str, args: Value) ->
         "edit_file" => Some(
             edit_file::preview(state, args)
                 .unwrap_or_else(|e| format!("无法生成 diff preview：{e}")),
+        ),
+        "shell" => Some(
+            shell::preview(state, args).unwrap_or_else(|e| format!("无法生成 shell preview：{e}")),
         ),
         _ => None,
     }

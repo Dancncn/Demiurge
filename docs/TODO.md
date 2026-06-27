@@ -6,7 +6,7 @@ Demiurge 的待办与方向，欢迎认领。✅ 已完成 · ⬜ 待做 · 💡
 ## MVP 现状 ✅
 - [x] OpenAI 兼容流式 LLM 适配器（默认 DeepSeek）
 - [x] Agent 循环（调用→工具→喂回→重复）+ 流式 + 中断
-- [x] 工具：`open_path` / `read_file` / `write_file` / `web_search` / `system_info` / `glob` / `grep` / `git_status`
+- [x] 工具：`open_path` / `read_file` / `write_file` / `edit_file` / `shell` / `web_search` / `system_info` / `glob` / `grep` / `git_status`
 - [x] 权限门（auto / confirm + 前端确认弹窗）
 - [x] 文件沙盒（词法 + canonicalize 双重校验，防链接逃逸）
 - [x] 上下文裁剪、会话/设置持久化（重启恢复）
@@ -18,6 +18,7 @@ Demiurge 的待办与方向，欢迎认领。✅ 已完成 · ⬜ 待做 · 💡
 - [x] **Claude Code-like Agent Core 地基首阶段**：工具 metadata、权限决策骨架、`tool_call_id` 事件关联、ProviderProfile 骨架
 - [x] **Phase 1 只读编程工具**：`glob`、`grep`、`git_status`
 - [x] **Phase 1 编辑工具**：`edit_file`（精确替换 / diff preview / apply-reject）
+- [x] **Phase 1 执行工具地基**：`shell`（confirm / sandbox cwd / timeout / output cap）+ 轻量工具入参校验辅助
 - [ ] **编辑工具后续增强**：undo 栈 / 高级 patch 引擎 / 跨文件批量编辑
 - [ ] **权限系统 2.0 UI**：确认弹窗支持允许本次 / 本会话 / 本项目，并记录 decision/audit
 - [ ] **Project Context Builder**：读取 `DEMIURGE.md` / `CLAUDE.md`、git 快照、README/项目结构摘要

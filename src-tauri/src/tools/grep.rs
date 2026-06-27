@@ -9,15 +9,18 @@ const MAX_FILE_BYTES: u64 = 256 * 1024;
 const MAX_LINE_CHARS: usize = 240;
 
 pub fn run(state: &crate::AppState, args: Value) -> Result<String, String> {
-    let query = args["query"].as_str().ok_or("缺少参数 query")?;
-    if query.is_empty() {
-        return Err("query 不能为空".to_string());
-    }
+    let query = super::args::required_non_empty_str(&args, "query")?;
 
-    let rel = args["path"].as_str().unwrap_or("");
-    let case_sensitive = args["case_sensitive"].as_bool().unwrap_or(false);
-    let regex_mode = args["regex"].as_bool().unwrap_or(false);
-    let limit = args["limit"].as_u64().map(|n| n as usize).unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
+    let rel = super::args::optional_str(&args, "path").unwrap_or("");
+    let case_sensitive = super::args::optional_bool(&args, "case_sensitive", false);
+    let regex_mode = super::args::optional_bool(&args, "regex", false);
+    let limit = super::args::optional_u64_clamped(
+        &args,
+        "limit",
+        DEFAULT_LIMIT as u64,
+        1,
+        MAX_LIMIT as u64,
+    ) as usize;
 
     let sandbox = state.sandbox_dir.lock().unwrap().clone();
     let root = super::resolve_in_sandbox(&sandbox, rel)?;
@@ -39,14 +42,23 @@ pub fn run(state: &crate::AppState, args: Value) -> Result<String, String> {
         }
         truncated = out.len() >= limit;
     } else if root.is_dir() {
-        for entry in WalkDir::new(&root).follow_links(false).into_iter().filter_map(Result::ok) {
+        for entry in WalkDir::new(&root)
+            .follow_links(false)
+            .into_iter()
+            .filter_map(Result::ok)
+        {
             if out.len() >= limit {
                 truncated = true;
                 break;
             }
             if entry.file_type().is_file() {
                 scanned += 1;
-                match search_file(entry.path(), &sandbox, &matcher, limit.saturating_sub(out.len())) {
+                match search_file(
+                    entry.path(),
+                    &sandbox,
+                    &matcher,
+                    limit.saturating_sub(out.len()),
+                ) {
                     Ok(mut rows) => out.append(&mut rows),
                     Err(_) => skipped += 1,
                 }
@@ -57,7 +69,9 @@ pub fn run(state: &crate::AppState, args: Value) -> Result<String, String> {
     }
 
     if out.is_empty() {
-        return Ok(format!("未找到匹配内容（扫描 {scanned} 个文件，跳过 {skipped} 个文件）"));
+        return Ok(format!(
+            "未找到匹配内容（扫描 {scanned} 个文件，跳过 {skipped} 个文件）"
+        ));
     }
 
     let mut text = out.join("\n");
@@ -71,7 +85,11 @@ pub fn run(state: &crate::AppState, args: Value) -> Result<String, String> {
 }
 
 fn build_matcher(query: &str, regex_mode: bool, case_sensitive: bool) -> Result<Regex, String> {
-    let pattern = if regex_mode { query.to_string() } else { regex::escape(query) };
+    let pattern = if regex_mode {
+        query.to_string()
+    } else {
+        regex::escape(query)
+    };
     RegexBuilder::new(&pattern)
         .case_insensitive(!case_sensitive)
         .build()
@@ -92,7 +110,9 @@ fn search_file(
         return Err("跳过非文本或过大文件".to_string());
     }
     let content = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
-    let rel = path.strip_prefix(sandbox).map_err(|_| "路径越界：结果不在沙盒内")?;
+    let rel = path
+        .strip_prefix(sandbox)
+        .map_err(|_| "路径越界：结果不在沙盒内")?;
     let rel = rel.to_string_lossy().replace('\\', "/");
 
     let mut rows = Vec::new();

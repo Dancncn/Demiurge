@@ -8,14 +8,17 @@ const DEFAULT_LIMIT: usize = 200;
 const MAX_LIMIT: usize = 500;
 
 pub fn run(state: &crate::AppState, args: Value) -> Result<String, String> {
-    let pattern = args["pattern"].as_str().ok_or("缺少参数 pattern")?.trim();
-    if pattern.is_empty() {
-        return Err("pattern 不能为空".to_string());
-    }
+    let pattern = super::args::required_non_empty_str(&args, "pattern")?;
     validate_pattern(pattern)?;
 
-    let base = args["base"].as_str().unwrap_or("");
-    let limit = args["limit"].as_u64().map(|n| n as usize).unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
+    let base = super::args::optional_str(&args, "base").unwrap_or("");
+    let limit = super::args::optional_u64_clamped(
+        &args,
+        "limit",
+        DEFAULT_LIMIT as u64,
+        1,
+        MAX_LIMIT as u64,
+    ) as usize;
 
     let sandbox = state.sandbox_dir.lock().unwrap().clone();
     let base_path = super::resolve_in_sandbox(&sandbox, base)?;
@@ -28,16 +31,24 @@ pub fn run(state: &crate::AppState, args: Value) -> Result<String, String> {
 
     let mut builder = GlobSetBuilder::new();
     builder.add(Glob::new(pattern).map_err(|e| format!("非法 glob pattern：{e}"))?);
-    let set = builder.build().map_err(|e| format!("构建 glob matcher 失败：{e}"))?;
+    let set = builder
+        .build()
+        .map_err(|e| format!("构建 glob matcher 失败：{e}"))?;
 
     let mut matches = Vec::new();
     let mut truncated = false;
-    for entry in WalkDir::new(&base_path).follow_links(false).into_iter().filter_map(Result::ok) {
+    for entry in WalkDir::new(&base_path)
+        .follow_links(false)
+        .into_iter()
+        .filter_map(Result::ok)
+    {
         if !entry.file_type().is_file() {
             continue;
         }
         let path = entry.path();
-        let rel = path.strip_prefix(&sandbox).map_err(|_| "路径越界：结果不在沙盒内")?;
+        let rel = path
+            .strip_prefix(&sandbox)
+            .map_err(|_| "路径越界：结果不在沙盒内")?;
         if set.is_match(rel) {
             matches.push(rel.to_string_lossy().replace('\\', "/"));
             if matches.len() >= limit {

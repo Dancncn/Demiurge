@@ -30,16 +30,10 @@ pub fn run(state: &crate::AppState, args: Value) -> Result<String, String> {
 }
 
 fn parse_args(args: &Value) -> Result<EditRequest, String> {
-    let rel = args["path"].as_str().ok_or("缺少参数 path")?.to_string();
-    let old_string = args["old_string"]
-        .as_str()
-        .ok_or("缺少参数 old_string")?
-        .to_string();
-    let new_string = args["new_string"]
-        .as_str()
-        .ok_or("缺少参数 new_string")?
-        .to_string();
-    let replace_all = args["replace_all"].as_bool().unwrap_or(false);
+    let rel = super::args::required_non_empty_str(args, "path")?.to_string();
+    let old_string = super::args::required_str(args, "old_string")?.to_string();
+    let new_string = super::args::required_str(args, "new_string")?.to_string();
+    let replace_all = super::args::optional_bool(args, "replace_all", false);
 
     if old_string.is_empty() {
         return Err("old_string 不能为空".to_string());
