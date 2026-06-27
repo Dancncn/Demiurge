@@ -4,6 +4,7 @@ import type {
   ConfirmRequestEvent,
   Message,
   PackManifest,
+  PermissionScope,
   SessionList,
   Settings,
   ToolEndEvent,
@@ -13,8 +14,8 @@ import type {
 // ---- 命令 ----
 export const send = (text: string) => invoke<void>("send", { text });
 export const interrupt = () => invoke<void>("interrupt");
-export const respondConfirm = (id: string, allow: boolean) =>
-  invoke<void>("respond_confirm", { id, allow });
+export const respondConfirm = (id: string, allow: boolean, scope: PermissionScope) =>
+  invoke<void>("respond_confirm", { id, allow, scope });
 export const getSettings = () => invoke<Settings>("get_settings");
 export const saveSettings = (settings: Settings) => invoke<void>("save_settings", { settings });
 export const listPacks = () => invoke<PackManifest[]>("list_packs");

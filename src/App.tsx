@@ -1,7 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import * as api from "./lib/api";
-import type { ConfirmRequestEvent, DisplayItem, Message, PackManifest, SessionMeta, Settings } from "./lib/types";
+import type {
+  ConfirmRequestEvent,
+  DisplayItem,
+  Message,
+  PackManifest,
+  PermissionScope,
+  SessionMeta,
+  Settings,
+} from "./lib/types";
 import { MessageList } from "./components/MessageList";
 import { Sidebar } from "./components/Sidebar";
 import { Composer } from "./components/Composer";
@@ -231,12 +239,12 @@ export default function App() {
     }
   }
 
-  async function handleRespondConfirm(allow: boolean) {
+  async function handleRespondConfirm(allow: boolean, scope: PermissionScope) {
     if (!confirmReq) return;
     const id = confirmReq.id;
     setConfirmReq(null);
     try {
-      await api.respondConfirm(id, allow);
+      await api.respondConfirm(id, allow, scope);
     } catch (e) {
       console.error("确认回执失败", e);
     }

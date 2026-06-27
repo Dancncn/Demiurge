@@ -8,7 +8,7 @@ use tauri::{AppHandle, Emitter};
 use super::conversation::Message;
 use super::{context, persona};
 use crate::{llm, pack, permission, store, tools};
-use permission::{PermissionDecision, PermissionRequest};
+use permission::PermissionRequest;
 
 /// 单工具结果回传给前端时的最大展示长度（完整结果仍会进上下文喂回模型）
 const UI_RESULT_CAP: usize = 2000;
@@ -163,14 +163,15 @@ pub async fn run_turn(
                 }),
             );
 
-            // 权限门（confirm 等待期间若用户点「停止」，interrupt 会立即唤醒并返回 false）
-            let perm = tools::permission_for(&name);
-            let allowed = match perm {
-                tools::Permission::Auto => true,
-                tools::Permission::Confirm => {
+            // 权限门（confirm 等待期间若用户点「停止」，interrupt 会立即唤醒并返回 deny-once）
+            let default_policy = tools::permission_policy_for(&name);
+            let mut decision = permission::decide(state, &name, default_policy);
+            permission::audit(state, &name, &decision);
+            let allowed = match decision.effect {
+                tools::PermissionEffect::Allow => true,
+                tools::PermissionEffect::Deny => false,
+                tools::PermissionEffect::Ask => {
                     let pretty = serde_json::to_string_pretty(&args).unwrap_or_default();
-                    let decision =
-                        PermissionDecision::from_policy(tools::permission_policy_for(&name));
                     let description = tool_def
                         .as_ref()
                         .map(|t| t.description)
@@ -180,7 +181,7 @@ pub async fn run_turn(
                         .map(|t| t.risk)
                         .unwrap_or(tools::ToolRisk::Privileged);
                     let preview = tools::confirmation_preview(state, &name, args.clone());
-                    permission::confirm(
+                    let response = permission::confirm(
                         app,
                         state,
                         PermissionRequest {
@@ -188,11 +189,26 @@ pub async fn run_turn(
                             args_pretty: &pretty,
                             description,
                             risk,
-                            decision,
+                            decision: decision.clone(),
                             preview,
                         },
                     )
-                    .await
+                    .await;
+                    let _ = permission::remember_response(state, &name, &response);
+                    decision.effect = if response.allow {
+                        tools::PermissionEffect::Allow
+                    } else {
+                        tools::PermissionEffect::Deny
+                    };
+                    decision.scope = response.scope;
+                    decision.source = permission::PermissionDecisionSource::UserOverride;
+                    decision.reason = if response.allow {
+                        "用户在确认弹窗中允许本次操作。".to_string()
+                    } else {
+                        "用户在确认弹窗中拒绝本次操作。".to_string()
+                    };
+                    permission::audit(state, &name, &decision);
+                    response.allow
                 }
             };
 

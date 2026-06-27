@@ -1,8 +1,9 @@
-import type { ConfirmRequestEvent, ToolRisk } from "../lib/types";
+import { useEffect, useState } from "react";
+import type { ConfirmRequestEvent, PermissionScope, ToolRisk } from "../lib/types";
 
 interface Props {
   req: ConfirmRequestEvent | null;
-  onRespond: (allow: boolean) => void;
+  onRespond: (allow: boolean, scope: PermissionScope) => void;
 }
 
 function riskLabel(risk?: ToolRisk) {
@@ -21,6 +22,12 @@ function riskLabel(risk?: ToolRisk) {
 }
 
 export default function ConfirmDialog({ req, onRespond }: Props) {
+  const [scope, setScope] = useState<PermissionScope>("once");
+
+  useEffect(() => {
+    setScope("once");
+  }, [req?.id]);
+
   if (!req) return null;
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4 backdrop-blur-[2px]">
@@ -53,22 +60,39 @@ export default function ConfirmDialog({ req, onRespond }: Props) {
         </pre>
         {req.preview && (
           <div className="mb-4">
-            <div className="mb-1 text-xs font-medium text-[#6f6f6f]">Diff 预览</div>
+            <div className="mb-1 text-xs font-medium text-[#6f6f6f]">执行预览</div>
             <pre className="max-h-64 overflow-auto whitespace-pre-wrap rounded-xl border border-[#e5e5e5] bg-[#111] p-3 font-mono text-xs leading-relaxed text-[#f2f2f2]">
               {req.preview}
             </pre>
           </div>
         )}
+        <div className="mb-4 grid grid-cols-3 gap-2 rounded-2xl bg-[#f7f7f7] p-1 text-xs">
+          {[
+            ["once", "仅本次"],
+            ["session", "本会话"],
+            ["project", "本项目"],
+          ].map(([value, label]) => (
+            <button
+              key={value}
+              className={`rounded-xl px-3 py-2 transition ${
+                scope === value ? "bg-white text-[#111] shadow-sm" : "text-[#6f6f6f] hover:text-[#333]"
+              }`}
+              onClick={() => setScope(value as PermissionScope)}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
         <div className="flex justify-end gap-2">
           <button
             className="rounded-full border border-[#e5e5e5] px-4 py-2 text-sm text-[#3f3f3f] transition hover:bg-[#f7f7f7]"
-            onClick={() => onRespond(false)}
+            onClick={() => onRespond(false, scope)}
           >
             拒绝
           </button>
           <button
             className="rounded-full bg-[#111] px-4 py-2 text-sm text-white transition hover:bg-[#333]"
-            onClick={() => onRespond(true)}
+            onClick={() => onRespond(true, scope)}
           >
             允许
           </button>

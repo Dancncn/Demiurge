@@ -1,7 +1,7 @@
 //! 组件 5/6：工具注册表 + 统一接口 + 执行。
 //! 每个工具 = 名称 + 描述 + 输入 JSON Schema + 权限/风险/并发/输出策略 + execute。
 //! 作用域是结构性强制的（文件工具被物理限制在沙盒目录），不靠提示词。
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::path::{Component, Path, PathBuf};
 
@@ -18,7 +18,7 @@ mod web_search;
 mod write_file;
 
 #[allow(dead_code)]
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PermissionEffect {
     Allow,
@@ -27,7 +27,7 @@ pub enum PermissionEffect {
 }
 
 #[allow(dead_code)]
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PermissionScope {
     Once,
@@ -35,7 +35,7 @@ pub enum PermissionScope {
     Project,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ToolRisk {
     ReadOnly,
@@ -44,14 +44,14 @@ pub enum ToolRisk {
     Privileged,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ToolConcurrency {
     ParallelSafe,
     SerialOnly,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ToolOutputPolicy {
     Inline,
@@ -81,15 +81,6 @@ impl PermissionPolicy {
             reason,
         }
     }
-}
-
-/// 兼容当前 agent loop 的二级权限门。后续规则系统会直接返回 PermissionDecision。
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Permission {
-    /// 只读 / 幂等 / 低风险 —— 直接执行
-    Auto,
-    /// 不可逆 / 有副作用 —— 执行前必须前端确认
-    Confirm,
 }
 
 #[derive(Clone, Debug)]
@@ -290,13 +281,6 @@ pub fn permission_policy_for(name: &str) -> PermissionPolicy {
     definition_for(name)
         .map(|t| t.permission)
         .unwrap_or_else(|| PermissionPolicy::ask("未知工具默认按最高安全级别询问。"))
-}
-
-pub fn permission_for(name: &str) -> Permission {
-    match permission_policy_for(name).effect {
-        PermissionEffect::Allow => Permission::Auto,
-        PermissionEffect::Ask | PermissionEffect::Deny => Permission::Confirm,
-    }
 }
 
 /// 分发执行。MVP 用 async 函数 + match 充当统一执行入口

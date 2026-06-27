@@ -1,12 +1,17 @@
 //! 组件 7：权限门。auto 直接放行；confirm 类弹前端确认对话框，等用户裁决。
 //! 确保有副作用的操作在执行前获得用户许可。
+use std::collections::HashMap;
+use std::fs::OpenOptions;
+use std::io::Write;
+use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
 use tokio::sync::oneshot;
 
+use crate::store;
 use crate::tools::{PermissionEffect, PermissionPolicy, PermissionScope, ToolRisk};
 
 static SEQ: AtomicU64 = AtomicU64::new(1);
@@ -16,7 +21,7 @@ fn next_id() -> String {
 }
 
 #[allow(dead_code)]
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PermissionDecisionSource {
     ToolDefault,
@@ -24,7 +29,7 @@ pub enum PermissionDecisionSource {
     UnknownTool,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PermissionDecision {
     pub effect: PermissionEffect,
     pub scope: PermissionScope,
@@ -39,6 +44,40 @@ impl PermissionDecision {
             scope: policy.scope,
             reason: policy.reason.to_string(),
             source: PermissionDecisionSource::ToolDefault,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PermissionRule {
+    pub tool: String,
+    pub effect: PermissionEffect,
+    pub scope: PermissionScope,
+    pub reason: String,
+    pub updated_at: u64,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct PermissionAuditEntry {
+    pub timestamp: u64,
+    pub tool: String,
+    pub effect: PermissionEffect,
+    pub scope: PermissionScope,
+    pub source: PermissionDecisionSource,
+    pub reason: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct PermissionResponse {
+    pub allow: bool,
+    pub scope: PermissionScope,
+}
+
+impl PermissionResponse {
+    pub fn deny_once() -> Self {
+        PermissionResponse {
+            allow: false,
+            scope: PermissionScope::Once,
         }
     }
 }
@@ -66,13 +105,93 @@ pub struct PermissionPromptPayload<'a> {
     pub preview: Option<&'a str>,
 }
 
+pub fn decide(
+    state: &crate::AppState,
+    tool: &str,
+    default_policy: PermissionPolicy,
+) -> PermissionDecision {
+    if let Some(rule) = state
+        .session_permission_rules
+        .lock()
+        .unwrap()
+        .get(tool)
+        .cloned()
+    {
+        return decision_from_rule(rule);
+    }
+
+    let data_dir = state.data_dir.lock().unwrap().clone();
+    if let Some(rule) = load_project_rules(&data_dir).remove(tool) {
+        return decision_from_rule(rule);
+    }
+
+    PermissionDecision::from_policy(default_policy)
+}
+
+pub fn remember_response(
+    state: &crate::AppState,
+    tool: &str,
+    response: &PermissionResponse,
+) -> Result<(), String> {
+    if response.scope == PermissionScope::Once {
+        return Ok(());
+    }
+
+    let rule = PermissionRule {
+        tool: tool.to_string(),
+        effect: if response.allow {
+            PermissionEffect::Allow
+        } else {
+            PermissionEffect::Deny
+        },
+        scope: response.scope,
+        reason: "用户在确认弹窗中选择记住此决策。".to_string(),
+        updated_at: store::now_millis(),
+    };
+
+    match response.scope {
+        PermissionScope::Once => Ok(()),
+        PermissionScope::Session => {
+            state
+                .session_permission_rules
+                .lock()
+                .unwrap()
+                .insert(tool.to_string(), rule);
+            Ok(())
+        }
+        PermissionScope::Project => {
+            let data_dir = state.data_dir.lock().unwrap().clone();
+            let mut rules = load_project_rules(&data_dir);
+            rules.insert(tool.to_string(), rule);
+            save_project_rules(&data_dir, &rules)
+        }
+    }
+}
+
+pub fn audit(state: &crate::AppState, tool: &str, decision: &PermissionDecision) {
+    let data_dir = state.data_dir.lock().unwrap().clone();
+    let entry = PermissionAuditEntry {
+        timestamp: store::now_millis(),
+        tool: tool.to_string(),
+        effect: decision.effect,
+        scope: decision.scope,
+        source: decision.source.clone(),
+        reason: decision.reason.clone(),
+    };
+    let _ = append_audit(&data_dir, &entry);
+}
+
 /// 向前端发起一次确认请求并 await 结果。
 /// 机制：生成唯一 id → 存入 pending map 的 oneshot 发送端 → emit 事件给前端 →
-/// 前端弹窗 → 用户点击后 invoke `respond_confirm(id, allow)` → 命令侧取出 sender 回填 →
-/// 这里的 rx 收到布尔值。超时（5 分钟）按拒绝处理。
-pub async fn confirm(app: &AppHandle, state: &crate::AppState, req: PermissionRequest<'_>) -> bool {
+/// 前端弹窗 → 用户点击后 invoke `respond_confirm(id, allow, scope)` → 命令侧取出 sender 回填 →
+/// 这里的 rx 收到裁决。超时（5 分钟）按拒绝处理。
+pub async fn confirm(
+    app: &AppHandle,
+    state: &crate::AppState,
+    req: PermissionRequest<'_>,
+) -> PermissionResponse {
     let id = next_id();
-    let (tx, rx) = oneshot::channel::<bool>();
+    let (tx, rx) = oneshot::channel::<PermissionResponse>();
     state
         .pending_confirms
         .lock()
@@ -99,7 +218,41 @@ pub async fn confirm(app: &AppHandle, state: &crate::AppState, req: PermissionRe
         _ => {
             // 超时或通道异常：清理并按拒绝处理
             state.pending_confirms.lock().unwrap().remove(&id);
-            false
+            PermissionResponse::deny_once()
         }
     }
+}
+
+fn decision_from_rule(rule: PermissionRule) -> PermissionDecision {
+    PermissionDecision {
+        effect: rule.effect,
+        scope: rule.scope,
+        reason: rule.reason,
+        source: PermissionDecisionSource::UserOverride,
+    }
+}
+
+fn load_project_rules(dir: &Path) -> HashMap<String, PermissionRule> {
+    let p = dir.join("permissions.json");
+    std::fs::read_to_string(&p)
+        .ok()
+        .and_then(|s| serde_json::from_str::<HashMap<String, PermissionRule>>(&s).ok())
+        .unwrap_or_default()
+}
+
+fn save_project_rules(dir: &Path, rules: &HashMap<String, PermissionRule>) -> Result<(), String> {
+    let p = dir.join("permissions.json");
+    let json = serde_json::to_string_pretty(rules).map_err(|e| e.to_string())?;
+    std::fs::write(&p, json).map_err(|e| e.to_string())
+}
+
+fn append_audit(dir: &Path, entry: &PermissionAuditEntry) -> Result<(), String> {
+    let p = dir.join("permission_audit.jsonl");
+    let mut f = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&p)
+        .map_err(|e| e.to_string())?;
+    let json = serde_json::to_string(entry).map_err(|e| e.to_string())?;
+    writeln!(f, "{json}").map_err(|e| e.to_string())
 }

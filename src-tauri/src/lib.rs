@@ -17,6 +17,7 @@ use tauri::{AppHandle, Manager, State};
 use tokio::sync::oneshot;
 
 use agent::conversation::Message;
+use permission::{PermissionResponse, PermissionRule};
 use store::{Session, SessionMeta, SessionStore, Settings};
 
 /// 全局共享状态。路径类字段在 setup() 里填充（需要 AppHandle 才能拿到 app_data_dir）。
@@ -27,7 +28,9 @@ pub struct AppState {
     /// 多会话 + 当前活动会话
     pub sessions: Mutex<SessionStore>,
     /// 待确认的工具调用：id -> oneshot 发送端
-    pub pending_confirms: Mutex<HashMap<String, oneshot::Sender<bool>>>,
+    pub pending_confirms: Mutex<HashMap<String, oneshot::Sender<PermissionResponse>>>,
+    /// 本会话内的权限规则：tool -> rule
+    pub session_permission_rules: Mutex<HashMap<String, PermissionRule>>,
     /// 用户中断标志
     pub cancel: AtomicBool,
     /// 是否正在处理一轮对话（防止并发 send）
@@ -44,6 +47,7 @@ impl AppState {
             settings: Mutex::new(Settings::default()),
             sessions: Mutex::new(SessionStore::default()),
             pending_confirms: Mutex::new(HashMap::new()),
+            session_permission_rules: Mutex::new(HashMap::new()),
             cancel: AtomicBool::new(false),
             busy: AtomicBool::new(false),
             data_dir: Mutex::new(PathBuf::new()),
@@ -77,7 +81,10 @@ fn session_list(store: &SessionStore) -> SessionList {
         })
         .collect();
     metas.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
-    SessionList { active: store.active.clone(), sessions: metas }
+    SessionList {
+        active: store.active.clone(),
+        sessions: metas,
+    }
 }
 
 // ---------------- Tauri 命令 ----------------
@@ -101,15 +108,20 @@ fn interrupt(state: State<'_, AppState>) {
     // 立即唤醒所有正在等待的确认（按「中断」处理），否则确认弹窗的 await 会把整轮卡住最长 5 分钟
     let mut pending = state.pending_confirms.lock().unwrap();
     for (_, tx) in pending.drain() {
-        let _ = tx.send(false);
+        let _ = tx.send(PermissionResponse::deny_once());
     }
 }
 
 /// 前端确认对话框的回执：取出对应 oneshot 发送端回填裁决。
 #[tauri::command]
-fn respond_confirm(state: State<'_, AppState>, id: String, allow: bool) {
+fn respond_confirm(
+    state: State<'_, AppState>,
+    id: String,
+    allow: bool,
+    scope: tools::PermissionScope,
+) {
     if let Some(tx) = state.pending_confirms.lock().unwrap().remove(&id) {
-        let _ = tx.send(allow);
+        let _ = tx.send(PermissionResponse { allow, scope });
     }
 }
 
@@ -142,7 +154,10 @@ fn list_sessions(state: State<'_, AppState>) -> SessionList {
 #[tauri::command]
 fn get_history(state: State<'_, AppState>) -> Vec<Message> {
     let store = state.sessions.lock().unwrap();
-    store.get(&store.active).map(|s| s.messages.clone()).unwrap_or_default()
+    store
+        .get(&store.active)
+        .map(|s| s.messages.clone())
+        .unwrap_or_default()
 }
 
 /// 新建会话并设为活动，返回新会话 id。
