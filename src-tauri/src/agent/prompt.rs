@@ -15,10 +15,16 @@ pub struct PromptSections {
     pub persona: String,
     pub project: String,
     pub environment: String,
+    pub session_summary: String,
     pub memory: String,
 }
 
-pub fn build(state: &crate::AppState, settings: &Settings, persona_text: &str) -> String {
+pub fn build(
+    state: &crate::AppState,
+    settings: &Settings,
+    persona_text: &str,
+    session_summary: Option<&str>,
+) -> String {
     let sandbox = state.sandbox_dir.lock().unwrap().clone();
     let packs_dir = state.packs_dir.lock().unwrap().clone();
 
@@ -26,6 +32,7 @@ pub fn build(state: &crate::AppState, settings: &Settings, persona_text: &str) -
         persona: persona_section(persona_text),
         project: project_section(&sandbox),
         environment: environment_section(&sandbox, settings),
+        session_summary: session_summary_section(session_summary),
         memory: memory_section(&sandbox, &packs_dir, &settings.current_pack),
     };
 
@@ -39,6 +46,7 @@ pub fn assemble(sections: PromptSections) -> String {
     push_section(&mut out, "角色设定", &sections.persona);
     push_section(&mut out, "项目指令", &sections.project);
     push_section(&mut out, "运行环境", &sections.environment);
+    push_section(&mut out, "会话摘要", &sections.session_summary);
     push_section(&mut out, "记忆", &sections.memory);
 
     out
@@ -58,6 +66,10 @@ fn push_section(out: &mut String, title: &str, body: &str) {
 
 fn persona_section(persona_text: &str) -> String {
     persona_text.trim().to_string()
+}
+
+fn session_summary_section(summary: Option<&str>) -> String {
+    summary.unwrap_or_default().trim().to_string()
 }
 
 fn project_section(root: &Path) -> String {

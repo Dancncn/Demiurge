@@ -6,7 +6,7 @@ use serde_json::json;
 use tauri::{AppHandle, Emitter};
 
 use super::conversation::Message;
-use super::{context, prompt};
+use super::{context, prompt, summary};
 use crate::{llm, pack, permission, store, tools};
 use permission::PermissionRequest;
 
@@ -35,13 +35,12 @@ pub async fn run_turn(
     // 捕获本轮的目标会话 id：即便用户中途切换会话，写入也始终落到这一段对话
     let sid = state.sessions.lock().unwrap().active.clone();
 
-    // 取当前角色包人格，拼装分区化 system prompt
+    // 取当前角色包人格，后续每次请求会结合最新会话摘要拼装 system prompt
     let packs_dir = state.packs_dir.lock().unwrap().clone();
     let persona_text = match pack::load_pack(&packs_dir, &settings.current_pack) {
         Ok(p) => p.persona_text,
         Err(_) => String::new(),
     };
-    let system = prompt::build(state, &settings, &persona_text);
     let tools_schema = tools::schemas_json();
 
     // 向目标会话追加一条消息（并刷新 updated_at）
@@ -72,17 +71,44 @@ pub async fn run_turn(
             break;
         }
 
-        // 组装本轮请求消息：system + 裁剪后的历史
-        let full: Vec<Message> = {
+        // 组装本轮请求消息：system + 裁剪后的历史。若裁剪掉旧消息，先滚动更新会话摘要。
+        let (msgs, existing_summary, removed_messages) = {
             let mut storeg = state.sessions.lock().unwrap();
-            let msgs = if let Some(s) = storeg.get_mut(&sid) {
-                context::trim(&mut s.messages, settings.max_context_chars);
-                s.messages.clone()
+            if let Some(s) = storeg.get_mut(&sid) {
+                let removed =
+                    context::trim_collect_removed(&mut s.messages, settings.max_context_chars);
+                (s.messages.clone(), s.summary.clone(), removed)
             } else {
-                Vec::new()
-            };
+                (Vec::new(), None, Vec::new())
+            }
+        };
+
+        let mut session_summary = existing_summary;
+        if !removed_messages.is_empty() && !state.cancel.load(Ordering::Relaxed) {
+            if let Ok(next_summary) = summary::update_session_summary(
+                &state.http,
+                &settings,
+                session_summary.as_deref(),
+                &removed_messages,
+                &state.cancel,
+            )
+            .await
+            {
+                session_summary = next_summary;
+                let mut storeg = state.sessions.lock().unwrap();
+                if let Some(s) = storeg.get_mut(&sid) {
+                    s.summary = session_summary.clone();
+                    s.updated_at = store::now_millis();
+                }
+                drop(storeg);
+                state.persist_sessions();
+            }
+        }
+
+        let full: Vec<Message> = {
+            let system = prompt::build(state, &settings, &persona_text, session_summary.as_deref());
             let mut v = Vec::with_capacity(msgs.len() + 1);
-            v.push(Message::system(system.clone()));
+            v.push(Message::system(system));
             v.extend(msgs);
             v
         };

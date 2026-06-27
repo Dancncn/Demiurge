@@ -52,6 +52,8 @@ pub fn new_session_id() -> String {
 pub struct Session {
     pub id: String,
     pub title: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
     pub messages: Vec<Message>,
     pub updated_at: u64,
 }
@@ -61,6 +63,7 @@ impl Session {
         Session {
             id: new_session_id(),
             title: "新对话".to_string(),
+            summary: None,
             messages: Vec::new(),
             updated_at: now_millis(),
         }

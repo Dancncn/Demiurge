@@ -17,15 +17,17 @@ fn total_chars(msgs: &[Message]) -> usize {
 }
 
 /// 就地裁剪历史，使其大致控制在 max_chars 以内。
+/// 返回第二阶段被整条移除的旧消息，供 rolling summary 消化。
 /// 阶段一：把「较老的」工具结果内容截断（保留最近 KEEP_RECENT 条不动）。
 /// 阶段二：仍超限则从最旧开始整条丢弃；丢完后若开头变成孤儿 tool 结果，一并丢掉，
 ///        避免给 API 发送没有对应 assistant.tool_calls 的 tool 消息（会 400）。
-pub fn trim(msgs: &mut Vec<Message>, max_chars: usize) {
+pub fn trim_collect_removed(msgs: &mut Vec<Message>, max_chars: usize) -> Vec<Message> {
     const KEEP_RECENT: usize = 8;
     const TOOL_KEEP: usize = 400;
+    let mut removed = Vec::new();
 
     if total_chars(msgs) <= max_chars {
-        return;
+        return removed;
     }
 
     // 阶段一：截断老的、超长的 tool 结果
@@ -45,10 +47,18 @@ pub fn trim(msgs: &mut Vec<Message>, max_chars: usize) {
 
     // 阶段二：从最旧丢起
     while total_chars(msgs) > max_chars && msgs.len() > 2 {
-        msgs.remove(0);
+        removed.push(msgs.remove(0));
         // 别让开头留下孤儿 tool 结果
         while matches!(msgs.first(), Some(m) if m.role == "tool") {
-            msgs.remove(0);
+            removed.push(msgs.remove(0));
         }
     }
+
+    removed
+}
+
+/// 就地裁剪历史，使其大致控制在 max_chars 以内。
+#[allow(dead_code)]
+pub fn trim(msgs: &mut Vec<Message>, max_chars: usize) {
+    let _ = trim_collect_removed(msgs, max_chars);
 }

@@ -20,8 +20,9 @@ React UI (webview)  ──invoke 命令──▶  Rust 内核 (Tauri)  ──HTT
 | `lib.rs` | 全局状态 `AppState`、命令注册、Tauri builder、`setup()` 初始化路径/持久化 | `run()` |
 | `agent/runner.rs` | **Agent 循环**：调 LLM → 执行工具 → 喂回 → 重复 | `run_turn()` |
 | `agent/conversation.rs` | OpenAI 兼容消息结构（role / tool_calls / tool_result） | `Message` |
-| `agent/context.rs` | 对话历史裁剪（先截老工具输出，再丢更老回合） | `trim()` |
-| `agent/prompt.rs` | Phase 2 prompt section builder：engine/persona/project/environment/memory 分区 | `build()` |
+| `agent/context.rs` | 对话历史裁剪（先截老工具输出，再丢更老回合，并返回可摘要的旧消息） | `trim()` / `trim_collect_removed()` |
+| `agent/summary.rs` | 会话 rolling summary：把被裁剪的旧消息压缩成短期会话摘要 | `update_session_summary()` |
+| `agent/prompt.rs` | Phase 2 prompt section builder：engine/persona/project/environment/session summary/memory 分区 | `build()` |
 | `agent/persona.rs` | 引擎基础指令片段 | `engine_base()` |
 | `llm/mod.rs` | OpenAI 兼容流式客户端，SSE 解析 + 流式 tool_calls 累积；含 `ProviderProfile` 地基 | `stream_completion()` |
 | `tools/mod.rs` | 工具注册表 + metadata（risk/concurrency/permission/output policy）+ 统一执行入口 + 沙盒路径解析 | `registry()` / `execute()` |
@@ -30,12 +31,12 @@ React UI (webview)  ──invoke 命令──▶  Rust 内核 (Tauri)  ──HTT
 | `pack/mod.rs` | 角色包清单加载、首启动落地默认包 | `load_pack()` / `ensure_default()` |
 | `store/mod.rs` | 设置 / 多会话 JSON 落盘（含旧版迁移） | `Settings` / `Session` / `SessionStore` |
 
-数据目录（Tauri `app_data_dir`）下：`settings.json`、`sessions.json`（多会话 + 活动会话）、`sandbox/`、`packs/`。
+数据目录（Tauri `app_data_dir`）下：`settings.json`、`sessions.json`（多会话 + 活动会话 + 每会话 rolling summary）、`sandbox/`、`packs/`。
 （旧版单会话 `conversation.json` 在首次启动时会自动迁移成一条会话。）
 
 ### Agent 循环（`run_turn`）
 1. 追加用户消息、持久化。
-2. 通过 `agent/prompt.rs` 拼分区化 system prompt（引擎规则、角色人格、项目指令、运行环境、只读 memory），再追加裁剪后的历史并流式调 LLM；正文增量通过 `assistant-delta` 事件实时推给前端。
+2. 通过 `agent/prompt.rs` 拼分区化 system prompt（引擎规则、角色人格、项目指令、运行环境、会话摘要、只读 memory），再追加裁剪后的历史并流式调 LLM；正文增量通过 `assistant-delta` 事件实时推给前端。
 3. 若返回 `tool_calls`：把带 tool_calls 的 assistant 消息入历史，逐个工具——
    - `emit tool-start` → 权限门（auto 直接放行 / confirm 走前端确认）→ 执行 → `emit tool-end`；
    - 把结果作为 `tool` 消息喂回（**每个 tool_call 都必须有对应结果**，否则下一轮 400）。
@@ -51,9 +52,10 @@ React UI (webview)  ──invoke 命令──▶  Rust 内核 (Tauri)  ──HTT
 - **角色设定**：来自当前角色包 `persona.md`。
 - **项目指令**：从沙盒根读取 `DEMIURGE.md` 和 `CLAUDE.md`（可同时存在，单文件 32 KiB 上限）。
 - **运行环境**：包含当前 Unix 毫秒时间戳、沙盒工作区路径、当前角色包 id、`git status --short --branch` 摘要（非 git 目录自动降级）。
+- **会话摘要**：每个 `Session` 可持有一段 rolling summary；当历史超出 `max_context_chars` 并被裁剪时，`agent/summary.rs` 会把被移除的旧消息与已有摘要合并成新的短期会话摘要。
 - **记忆**：只读加载沙盒根 `memory.md`、沙盒根 `.demiurge/memory.md`、当前角色包 `memory.md`（可选，单文件 32 KiB 上限）。
 
-这些 project/memory/environment section 总体再做字符上限截断，避免挤占对话历史预算。`agent/context.rs` 仍只负责历史消息裁剪；session rolling summary、token-aware budget 与自动记忆提取留作 Phase 2 后续增强。
+这些 project/memory/environment/summary section 总体再做字符上限截断，避免挤占对话历史预算。`agent/context.rs` 负责历史消息裁剪并返回被移除的旧消息；`agent/summary.rs` 只维护当前会话的短期摘要，不写入长期 memory。token-aware budget 与自动记忆提取留作 Phase 2 后续增强。
 
 ### 前后端事件协议
 后端 emit（`src-tauri` → 前端 `src/lib/api.ts` 监听）：
