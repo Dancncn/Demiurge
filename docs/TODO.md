@@ -23,7 +23,7 @@ Demiurge 的待办与方向，欢迎认领。✅ 已完成 · ⬜ 待做 · 💡
 - [x] **Phase 2 Project Context Builder 首阶段**：分区化 system prompt，读取 `DEMIURGE.md` / `CLAUDE.md`、git 快照、工作区与只读 memory 文件
 - [x] **Phase 2 Session Rolling Summary**：历史裁剪时把旧消息压缩进会话摘要，并作为 `会话摘要` 分区注入 prompt
 - [x] **Phase 2 Token-aware Budget**：用启发式 token 估算统一 system prompt、工具 schema、历史消息与输出预留预算
-- [ ] **Phase 2 后续增强**：自动记忆提取
+- [x] **Phase 2 自动记忆提取**：保守提取用户偏好 / 项目长期约束，写入沙盒 `.demiurge/memory.md`
 - [ ] **编辑工具后续增强**：undo 栈 / 高级 patch 引擎 / 跨文件批量编辑
 - [ ] **Provider Adapter 拆分**：从 OpenAI-compatible profile 演进到 Anthropic / Gemini / local adapters
 - [ ] **API Key 安全存储**：从明文 `settings.json` 改为系统凭据管理器（Windows keyring）

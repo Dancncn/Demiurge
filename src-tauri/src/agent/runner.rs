@@ -6,7 +6,7 @@ use serde_json::json;
 use tauri::{AppHandle, Emitter};
 
 use super::conversation::Message;
-use super::{budget, context, prompt, summary};
+use super::{budget, context, memory, prompt, summary};
 use crate::{llm, pack, permission, store, tools};
 use permission::PermissionRequest;
 
@@ -42,6 +42,7 @@ pub async fn run_turn(
         Err(_) => String::new(),
     };
     let tools_schema = tools::schemas_json();
+    let original_user_text = user_text.clone();
 
     // 向目标会话追加一条消息（并刷新 updated_at）
     let push = |msg: Message| {
@@ -171,9 +172,21 @@ pub async fn run_turn(
 
         // 没有工具调用 → 最终答复
         if turn.tool_calls.is_empty() {
-            push(Message::assistant_text(turn.content.clone()));
+            let assistant_text = turn.content.clone();
+            push(Message::assistant_text(assistant_text.clone()));
             state.persist_sessions();
-            let _ = app.emit("assistant-done", turn.content);
+            let _ = app.emit("assistant-done", assistant_text.clone());
+
+            let sandbox_dir = state.sandbox_dir.lock().unwrap().clone();
+            let _ = memory::extract_and_update(
+                &state.http,
+                &settings,
+                &sandbox_dir,
+                &original_user_text,
+                &assistant_text,
+                &state.cancel,
+            )
+            .await;
             return Ok(());
         }
 

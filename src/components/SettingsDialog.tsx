@@ -113,6 +113,19 @@ export default function SettingsDialog({ open, settings, packs, onClose, onSave 
             />
           </label>
 
+          <label className="flex items-start gap-3 rounded-2xl border border-[#eeeeee] bg-[#fafafa] p-3">
+            <input
+              className="mt-1 h-4 w-4 accent-[#10a37f]"
+              type="checkbox"
+              checked={form.auto_memory_enabled}
+              onChange={(e) => set("auto_memory_enabled", e.target.checked)}
+            />
+            <span>
+              <span className="block text-sm font-medium text-[#3f3f3f]">自动提取长期记忆</span>
+              <span className="mt-1 block text-xs text-[#9a9a9a]">保守提取用户偏好和项目长期约束，写入沙盒 .demiurge/memory.md。</span>
+            </span>
+          </label>
+
           <label className="block">
             <span className={labelCls}>上下文上限（字符数，兼容兜底）</span>
             <input

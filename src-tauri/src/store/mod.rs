@@ -12,6 +12,7 @@ use crate::agent::conversation::{Conversation, Message};
 pub const DEFAULT_MAX_CONTEXT_CHARS: usize = 24_000;
 pub const DEFAULT_MAX_INPUT_TOKENS: usize = 32_000;
 pub const DEFAULT_RESERVED_OUTPUT_TOKENS: usize = 4_000;
+pub const DEFAULT_AUTO_MEMORY_ENABLED: bool = true;
 
 fn default_max_context_chars() -> usize {
     DEFAULT_MAX_CONTEXT_CHARS
@@ -23,6 +24,10 @@ fn default_max_input_tokens() -> usize {
 
 fn default_reserved_output_tokens() -> usize {
     DEFAULT_RESERVED_OUTPUT_TOKENS
+}
+
+fn default_auto_memory_enabled() -> bool {
+    DEFAULT_AUTO_MEMORY_ENABLED
 }
 
 /// 运行时设置。MVP 直接以 JSON 落盘（含 api_key 明文）。
@@ -39,6 +44,8 @@ pub struct Settings {
     pub max_input_tokens: usize,
     #[serde(default = "default_reserved_output_tokens")]
     pub reserved_output_tokens: usize,
+    #[serde(default = "default_auto_memory_enabled")]
+    pub auto_memory_enabled: bool,
 }
 
 impl Default for Settings {
@@ -52,6 +59,7 @@ impl Default for Settings {
             max_context_chars: DEFAULT_MAX_CONTEXT_CHARS,
             max_input_tokens: DEFAULT_MAX_INPUT_TOKENS,
             reserved_output_tokens: DEFAULT_RESERVED_OUTPUT_TOKENS,
+            auto_memory_enabled: DEFAULT_AUTO_MEMORY_ENABLED,
         }
     }
 }

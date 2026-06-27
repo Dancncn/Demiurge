@@ -25,6 +25,7 @@ export interface Settings {
   max_context_chars: number;
   max_input_tokens: number;
   reserved_output_tokens: number;
+  auto_memory_enabled: boolean;
 }
 
 export interface PackManifest {
