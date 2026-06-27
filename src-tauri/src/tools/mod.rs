@@ -254,6 +254,34 @@ pub fn registry() -> Vec<ToolDefinition> {
             }),
         },
         ToolDefinition {
+            name: "apply_patch",
+            description: "按结构化行 hunk 修改一个或多个沙盒文本文件。每个 hunk 指定 start_line、old_lines、new_lines；全量预检后展示聚合 diff 预览。",
+            risk: ToolRisk::Mutating,
+            concurrency: ToolConcurrency::SerialOnly,
+            permission: PermissionPolicy::ask("会按结构化 patch 批量修改沙盒目录内的已有文件。"),
+            output_policy: ToolOutputPolicy::Inline,
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "hunks": {
+                        "type": "array",
+                        "description": "要应用的结构化行 hunk，最多 20 个。同文件 hunks 按顺序应用，后续 start_line 基于前一个 hunk 应用后的内容。",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "path": { "type": "string", "description": "相对沙盒目录的已有文本文件路径" },
+                                "start_line": { "type": "integer", "description": "1-based 起始行号" },
+                                "old_lines": { "type": "array", "items": { "type": "string" }, "description": "起始行处必须完整匹配的原始行列表，不含行尾换行" },
+                                "new_lines": { "type": "array", "items": { "type": "string" }, "description": "替换后的新行列表，不含行尾换行" }
+                            },
+                            "required": ["path", "start_line", "old_lines", "new_lines"]
+                        }
+                    }
+                },
+                "required": ["hunks"]
+            }),
+        },
+        ToolDefinition {
             name: "undo_edit",
             description: "撤销本进程内最近一次成功的 edit_file 修改。撤销前会确认目标文件未被后续外部修改，并展示反向 diff 预览。",
             risk: ToolRisk::Mutating,
@@ -335,6 +363,7 @@ pub async fn execute(state: &crate::AppState, name: &str, args: Value) -> Result
         "write_file" => write_file::run(state, args),
         "edit_file" => edit_file::run(state, args),
         "multi_edit" => edit_file::multi_run(state, args),
+        "apply_patch" => edit_file::patch_run(state, args),
         "undo_edit" => edit_file::undo(state, args),
         "web_search" => web_search::run(state, args).await,
         "system_info" => system_info::run(),
@@ -351,6 +380,10 @@ pub fn confirmation_preview(state: &crate::AppState, name: &str, args: Value) ->
         "multi_edit" => Some(
             edit_file::multi_preview(state, args)
                 .unwrap_or_else(|e| format!("无法生成 multi_edit preview：{e}")),
+        ),
+        "apply_patch" => Some(
+            edit_file::patch_preview(state, args)
+                .unwrap_or_else(|e| format!("无法生成 apply_patch preview：{e}")),
         ),
         "undo_edit" => Some(
             edit_file::undo_preview(state, args)

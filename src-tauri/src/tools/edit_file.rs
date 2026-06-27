@@ -7,6 +7,7 @@ const MAX_EDIT: u64 = 256 * 1024;
 const MAX_PREVIEW_CHARS: usize = 12_000;
 const MAX_UNDO_ENTRIES: usize = 20;
 const MAX_MULTI_EDITS: usize = 20;
+const MAX_PATCH_HUNKS: usize = 20;
 
 #[derive(Clone, Debug)]
 pub struct EditUndoEntry {
@@ -32,6 +33,14 @@ struct PlannedEdit {
     before: String,
     after: String,
     replacements: usize,
+}
+
+#[derive(Clone, Debug)]
+struct PatchHunk {
+    rel: String,
+    start_line: usize,
+    old_lines: Vec<String>,
+    new_lines: Vec<String>,
 }
 
 pub fn preview(state: &crate::AppState, args: Value) -> Result<String, String> {
@@ -75,6 +84,27 @@ pub fn multi_run(state: &crate::AppState, args: Value) -> Result<String, String>
         planned.len(),
         edits_count,
         total_replacements
+    ))
+}
+
+pub fn patch_preview(state: &crate::AppState, args: Value) -> Result<String, String> {
+    let hunk_count = hunks_count(&args)?;
+    let planned = plan_patch(state, &args)?;
+    Ok(build_patch_preview(&planned, hunk_count))
+}
+
+pub fn patch_run(state: &crate::AppState, args: Value) -> Result<String, String> {
+    let hunk_count = hunks_count(&args)?;
+    let planned = plan_patch(state, &args)?;
+
+    for edit in &planned {
+        write_planned_edit(state, edit)?;
+    }
+
+    Ok(format!(
+        "已应用结构化 patch：{} 个文件（{} 个 hunk）",
+        planned.len(),
+        hunk_count
     ))
 }
 
@@ -180,6 +210,73 @@ fn edits_count(args: &Value) -> Result<usize, String> {
         .len())
 }
 
+fn parse_patch_args(args: &Value) -> Result<Vec<PatchHunk>, String> {
+    let hunks = args
+        .get("hunks")
+        .and_then(Value::as_array)
+        .ok_or_else(|| "hunks 必须是数组".to_string())?;
+    if hunks.is_empty() {
+        return Err("hunks 不能为空".to_string());
+    }
+    if hunks.len() > MAX_PATCH_HUNKS {
+        return Err(format!(
+            "一次最多允许 {MAX_PATCH_HUNKS} 个 hunk，当前为 {} 个",
+            hunks.len()
+        ));
+    }
+
+    hunks
+        .iter()
+        .enumerate()
+        .map(|(_idx, hunk)| {
+            let rel = super::args::required_non_empty_str(hunk, "path")?.to_string();
+            let start_line =
+                hunk.get("start_line")
+                    .and_then(Value::as_u64)
+                    .ok_or_else(|| "start_line 必须是正整数".to_string())? as usize;
+            if start_line == 0 {
+                return Err("start_line 必须从 1 开始".to_string());
+            }
+            let old_lines = required_string_array(hunk, "old_lines")?;
+            let new_lines = required_string_array(hunk, "new_lines")?;
+            if old_lines.is_empty() {
+                return Err("old_lines 不能为空".to_string());
+            }
+            if old_lines == new_lines {
+                return Err("old_lines 与 new_lines 相同，无需 patch".to_string());
+            }
+            Ok(PatchHunk {
+                rel,
+                start_line,
+                old_lines,
+                new_lines,
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()
+        .map_err(|e| format!("patch hunk 无效：{e}"))
+}
+
+fn required_string_array(args: &Value, key: &str) -> Result<Vec<String>, String> {
+    args.get(key)
+        .and_then(Value::as_array)
+        .ok_or_else(|| format!("{key} 必须是字符串数组"))?
+        .iter()
+        .map(|line| {
+            line.as_str()
+                .map(ToString::to_string)
+                .ok_or_else(|| format!("{key} 只能包含字符串"))
+        })
+        .collect()
+}
+
+fn hunks_count(args: &Value) -> Result<usize, String> {
+    Ok(args
+        .get("hunks")
+        .and_then(Value::as_array)
+        .ok_or_else(|| "hunks 必须是数组".to_string())?
+        .len())
+}
+
 fn read_target(state: &crate::AppState, rel: &str) -> Result<String, String> {
     let sandbox = state.sandbox_dir.lock().unwrap().clone();
     let path = super::resolve_in_sandbox(&sandbox, rel)?;
@@ -227,6 +324,65 @@ fn plan_multi_edit(state: &crate::AppState, args: &Value) -> Result<Vec<PlannedE
     }
 
     Ok(planned)
+}
+
+fn plan_patch(state: &crate::AppState, args: &Value) -> Result<Vec<PlannedEdit>, String> {
+    let hunks = parse_patch_args(args)?;
+    let mut planned = Vec::<PlannedEdit>::new();
+    let mut by_path = HashMap::<String, usize>::new();
+
+    for hunk in hunks {
+        if let Some(idx) = by_path.get(&hunk.rel).copied() {
+            let after = apply_hunk_to_text(&planned[idx].after, &hunk)?;
+            planned[idx].after = after;
+            planned[idx].replacements += 1;
+        } else {
+            let before = read_target(state, &hunk.rel)?;
+            let after = apply_hunk_to_text(&before, &hunk)?;
+            by_path.insert(hunk.rel.clone(), planned.len());
+            planned.push(PlannedEdit {
+                rel: hunk.rel.clone(),
+                before,
+                after,
+                replacements: 1,
+            });
+        }
+    }
+
+    Ok(planned)
+}
+
+fn apply_hunk_to_text(original: &str, hunk: &PatchHunk) -> Result<String, String> {
+    let had_trailing_newline = original.ends_with('\n');
+    let mut lines = original
+        .lines()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    let start = hunk.start_line - 1;
+    let end = start + hunk.old_lines.len();
+
+    if start > lines.len() || end > lines.len() {
+        return Err(format!(
+            "{}:{} hunk 越界，文件只有 {} 行",
+            hunk.rel,
+            hunk.start_line,
+            lines.len()
+        ));
+    }
+
+    if lines[start..end] != hunk.old_lines[..] {
+        return Err(format!(
+            "{}:{} hunk 不匹配，当前内容与 old_lines 不一致",
+            hunk.rel, hunk.start_line
+        ));
+    }
+
+    lines.splice(start..end, hunk.new_lines.clone());
+    let mut next = lines.join("\n");
+    if had_trailing_newline {
+        next.push('\n');
+    }
+    Ok(next)
 }
 
 fn apply_edit(original: &str, req: &EditRequest) -> Result<(String, usize), String> {
@@ -333,6 +489,30 @@ fn build_multi_preview(planned: &[PlannedEdit], edits_count: usize) -> String {
     out
 }
 
+fn build_patch_preview(planned: &[PlannedEdit], hunk_count: usize) -> String {
+    let mut out = format!(
+        "结构化 patch 预览：{} 个文件，{} 个 hunk\n\n",
+        planned.len(),
+        hunk_count
+    );
+
+    for edit in planned {
+        out.push_str(&build_preview(
+            &edit.rel,
+            &edit.before,
+            &edit.after,
+            edit.replacements,
+        ));
+        out.push('\n');
+        if out.chars().count() > MAX_PREVIEW_CHARS {
+            out.push_str("…apply_patch preview 已截断\n");
+            break;
+        }
+    }
+
+    out
+}
+
 fn build_preview(path: &str, original: &str, updated: &str, count: usize) -> String {
     let mut out = String::new();
     out.push_str(&format!("--- {path}\n+++ {path}\n@@ 替换 {count} 处 @@\n"));
@@ -381,7 +561,7 @@ mod tests {
     use serde_json::json;
     use tokio::sync::oneshot;
 
-    use super::{multi_preview, multi_run, run, undo, undo_preview};
+    use super::{multi_preview, multi_run, patch_preview, patch_run, run, undo, undo_preview};
     use crate::permission::{PermissionResponse, PermissionRule};
     use crate::store::{SessionStore, Settings};
 
@@ -589,6 +769,171 @@ mod tests {
 
         let err = multi_run(&state, json!({ "edits": [] })).unwrap_err();
         assert!(err.contains("edits 不能为空"));
+
+        let _ = std::fs::remove_dir_all(&sandbox);
+    }
+
+    #[test]
+    fn patch_applies_single_hunk() {
+        let sandbox = temp_sandbox("patch_single");
+        let file = sandbox.join("note.txt");
+        std::fs::write(&file, "one\ntwo\nthree\n").unwrap();
+        let state = test_state(sandbox.clone());
+
+        let result = patch_run(
+            &state,
+            json!({
+                "hunks": [{
+                    "path": "note.txt",
+                    "start_line": 2,
+                    "old_lines": ["two"],
+                    "new_lines": ["TWO", "two-point-five"]
+                }]
+            }),
+        )
+        .unwrap();
+
+        assert!(result.contains("1 个 hunk"));
+        assert_eq!(
+            std::fs::read_to_string(&file).unwrap(),
+            "one\nTWO\ntwo-point-five\nthree\n"
+        );
+        assert_eq!(state.edit_undo_stack.lock().unwrap().len(), 1);
+
+        let _ = std::fs::remove_dir_all(&sandbox);
+    }
+
+    #[test]
+    fn patch_updates_multiple_files_and_records_undo() {
+        let sandbox = temp_sandbox("patch_multi_files");
+        let a = sandbox.join("a.txt");
+        let b = sandbox.join("b.txt");
+        std::fs::write(&a, "alpha\nold\n").unwrap();
+        std::fs::write(&b, "beta\nold\n").unwrap();
+        let state = test_state(sandbox.clone());
+
+        patch_run(
+            &state,
+            json!({
+                "hunks": [
+                    { "path": "a.txt", "start_line": 2, "old_lines": ["old"], "new_lines": ["new-a"] },
+                    { "path": "b.txt", "start_line": 2, "old_lines": ["old"], "new_lines": ["new-b"] }
+                ]
+            }),
+        )
+        .unwrap();
+
+        assert_eq!(std::fs::read_to_string(&a).unwrap(), "alpha\nnew-a\n");
+        assert_eq!(std::fs::read_to_string(&b).unwrap(), "beta\nnew-b\n");
+        assert_eq!(state.edit_undo_stack.lock().unwrap().len(), 2);
+
+        let _ = std::fs::remove_dir_all(&sandbox);
+    }
+
+    #[test]
+    fn patch_applies_multiple_hunks_to_same_file_in_order() {
+        let sandbox = temp_sandbox("patch_same_file");
+        let file = sandbox.join("note.txt");
+        std::fs::write(&file, "a\nb\nc\n").unwrap();
+        let state = test_state(sandbox.clone());
+
+        patch_run(
+            &state,
+            json!({
+                "hunks": [
+                    { "path": "note.txt", "start_line": 2, "old_lines": ["b"], "new_lines": ["B", "inserted"] },
+                    { "path": "note.txt", "start_line": 4, "old_lines": ["c"], "new_lines": ["C"] }
+                ]
+            }),
+        )
+        .unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(&file).unwrap(),
+            "a\nB\ninserted\nC\n"
+        );
+        let stack = state.edit_undo_stack.lock().unwrap();
+        assert_eq!(stack.len(), 1);
+        assert_eq!(stack[0].replacements, 2);
+
+        let _ = std::fs::remove_dir_all(&sandbox);
+    }
+
+    #[test]
+    fn patch_mismatch_writes_nothing() {
+        let sandbox = temp_sandbox("patch_mismatch");
+        let a = sandbox.join("a.txt");
+        let b = sandbox.join("b.txt");
+        std::fs::write(&a, "alpha\n").unwrap();
+        std::fs::write(&b, "beta\n").unwrap();
+        let state = test_state(sandbox.clone());
+
+        let err = patch_run(
+            &state,
+            json!({
+                "hunks": [
+                    { "path": "a.txt", "start_line": 1, "old_lines": ["alpha"], "new_lines": ["ALPHA"] },
+                    { "path": "b.txt", "start_line": 1, "old_lines": ["missing"], "new_lines": ["BETA"] }
+                ]
+            }),
+        )
+        .unwrap_err();
+
+        assert!(err.contains("hunk 不匹配"));
+        assert_eq!(std::fs::read_to_string(&a).unwrap(), "alpha\n");
+        assert_eq!(std::fs::read_to_string(&b).unwrap(), "beta\n");
+        assert!(state.edit_undo_stack.lock().unwrap().is_empty());
+
+        let _ = std::fs::remove_dir_all(&sandbox);
+    }
+
+    #[test]
+    fn patch_rejects_out_of_range_start_line() {
+        let sandbox = temp_sandbox("patch_range");
+        std::fs::write(sandbox.join("note.txt"), "one\n").unwrap();
+        let state = test_state(sandbox.clone());
+
+        let err = patch_run(
+            &state,
+            json!({
+                "hunks": [{
+                    "path": "note.txt",
+                    "start_line": 3,
+                    "old_lines": ["missing"],
+                    "new_lines": ["new"]
+                }]
+            }),
+        )
+        .unwrap_err();
+
+        assert!(err.contains("hunk 越界"));
+
+        let _ = std::fs::remove_dir_all(&sandbox);
+    }
+
+    #[test]
+    fn patch_preview_contains_diff() {
+        let sandbox = temp_sandbox("patch_preview");
+        std::fs::write(sandbox.join("note.txt"), "one\ntwo\n").unwrap();
+        let state = test_state(sandbox.clone());
+
+        let preview = patch_preview(
+            &state,
+            json!({
+                "hunks": [{
+                    "path": "note.txt",
+                    "start_line": 2,
+                    "old_lines": ["two"],
+                    "new_lines": ["TWO"]
+                }]
+            }),
+        )
+        .unwrap();
+
+        assert!(preview.contains("结构化 patch 预览"));
+        assert!(preview.contains("--- note.txt"));
+        assert!(preview.contains("- two"));
+        assert!(preview.contains("+ TWO"));
 
         let _ = std::fs::remove_dir_all(&sandbox);
     }

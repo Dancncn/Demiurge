@@ -26,7 +26,7 @@ Demiurge 的待办与方向，欢迎认领。✅ 已完成 · ⬜ 待做 · 💡
 - [x] **Phase 2 自动记忆提取**：保守提取用户偏好 / 项目长期约束，写入沙盒 `.demiurge/memory.md`
 - [x] **编辑工具 undo 栈**：`undo_edit` 撤销本进程内最近一次 `edit_file`，执行前展示反向 diff 并校验文件未漂移
 - [x] **跨文件批量编辑**：`multi_edit` 批量精确替换 + 聚合 preview + undo 记录
-- [ ] **编辑工具后续增强**：高级 patch 引擎
+- [x] **结构化 patch 引擎**：`apply_patch` 按行 hunk 预检匹配后应用，支持聚合 preview + undo 记录
 - [ ] **Provider Adapter 拆分**：从 OpenAI-compatible profile 演进到 Anthropic / Gemini / local adapters
 - [ ] **API Key 安全存储**：从明文 `settings.json` 改为系统凭据管理器（Windows keyring）
 - [ ] **会话重命名**：手动改会话标题
@@ -51,6 +51,7 @@ Demiurge 的待办与方向，欢迎认领。✅ 已完成 · ⬜ 待做 · 💡
 
 ## 想法 💡
 - 工具调用的「计划预览」——执行前让模型先列出将做的事
+- unified diff parser：把标准 diff 转换为 `apply_patch` 的结构化 hunk（先保持结构化 patch 核心轻量）
 - 角色包市场 / 分发格式规范化（仍不含 IP）
 - 跨平台验证（目前主要在 Windows 11 开发；macOS/Linux 路径与 `open_path` 已写分支但未充分测试）
 
