@@ -6,7 +6,7 @@ use serde_json::json;
 use tauri::{AppHandle, Emitter};
 
 use super::conversation::Message;
-use super::{context, persona};
+use super::{context, prompt};
 use crate::{llm, pack, permission, store, tools};
 use permission::PermissionRequest;
 
@@ -35,13 +35,13 @@ pub async fn run_turn(
     // 捕获本轮的目标会话 id：即便用户中途切换会话，写入也始终落到这一段对话
     let sid = state.sessions.lock().unwrap().active.clone();
 
-    // 取当前角色包人格，拼装 system prompt
+    // 取当前角色包人格，拼装分区化 system prompt
     let packs_dir = state.packs_dir.lock().unwrap().clone();
     let persona_text = match pack::load_pack(&packs_dir, &settings.current_pack) {
         Ok(p) => p.persona_text,
         Err(_) => String::new(),
     };
-    let system = persona::assemble(&persona_text);
+    let system = prompt::build(state, &settings, &persona_text);
     let tools_schema = tools::schemas_json();
 
     // 向目标会话追加一条消息（并刷新 updated_at）

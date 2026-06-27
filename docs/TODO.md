@@ -19,9 +19,10 @@ Demiurge 的待办与方向，欢迎认领。✅ 已完成 · ⬜ 待做 · 💡
 - [x] **Phase 1 只读编程工具**：`glob`、`grep`、`git_status`
 - [x] **Phase 1 编辑工具**：`edit_file`（精确替换 / diff preview / apply-reject）
 - [x] **Phase 1 执行工具地基**：`shell`（confirm / sandbox cwd / timeout / output cap）+ 轻量工具入参校验辅助
+- [x] **Phase 1 权限闭环**：确认弹窗支持允许/拒绝本次、本会话、本项目，并记录本地规则与轻量 audit
+- [x] **Phase 2 Project Context Builder 首阶段**：分区化 system prompt，读取 `DEMIURGE.md` / `CLAUDE.md`、git 快照、工作区与只读 memory 文件
+- [ ] **Phase 2 后续增强**：session rolling summary / token-aware budget / 自动记忆提取
 - [ ] **编辑工具后续增强**：undo 栈 / 高级 patch 引擎 / 跨文件批量编辑
-- [x] **权限系统 2.0 UI**：确认弹窗支持允许/拒绝本次、本会话、本项目，并记录本地规则与轻量 audit
-- [ ] **Project Context Builder**：读取 `DEMIURGE.md` / `CLAUDE.md`、git 快照、README/项目结构摘要
 - [ ] **Provider Adapter 拆分**：从 OpenAI-compatible profile 演进到 Anthropic / Gemini / local adapters
 - [ ] **API Key 安全存储**：从明文 `settings.json` 改为系统凭据管理器（Windows keyring）
 - [ ] **会话重命名**：手动改会话标题

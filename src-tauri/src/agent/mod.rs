@@ -2,6 +2,7 @@
 pub mod context;
 pub mod conversation;
 pub mod persona;
+pub mod prompt;
 
 mod runner;
 pub use runner::run_turn;
