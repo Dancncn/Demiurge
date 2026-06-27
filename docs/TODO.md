@@ -15,6 +15,11 @@ Demiurge 的待办与方向，欢迎认领。✅ 已完成 · ⬜ 待做 · 💡
 - [x] ChatGPT 风浅色 UI（侧栏 + 居中栏 + 悬浮输入框 + Markdown/代码/数学）+ 莲花品牌 + 浅紫渐变
 
 ## 近期打磨 ⬜
+- [x] **Claude Code-like Agent Core 地基首阶段**：工具 metadata、权限决策骨架、`tool_call_id` 事件关联、ProviderProfile 骨架
+- [ ] **Phase 1 编程工具**：`edit_file`（diff preview）、`glob`、`grep`、`git_status`
+- [ ] **权限系统 2.0 UI**：确认弹窗支持允许本次 / 本会话 / 本项目，并记录 decision/audit
+- [ ] **Project Context Builder**：读取 `DEMIURGE.md` / `CLAUDE.md`、git 快照、README/项目结构摘要
+- [ ] **Provider Adapter 拆分**：从 OpenAI-compatible profile 演进到 Anthropic / Gemini / local adapters
 - [ ] **API Key 安全存储**：从明文 `settings.json` 改为系统凭据管理器（Windows keyring）
 - [ ] **会话重命名**：手动改会话标题
 - [ ] **角色包头像**：读取 `manifest.avatar`，替换 UI 里的默认莲花头像

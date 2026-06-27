@@ -124,7 +124,15 @@ export function MessageList({ items, thinking, greeting, suggestions, onSuggesti
               ) : item.kind === "assistant" ? (
                 <AssistantMessage key={item.id} text={item.text} streaming={item.streaming} error={item.error} />
               ) : (
-                <ToolCard key={item.id} name={item.name} args={item.args} status={item.status} result={item.result} />
+                <ToolCard
+                  key={item.id}
+                  name={item.name}
+                  args={item.args}
+                  status={item.status}
+                  result={item.result}
+                  description={item.description}
+                  risk={item.risk}
+                />
               ),
             )}
             {thinking && (

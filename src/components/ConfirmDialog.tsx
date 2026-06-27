@@ -1,8 +1,23 @@
-import type { ConfirmRequestEvent } from "../lib/types";
+import type { ConfirmRequestEvent, ToolRisk } from "../lib/types";
 
 interface Props {
   req: ConfirmRequestEvent | null;
   onRespond: (allow: boolean) => void;
+}
+
+function riskLabel(risk?: ToolRisk) {
+  switch (risk) {
+    case "read_only":
+      return "只读";
+    case "mutating":
+      return "会修改文件";
+    case "external":
+      return "会访问外部服务";
+    case "privileged":
+      return "会调用系统能力";
+    default:
+      return "需要确认";
+  }
 }
 
 export default function ConfirmDialog({ req, onRespond }: Props) {
@@ -15,6 +30,24 @@ export default function ConfirmDialog({ req, onRespond }: Props) {
           助手想执行一个有副作用的操作：
           <span className="font-medium text-[#0b57d0]"> {req.tool}</span>
         </p>
+        <div className="mb-3 space-y-1 rounded-xl border border-[#ececec] bg-[#fafafa] p-3 text-xs text-[#5f5f5f]">
+          <div>
+            <span className="text-[#9a9a9a]">风险：</span>
+            {riskLabel(req.risk)}
+          </div>
+          {req.description && (
+            <div>
+              <span className="text-[#9a9a9a]">说明：</span>
+              {req.description}
+            </div>
+          )}
+          {req.reason && (
+            <div>
+              <span className="text-[#9a9a9a]">原因：</span>
+              {req.reason}
+            </div>
+          )}
+        </div>
         <pre className="mb-4 max-h-48 overflow-auto whitespace-pre-wrap rounded-xl border border-[#ececec] bg-[#f7f7f7] p-3 text-xs text-[#3f3f3f]">
           {req.args}
         </pre>

@@ -42,12 +42,23 @@ export interface SessionList {
   sessions: SessionMeta[];
 }
 
+export type PermissionEffect = "allow" | "deny" | "ask";
+export type PermissionScope = "once" | "session" | "project";
+export type ToolRisk = "read_only" | "mutating" | "external" | "privileged";
+export type ToolConcurrency = "parallel_safe" | "serial_only";
+
 // ---- 后端 emit 的事件载荷 ----
 export interface ToolStartEvent {
+  tool_call_id: string;
   name: string;
   args: unknown;
+  description?: string;
+  risk?: ToolRisk;
+  permission_effect?: PermissionEffect;
+  concurrency?: ToolConcurrency;
 }
 export interface ToolEndEvent {
+  tool_call_id: string;
   name: string;
   ok: boolean;
   result: string;
@@ -56,6 +67,12 @@ export interface ConfirmRequestEvent {
   id: string;
   tool: string;
   args: string; // 已 pretty 的 JSON 字符串
+  description?: string;
+  risk?: ToolRisk;
+  effect?: PermissionEffect;
+  scope?: PermissionScope;
+  reason?: string;
+  summary?: string;
 }
 
 // ---- 前端聊天展示项 ----
@@ -65,8 +82,12 @@ export type DisplayItem =
   | {
       id: string;
       kind: "tool";
+      tool_call_id?: string;
       name: string;
       args: unknown;
       status: "running" | "done" | "denied";
       result?: string;
+      description?: string;
+      risk?: ToolRisk;
+      permission_effect?: PermissionEffect;
     };

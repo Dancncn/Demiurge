@@ -1,4 +1,5 @@
 import { useState } from "react";
+import type { ToolRisk } from "../lib/types";
 import { WrenchIcon } from "./Icons";
 
 interface Props {
@@ -6,6 +7,8 @@ interface Props {
   args: unknown;
   status: "running" | "done" | "denied";
   result?: string;
+  description?: string;
+  risk?: ToolRisk;
 }
 
 function badge(status: Props["status"]) {
@@ -19,9 +22,25 @@ function badge(status: Props["status"]) {
   }
 }
 
-export default function ToolCard({ name, args, status, result }: Props) {
+function riskLabel(risk?: ToolRisk) {
+  switch (risk) {
+    case "read_only":
+      return "只读";
+    case "mutating":
+      return "会修改";
+    case "external":
+      return "外部访问";
+    case "privileged":
+      return "系统操作";
+    default:
+      return null;
+  }
+}
+
+export default function ToolCard({ name, args, status, result, description, risk }: Props) {
   const [open, setOpen] = useState(false);
   const b = badge(status);
+  const riskText = riskLabel(risk);
   let argsText = "";
   try {
     argsText = JSON.stringify(args, null, 2);
@@ -39,6 +58,7 @@ export default function ToolCard({ name, args, status, result }: Props) {
         <WrenchIcon size={16} className="shrink-0 text-[#0b57d0]" />
         <span className="font-medium text-[#3f3f3f]">{name}</span>
         <span className={`rounded-full px-2 py-0.5 text-xs ${b.cls}`}>{b.label}</span>
+        {riskText && <span className="rounded-full bg-white px-2 py-0.5 text-xs text-[#6f6f6f]">{riskText}</span>}
         {status === "running" && (
           <span className="cf-dots shrink-0 text-[#b4b4b4]">
             <span />
@@ -50,6 +70,7 @@ export default function ToolCard({ name, args, status, result }: Props) {
       </button>
       {open && (
         <div className="space-y-2 border-t border-[#ececec] px-4 py-3">
+          {description && <div className="text-xs leading-relaxed text-[#6f6f6f]">{description}</div>}
           <div>
             <div className="mb-1 text-xs text-[#9a9a9a]">参数</div>
             <pre className="overflow-x-auto rounded-lg border border-[#ececec] bg-white p-2.5 text-xs text-[#3f3f3f]">

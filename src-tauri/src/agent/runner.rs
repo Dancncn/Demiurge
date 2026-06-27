@@ -8,6 +8,7 @@ use tauri::{AppHandle, Emitter};
 use super::conversation::Message;
 use super::{context, persona};
 use crate::{llm, pack, permission, store, tools};
+use permission::{PermissionDecision, PermissionRequest};
 
 /// 单工具结果回传给前端时的最大展示长度（完整结果仍会进上下文喂回模型）
 const UI_RESULT_CAP: usize = 2000;
@@ -131,8 +132,21 @@ pub async fn run_turn(app: &AppHandle, state: &crate::AppState, user_text: Strin
 
             let args: serde_json::Value =
                 serde_json::from_str(&tc.function.arguments).unwrap_or_else(|_| json!({}));
+            let tool_def = tools::definition_for(&name);
 
-            let _ = app.emit("tool-start", json!({ "name": name, "args": args }));
+            let _ = app.emit(
+                "tool-start",
+                json!({
+                    "tool_call_id": tc.id,
+                    "name": name,
+                    "args": args,
+                    "description": tool_def.as_ref().map(|t| t.description),
+                    "risk": tool_def.as_ref().map(|t| t.risk),
+                    "permission_effect": tool_def.as_ref().map(|t| t.permission.effect),
+                    "concurrency": tool_def.as_ref().map(|t| t.concurrency),
+                    "output_policy": tool_def.as_ref().map(|t| t.output_policy),
+                }),
+            );
 
             // 权限门（confirm 等待期间若用户点「停止」，interrupt 会立即唤醒并返回 false）
             let perm = tools::permission_for(&name);
@@ -140,7 +154,21 @@ pub async fn run_turn(app: &AppHandle, state: &crate::AppState, user_text: Strin
                 tools::Permission::Auto => true,
                 tools::Permission::Confirm => {
                     let pretty = serde_json::to_string_pretty(&args).unwrap_or_default();
-                    permission::confirm(app, state, &name, &pretty).await
+                    let decision = PermissionDecision::from_policy(tools::permission_policy_for(&name));
+                    let description = tool_def.as_ref().map(|t| t.description).unwrap_or("未知工具");
+                    let risk = tool_def.as_ref().map(|t| t.risk).unwrap_or(tools::ToolRisk::Privileged);
+                    permission::confirm(
+                        app,
+                        state,
+                        PermissionRequest {
+                            tool: &name,
+                            args_pretty: &pretty,
+                            description,
+                            risk,
+                            decision,
+                        },
+                    )
+                    .await
                 }
             };
 
@@ -158,7 +186,7 @@ pub async fn run_turn(app: &AppHandle, state: &crate::AppState, user_text: Strin
 
             let _ = app.emit(
                 "tool-end",
-                json!({ "name": name, "ok": allowed, "result": truncate_ui(&result) }),
+                json!({ "tool_call_id": tc.id, "name": name, "ok": allowed, "result": truncate_ui(&result) }),
             );
 
             push(Message::tool_result(tc.id.clone(), name, result));

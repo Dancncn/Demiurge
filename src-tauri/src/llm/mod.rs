@@ -16,6 +16,39 @@ pub struct AssistantTurn {
     pub finish_reason: String,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub enum ToolSchemaDialect {
+    OpenAiCompatible,
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Copy, Debug)]
+pub struct ProviderProfile {
+    pub supports_tools: bool,
+    pub supports_streaming: bool,
+    pub supports_prompt_cache: bool,
+    pub supports_thinking: bool,
+    pub supports_parallel_tool_calls: bool,
+    pub max_input_tokens: Option<u32>,
+    pub max_output_tokens: Option<u32>,
+    pub tool_schema_dialect: ToolSchemaDialect,
+}
+
+impl ProviderProfile {
+    pub const fn openai_compatible() -> Self {
+        ProviderProfile {
+            supports_tools: true,
+            supports_streaming: true,
+            supports_prompt_cache: false,
+            supports_thinking: false,
+            supports_parallel_tool_calls: false,
+            max_input_tokens: None,
+            max_output_tokens: None,
+            tool_schema_dialect: ToolSchemaDialect::OpenAiCompatible,
+        }
+    }
+}
+
 /// 流式请求 /chat/completions，解析 SSE。
 /// - `on_delta`：每收到一段正文增量就回调（用于把 token 实时推给前端）。
 /// - `cancel`：用户中断标志，置位后尽快结束并返回 finish_reason="interrupted"。
@@ -32,13 +65,14 @@ pub async fn stream_completion(
     }
 
     let url = format!("{}/chat/completions", cfg.base_url.trim_end_matches('/'));
+    let profile = ProviderProfile::openai_compatible();
     let mut body = json!({
         "model": cfg.model,
         "messages": messages,
-        "stream": true,
+        "stream": profile.supports_streaming,
     });
     // 没有工具时不要传空数组（部分网关会报错）
-    if tools.as_array().map(|a| !a.is_empty()).unwrap_or(false) {
+    if profile.supports_tools && tools.as_array().map(|a| !a.is_empty()).unwrap_or(false) {
         body["tools"] = tools.clone();
         body["tool_choice"] = json!("auto");
     }

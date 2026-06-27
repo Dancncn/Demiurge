@@ -37,7 +37,15 @@ function buildHistory(msgs: Message[]): DisplayItem[] {
         } catch {
           args = tc.function.arguments;
         }
-        out.push({ id: id(), kind: "tool", name: tc.function.name, args, status: "done", result: results.get(tc.id) });
+        out.push({
+          id: id(),
+          kind: "tool",
+          tool_call_id: tc.id,
+          name: tc.function.name,
+          args,
+          status: "done",
+          result: results.get(tc.id),
+        });
       }
     }
   }
@@ -60,7 +68,7 @@ export default function App() {
   const seq = useRef(0);
   const genId = () => `it_${++seq.current}`;
   const curAssistantId = useRef<string | null>(null);
-  const pendingToolIds = useRef<string[]>([]);
+  const toolItemIds = useRef<Map<string, string>>(new Map());
   const packMenuRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 
@@ -150,20 +158,32 @@ export default function App() {
         onToolStart: (e) => {
           finalizeAssistant();
           const nid = genId();
-          pendingToolIds.current.push(nid);
-          setItems((p) => [...p, { id: nid, kind: "tool", name: e.name, args: e.args, status: "running" }]);
+          toolItemIds.current.set(e.tool_call_id, nid);
+          setItems((p) => [
+            ...p,
+            {
+              id: nid,
+              kind: "tool",
+              tool_call_id: e.tool_call_id,
+              name: e.name,
+              args: e.args,
+              status: "running",
+              description: e.description,
+              risk: e.risk,
+              permission_effect: e.permission_effect,
+            },
+          ]);
         },
         onToolEnd: (e) => {
-          const id = pendingToolIds.current.shift();
-          if (id) {
-            setItems((p) =>
-              p.map((it) =>
-                it.id === id && it.kind === "tool"
-                  ? { ...it, status: e.ok ? "done" : "denied", result: e.result }
-                  : it,
-              ),
-            );
-          }
+          const id = toolItemIds.current.get(e.tool_call_id);
+          if (id) toolItemIds.current.delete(e.tool_call_id);
+          setItems((p) =>
+            p.map((it) =>
+              it.kind === "tool" && (it.id === id || it.tool_call_id === e.tool_call_id)
+                ? { ...it, status: e.ok ? "done" : "denied", result: e.result }
+                : it,
+            ),
+          );
         },
         onConfirmRequest: (e) => setConfirmReq(e),
       })
@@ -224,7 +244,7 @@ export default function App() {
 
   function resetTurnRefs() {
     curAssistantId.current = null;
-    pendingToolIds.current = [];
+    toolItemIds.current.clear();
   }
 
   async function handleNewChat() {

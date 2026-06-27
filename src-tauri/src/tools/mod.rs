@@ -1,6 +1,7 @@
 //! 组件 5/6：工具注册表 + 统一接口 + 执行。
-//! 每个工具 = 名称 + 描述 + 输入 JSON Schema + 权限 + execute。循环遍历这张表。
+//! 每个工具 = 名称 + 描述 + 输入 JSON Schema + 权限/风险/并发/输出策略 + execute。
 //! 作用域是结构性强制的（文件工具被物理限制在沙盒目录），不靠提示词。
+use serde::Serialize;
 use serde_json::{json, Value};
 use std::path::{Component, Path, PathBuf};
 
@@ -10,6 +11,65 @@ mod system_info;
 mod web_search;
 mod write_file;
 
+#[allow(dead_code)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PermissionEffect {
+    Allow,
+    Deny,
+    Ask,
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PermissionScope {
+    Once,
+    Session,
+    Project,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolRisk {
+    ReadOnly,
+    Mutating,
+    External,
+    Privileged,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolConcurrency {
+    ParallelSafe,
+    SerialOnly,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolOutputPolicy {
+    Inline,
+    TruncateForUi,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize)]
+pub struct PermissionPolicy {
+    pub effect: PermissionEffect,
+    pub scope: PermissionScope,
+    pub reason: &'static str,
+}
+
+impl PermissionPolicy {
+    pub const fn allow(reason: &'static str) -> Self {
+        PermissionPolicy { effect: PermissionEffect::Allow, scope: PermissionScope::Once, reason }
+    }
+
+    pub const fn ask(reason: &'static str) -> Self {
+        PermissionPolicy { effect: PermissionEffect::Ask, scope: PermissionScope::Once, reason }
+    }
+}
+
+/// 兼容当前 agent loop 的二级权限门。后续规则系统会直接返回 PermissionDecision。
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Permission {
     /// 只读 / 幂等 / 低风险 —— 直接执行
@@ -18,21 +78,27 @@ pub enum Permission {
     Confirm,
 }
 
-pub struct ToolDef {
+#[derive(Clone, Debug)]
+pub struct ToolDefinition {
     pub name: &'static str,
     pub description: &'static str,
-    pub permission: Permission,
+    pub risk: ToolRisk,
+    pub concurrency: ToolConcurrency,
+    pub permission: PermissionPolicy,
+    pub output_policy: ToolOutputPolicy,
     pub parameters: Value,
 }
 
 /// 工具注册表。新增工具只需在这里加一项 + 在 execute 里加一条分支。
-pub fn registry() -> Vec<ToolDef> {
+pub fn registry() -> Vec<ToolDefinition> {
     vec![
-        ToolDef {
+        ToolDefinition {
             name: "open_path",
             description: "用系统默认程序打开一个文件、应用或网址（URL）。例如打开网页、图片、文件夹。会先请用户确认。",
-            // 会以系统默认语义执行（可启动可执行/协议处理器），故需用户确认；同时拒绝 UNC 与危险协议
-            permission: Permission::Confirm,
+            risk: ToolRisk::Privileged,
+            concurrency: ToolConcurrency::SerialOnly,
+            permission: PermissionPolicy::ask("会调用系统默认程序或协议处理器，可能启动外部应用。"),
+            output_policy: ToolOutputPolicy::Inline,
             parameters: json!({
                 "type": "object",
                 "properties": {
@@ -41,10 +107,13 @@ pub fn registry() -> Vec<ToolDef> {
                 "required": ["target"]
             }),
         },
-        ToolDef {
+        ToolDefinition {
             name: "read_file",
             description: "读取沙盒目录内某个文本文件的内容。路径相对于沙盒目录，不能访问沙盒之外。",
-            permission: Permission::Auto,
+            risk: ToolRisk::ReadOnly,
+            concurrency: ToolConcurrency::ParallelSafe,
+            permission: PermissionPolicy::allow("只读取沙盒目录内的文本文件。"),
+            output_policy: ToolOutputPolicy::TruncateForUi,
             parameters: json!({
                 "type": "object",
                 "properties": {
@@ -53,10 +122,13 @@ pub fn registry() -> Vec<ToolDef> {
                 "required": ["path"]
             }),
         },
-        ToolDef {
+        ToolDefinition {
             name: "write_file",
             description: "在沙盒目录内创建或覆盖一个文本文件（不可逆，需用户确认）。路径相对于沙盒目录。",
-            permission: Permission::Confirm,
+            risk: ToolRisk::Mutating,
+            concurrency: ToolConcurrency::SerialOnly,
+            permission: PermissionPolicy::ask("会创建或覆盖沙盒目录内的文件。"),
+            output_policy: ToolOutputPolicy::Inline,
             parameters: json!({
                 "type": "object",
                 "properties": {
@@ -66,10 +138,13 @@ pub fn registry() -> Vec<ToolDef> {
                 "required": ["path", "content"]
             }),
         },
-        ToolDef {
+        ToolDefinition {
             name: "web_search",
             description: "联网搜索，返回若干结果摘要（基于 DuckDuckGo，无需密钥）。适合查事实、找资料。",
-            permission: Permission::Auto,
+            risk: ToolRisk::External,
+            concurrency: ToolConcurrency::ParallelSafe,
+            permission: PermissionPolicy::allow("只向搜索服务发送查询并读取公开结果。"),
+            output_policy: ToolOutputPolicy::TruncateForUi,
             parameters: json!({
                 "type": "object",
                 "properties": {
@@ -78,13 +153,20 @@ pub fn registry() -> Vec<ToolDef> {
                 "required": ["query"]
             }),
         },
-        ToolDef {
+        ToolDefinition {
             name: "system_info",
             description: "读取当前时间（UTC）、操作系统、架构、工作目录等基础系统状态。",
-            permission: Permission::Auto,
+            risk: ToolRisk::ReadOnly,
+            concurrency: ToolConcurrency::ParallelSafe,
+            permission: PermissionPolicy::allow("只读取基础运行环境信息。"),
+            output_policy: ToolOutputPolicy::Inline,
             parameters: json!({ "type": "object", "properties": {} }),
         },
     ]
+}
+
+pub fn definition_for(name: &str) -> Option<ToolDefinition> {
+    registry().into_iter().find(|t| t.name == name)
 }
 
 /// 转成 OpenAI tools 数组，发给 LLM。
@@ -110,12 +192,17 @@ pub fn execute_open(target: &str) -> Result<String, String> {
     open_path::run(serde_json::json!({ "target": target }))
 }
 
-pub fn permission_for(name: &str) -> Permission {
-    registry()
-        .iter()
-        .find(|t| t.name == name)
+pub fn permission_policy_for(name: &str) -> PermissionPolicy {
+    definition_for(name)
         .map(|t| t.permission)
-        .unwrap_or(Permission::Confirm) // 未知工具按最严处理
+        .unwrap_or_else(|| PermissionPolicy::ask("未知工具默认按最高安全级别询问。"))
+}
+
+pub fn permission_for(name: &str) -> Permission {
+    match permission_policy_for(name).effect {
+        PermissionEffect::Allow => Permission::Auto,
+        PermissionEffect::Ask | PermissionEffect::Deny => Permission::Confirm,
+    }
 }
 
 /// 分发执行。MVP 用 async 函数 + match 充当统一执行入口
