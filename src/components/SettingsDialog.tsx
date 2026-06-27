@@ -89,7 +89,32 @@ export default function SettingsDialog({ open, settings, packs, onClose, onSave 
           </label>
 
           <label className="block">
-            <span className={labelCls}>上下文上限（字符数）</span>
+            <span className={labelCls}>最大输入 Token 预算</span>
+            <input
+              className={inputCls}
+              type="number"
+              min={4000}
+              step={1000}
+              value={form.max_input_tokens}
+              onChange={(e) => set("max_input_tokens", Number(e.target.value) || 0)}
+            />
+            <span className="mt-1.5 block text-xs text-[#9a9a9a]">用于估算 system prompt、工具 schema 与历史消息的总输入上限。</span>
+          </label>
+
+          <label className="block">
+            <span className={labelCls}>保留输出 Token</span>
+            <input
+              className={inputCls}
+              type="number"
+              min={512}
+              step={256}
+              value={form.reserved_output_tokens}
+              onChange={(e) => set("reserved_output_tokens", Number(e.target.value) || 0)}
+            />
+          </label>
+
+          <label className="block">
+            <span className={labelCls}>上下文上限（字符数，兼容兜底）</span>
             <input
               className={inputCls}
               type="number"
@@ -110,7 +135,16 @@ export default function SettingsDialog({ open, settings, packs, onClose, onSave 
           </button>
           <button
             className="rounded-full bg-[#111] px-5 py-2 text-sm text-white transition hover:bg-[#333]"
-            onClick={() => onSave({ ...form, max_context_chars: Math.max(2000, form.max_context_chars || 0) })}
+            onClick={() => {
+              const maxInput = Math.max(4000, form.max_input_tokens || 0);
+              const reserved = Math.min(Math.max(512, form.reserved_output_tokens || 0), maxInput - 512);
+              onSave({
+                ...form,
+                max_context_chars: Math.max(2000, form.max_context_chars || 0),
+                max_input_tokens: maxInput,
+                reserved_output_tokens: reserved,
+              });
+            }}
           >
             保存
           </button>

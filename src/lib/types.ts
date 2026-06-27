@@ -23,6 +23,8 @@ export interface Settings {
   model: string;
   current_pack: string;
   max_context_chars: number;
+  max_input_tokens: number;
+  reserved_output_tokens: number;
 }
 
 export interface PackManifest {

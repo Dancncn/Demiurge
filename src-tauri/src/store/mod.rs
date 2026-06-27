@@ -9,6 +9,22 @@ use serde::{Deserialize, Serialize};
 
 use crate::agent::conversation::{Conversation, Message};
 
+pub const DEFAULT_MAX_CONTEXT_CHARS: usize = 24_000;
+pub const DEFAULT_MAX_INPUT_TOKENS: usize = 32_000;
+pub const DEFAULT_RESERVED_OUTPUT_TOKENS: usize = 4_000;
+
+fn default_max_context_chars() -> usize {
+    DEFAULT_MAX_CONTEXT_CHARS
+}
+
+fn default_max_input_tokens() -> usize {
+    DEFAULT_MAX_INPUT_TOKENS
+}
+
+fn default_reserved_output_tokens() -> usize {
+    DEFAULT_RESERVED_OUTPUT_TOKENS
+}
+
 /// 运行时设置。MVP 直接以 JSON 落盘（含 api_key 明文）。
 /// 注：更安全的做法是把 api_key 存进系统凭据管理器（如 Windows 凭据管理器 / keyring），后续可平滑替换。
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -17,7 +33,12 @@ pub struct Settings {
     pub api_key: String,
     pub model: String,
     pub current_pack: String,
+    #[serde(default = "default_max_context_chars")]
     pub max_context_chars: usize,
+    #[serde(default = "default_max_input_tokens")]
+    pub max_input_tokens: usize,
+    #[serde(default = "default_reserved_output_tokens")]
+    pub reserved_output_tokens: usize,
 }
 
 impl Default for Settings {
@@ -28,7 +49,9 @@ impl Default for Settings {
             api_key: String::new(),
             model: "deepseek-chat".to_string(),
             current_pack: "default".to_string(),
-            max_context_chars: 24_000,
+            max_context_chars: DEFAULT_MAX_CONTEXT_CHARS,
+            max_input_tokens: DEFAULT_MAX_INPUT_TOKENS,
+            reserved_output_tokens: DEFAULT_RESERVED_OUTPUT_TOKENS,
         }
     }
 }

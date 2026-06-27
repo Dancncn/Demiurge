@@ -1,5 +1,6 @@
 //! 组件 8：上下文管理。历史超阈值时：先砍老的工具输出，再丢更老的回合。
 //! 这直接决定全天聊天的 API 账单，不是可选项。MVP 用「估算字符数」近似 token。
+use super::budget;
 use super::conversation::Message;
 
 fn est_chars(m: &Message) -> usize {
@@ -61,4 +62,42 @@ pub fn trim_collect_removed(msgs: &mut Vec<Message>, max_chars: usize) -> Vec<Me
 #[allow(dead_code)]
 pub fn trim(msgs: &mut Vec<Message>, max_chars: usize) {
     let _ = trim_collect_removed(msgs, max_chars);
+}
+
+fn total_tokens(msgs: &[Message]) -> usize {
+    budget::estimate_messages_tokens(msgs)
+}
+
+/// 按启发式 token 预算裁剪历史，返回被整条移除的旧消息。
+pub fn trim_collect_removed_by_tokens(msgs: &mut Vec<Message>, max_tokens: usize) -> Vec<Message> {
+    const KEEP_RECENT: usize = 8;
+    const TOOL_KEEP: usize = 400;
+    let mut removed = Vec::new();
+
+    if total_tokens(msgs) <= max_tokens {
+        return removed;
+    }
+
+    if msgs.len() > KEEP_RECENT {
+        let cut = msgs.len() - KEEP_RECENT;
+        for m in msgs.iter_mut().take(cut) {
+            if m.role == "tool" {
+                if let Some(c) = &m.content {
+                    if c.len() > TOOL_KEEP {
+                        let head: String = c.chars().take(TOOL_KEEP).collect();
+                        m.content = Some(format!("{head}…[已截断更早的工具输出]"));
+                    }
+                }
+            }
+        }
+    }
+
+    while total_tokens(msgs) > max_tokens && msgs.len() > 2 {
+        removed.push(msgs.remove(0));
+        while matches!(msgs.first(), Some(m) if m.role == "tool") {
+            removed.push(msgs.remove(0));
+        }
+    }
+
+    removed
 }

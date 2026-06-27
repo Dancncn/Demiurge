@@ -6,7 +6,7 @@ use serde_json::json;
 use tauri::{AppHandle, Emitter};
 
 use super::conversation::Message;
-use super::{context, prompt, summary};
+use super::{budget, context, prompt, summary};
 use crate::{llm, pack, permission, store, tools};
 use permission::PermissionRequest;
 
@@ -71,19 +71,24 @@ pub async fn run_turn(
             break;
         }
 
-        // 组装本轮请求消息：system + 裁剪后的历史。若裁剪掉旧消息，先滚动更新会话摘要。
-        let (msgs, existing_summary, removed_messages) = {
-            let mut storeg = state.sessions.lock().unwrap();
-            if let Some(s) = storeg.get_mut(&sid) {
-                let removed =
-                    context::trim_collect_removed(&mut s.messages, settings.max_context_chars);
-                (s.messages.clone(), s.summary.clone(), removed)
+        // 组装本轮请求消息：system + token-aware 裁剪后的历史。若裁剪掉旧消息，先滚动更新会话摘要。
+        let (mut msgs, mut session_summary) = {
+            let storeg = state.sessions.lock().unwrap();
+            if let Some(s) = storeg.get(&sid) {
+                (s.messages.clone(), s.summary.clone())
             } else {
-                (Vec::new(), None, Vec::new())
+                (Vec::new(), None)
             }
         };
 
-        let mut session_summary = existing_summary;
+        let mut system = prompt::build(state, &settings, &persona_text, session_summary.as_deref());
+        let mut current_budget = budget::history_budget(&settings, &system, &tools_schema, &msgs);
+        let mut removed_messages = context::trim_collect_removed_by_tokens(
+            &mut msgs,
+            current_budget.history_budget_tokens,
+        );
+        let mut should_persist_trim = !removed_messages.is_empty();
+
         if !removed_messages.is_empty() && !state.cancel.load(Ordering::Relaxed) {
             if let Ok(next_summary) = summary::update_session_summary(
                 &state.http,
@@ -97,16 +102,43 @@ pub async fn run_turn(
                 session_summary = next_summary;
                 let mut storeg = state.sessions.lock().unwrap();
                 if let Some(s) = storeg.get_mut(&sid) {
+                    s.messages = msgs.clone();
                     s.summary = session_summary.clone();
                     s.updated_at = store::now_millis();
                 }
                 drop(storeg);
                 state.persist_sessions();
+
+                system = prompt::build(state, &settings, &persona_text, session_summary.as_deref());
+                current_budget = budget::history_budget(&settings, &system, &tools_schema, &msgs);
+                removed_messages = context::trim_collect_removed_by_tokens(
+                    &mut msgs,
+                    current_budget.history_budget_tokens,
+                );
+                should_persist_trim = should_persist_trim || !removed_messages.is_empty();
+                if !removed_messages.is_empty() {
+                    let mut storeg = state.sessions.lock().unwrap();
+                    if let Some(s) = storeg.get_mut(&sid) {
+                        s.messages = msgs.clone();
+                        s.updated_at = store::now_millis();
+                    }
+                    drop(storeg);
+                    state.persist_sessions();
+                }
             }
         }
 
+        if should_persist_trim {
+            let mut storeg = state.sessions.lock().unwrap();
+            if let Some(s) = storeg.get_mut(&sid) {
+                s.messages = msgs.clone();
+                s.updated_at = store::now_millis();
+            }
+            drop(storeg);
+            state.persist_sessions();
+        }
+
         let full: Vec<Message> = {
-            let system = prompt::build(state, &settings, &persona_text, session_summary.as_deref());
             let mut v = Vec::with_capacity(msgs.len() + 1);
             v.push(Message::system(system));
             v.extend(msgs);
