@@ -6,22 +6,71 @@ use std::thread::sleep;
 use std::time::{Duration, Instant};
 
 const DEFAULT_TIMEOUT_SECS: u64 = 15;
+const STRICT_TIMEOUT_SECS: u64 = 8;
 const MAX_TIMEOUT_SECS: u64 = 60;
 const OUTPUT_LIMIT: usize = 12_000;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 enum ShellRiskClass {
-    Low,
-    Medium,
-    High,
+    ReadOnly,
+    BuildTest,
+    FileWrite,
+    Network,
+    DependencyInstall,
+    Destructive,
+    Privilege,
+    ExternalExecution,
 }
 
 impl ShellRiskClass {
     fn label(self) -> &'static str {
         match self {
-            ShellRiskClass::Low => "低：只读/检查类命令",
-            ShellRiskClass::Medium => "中：可能写入沙盒或启动本地任务",
-            ShellRiskClass::High => "高：包含下载、删除、权限或外部执行特征",
+            ShellRiskClass::ReadOnly => "只读：检查/列出项目状态",
+            ShellRiskClass::BuildTest => "构建测试：执行本地脚本或测试",
+            ShellRiskClass::FileWrite => "文件写入：可能修改沙盒内文件",
+            ShellRiskClass::Network => "联网：访问外部网络或 URL",
+            ShellRiskClass::DependencyInstall => "依赖安装：获取并执行外部代码",
+            ShellRiskClass::Destructive => "破坏性：删除或清理文件",
+            ShellRiskClass::Privilege => "权限：修改权限/所有权或提权",
+            ShellRiskClass::ExternalExecution => "外部执行：下载后执行或解释远程脚本",
+        }
+    }
+
+    fn severity(self) -> &'static str {
+        match self {
+            ShellRiskClass::ReadOnly => "low",
+            ShellRiskClass::BuildTest | ShellRiskClass::FileWrite => "medium",
+            ShellRiskClass::Network
+            | ShellRiskClass::DependencyInstall
+            | ShellRiskClass::Destructive
+            | ShellRiskClass::Privilege
+            | ShellRiskClass::ExternalExecution => "high",
+        }
+    }
+
+    fn blocked_in_strict(self) -> bool {
+        matches!(
+            self,
+            ShellRiskClass::Network
+                | ShellRiskClass::DependencyInstall
+                | ShellRiskClass::Destructive
+                | ShellRiskClass::Privilege
+                | ShellRiskClass::ExternalExecution
+        )
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ShellIsolationMode {
+    Standard,
+    Strict,
+}
+
+impl ShellIsolationMode {
+    fn label(self) -> &'static str {
+        match self {
+            ShellIsolationMode::Standard => "standard",
+            ShellIsolationMode::Strict => "strict",
         }
     }
 }
@@ -37,7 +86,90 @@ struct ShellRequest {
     cwd: String,
     timeout_secs: u64,
     inherit_env: bool,
+    isolation: ShellIsolationMode,
 }
+
+struct RiskRule {
+    class: ShellRiskClass,
+    needles: &'static [&'static str],
+    reason: &'static str,
+}
+
+const RISK_RULES: &[RiskRule] = &[
+    RiskRule {
+        class: ShellRiskClass::ExternalExecution,
+        needles: &[
+            "curl ",
+            "wget ",
+            "irm ",
+            "iwr ",
+            "| sh",
+            "| bash",
+            "iex ",
+            "invoke-expression",
+            "python -c",
+            "node -e",
+        ],
+        reason: "包含远程/内联脚本执行特征",
+    },
+    RiskRule {
+        class: ShellRiskClass::Privilege,
+        needles: &["sudo", "runas", "chmod ", "chown ", "setfacl", "takeown"],
+        reason: "包含权限/所有权变更关键词",
+    },
+    RiskRule {
+        class: ShellRiskClass::Destructive,
+        needles: &[
+            "rm ",
+            "rm -",
+            "del ",
+            "rmdir",
+            "remove-item",
+            "format ",
+            "git clean",
+            "git reset --hard",
+        ],
+        reason: "包含删除/破坏性文件操作关键词",
+    },
+    RiskRule {
+        class: ShellRiskClass::DependencyInstall,
+        needles: &[
+            "npm install",
+            "pnpm add",
+            "yarn add",
+            "cargo install",
+            "pip install",
+            "uv pip install",
+            "go install",
+        ],
+        reason: "包含依赖安装或可执行代码获取",
+    },
+    RiskRule {
+        class: ShellRiskClass::Network,
+        needles: &["curl ", "wget ", "irm ", "iwr ", "http://", "https://", " gh ", "git clone"],
+        reason: "包含联网访问或外部 URL",
+    },
+    RiskRule {
+        class: ShellRiskClass::FileWrite,
+        needles: &[">", "tee ", "touch ", "mkdir ", "mv ", "cp ", "copy ", "write-output"],
+        reason: "可能写入或移动沙盒内文件",
+    },
+    RiskRule {
+        class: ShellRiskClass::BuildTest,
+        needles: &[
+            "npm test",
+            "npm run",
+            "pnpm test",
+            "pnpm run",
+            "cargo test",
+            "cargo check",
+            "pytest",
+            "vitest",
+            "go test",
+        ],
+        reason: "会执行本地构建/测试脚本",
+    },
+];
 
 pub fn preview(state: &crate::AppState, args: Value) -> Result<String, String> {
     let req = parse_args(&args)?;
@@ -51,21 +183,20 @@ pub fn preview(state: &crate::AppState, args: Value) -> Result<String, String> {
     }
 
     let profile = classify_command(&req.command);
-    let env_policy = if req.inherit_env {
-        "继承当前进程环境变量（可能暴露本机凭据环境变量）"
-    } else {
-        "使用最小跨平台环境白名单（PATH/HOME/TEMP/SystemRoot 等）"
-    };
+    validate_isolation_policy(&req, &profile)?;
+    let env_policy = env_policy_label(&req);
 
     Ok(format!(
-        "将在沙盒内执行 shell 命令：\n\n$ {}\n\n工作目录：{}\n超时：{} 秒\n风险分类：{}\n风险原因：{}\n隔离策略：cwd 限定在沙盒、stdin 关闭、超时终止、输出截断；{}\n注意：这不是完整 OS 级系统沙箱，macOS/Linux/Windows 进程隔离能力仍按平台逐步增强。",
+        "将在沙盒内执行 shell 命令：\n\n$ {}\n\n工作目录：{}\n超时：{} 秒\n风险分类：{} ({})\n风险原因：{}\n隔离模式：{}\n隔离策略：cwd 限定在沙盒、stdin 关闭、超时终止、输出截断；{}\n注意：strict 模式会清空环境后仅注入白名单变量，并拒绝联网、依赖安装、破坏性、提权或外部执行类命令；这仍不是完整 OS 级系统沙箱。",
         req.command,
         cwd.strip_prefix(&sandbox)
             .map(|p| p.to_string_lossy().replace('\\', "/"))
             .unwrap_or_else(|_| cwd.to_string_lossy().to_string()),
         req.timeout_secs,
         profile.risk.label(),
+        profile.risk.severity(),
         profile.reasons.join("；"),
+        req.isolation.label(),
         env_policy,
     ))
 }
@@ -81,8 +212,11 @@ pub fn run(state: &crate::AppState, args: Value) -> Result<String, String> {
         return Err("cwd 必须是目录".to_string());
     }
 
+    let profile = classify_command(&req.command);
+    validate_isolation_policy(&req, &profile)?;
+
     let mut cmd = shell_command(&req.command);
-    if !req.inherit_env {
+    if !req.inherit_env || req.isolation == ShellIsolationMode::Strict {
         cmd.env_clear().envs(safe_env());
     }
     let mut child = cmd
@@ -124,10 +258,20 @@ fn parse_args(args: &Value) -> Result<ShellRequest, String> {
         .unwrap_or("")
         .trim()
         .to_string();
+    let isolation = match super::args::optional_str(args, "isolation").unwrap_or("standard") {
+        "" | "standard" => ShellIsolationMode::Standard,
+        "strict" => ShellIsolationMode::Strict,
+        other => return Err(format!("未知 shell isolation 模式：{other}")),
+    };
+    let default_timeout = if isolation == ShellIsolationMode::Strict {
+        STRICT_TIMEOUT_SECS
+    } else {
+        DEFAULT_TIMEOUT_SECS
+    };
     let timeout_secs = super::args::optional_u64_clamped(
         args,
         "timeout_secs",
-        DEFAULT_TIMEOUT_SECS,
+        default_timeout,
         1,
         MAX_TIMEOUT_SECS,
     );
@@ -136,82 +280,68 @@ fn parse_args(args: &Value) -> Result<ShellRequest, String> {
         .get("inherit_env")
         .and_then(Value::as_bool)
         .unwrap_or(false);
+    if isolation == ShellIsolationMode::Strict && inherit_env {
+        return Err("strict isolation 不允许 inherit_env=true".to_string());
+    }
 
     Ok(ShellRequest {
         command,
         cwd,
         timeout_secs,
         inherit_env,
+        isolation,
     })
 }
 
 pub fn safety_summary(command: &str) -> String {
     let profile = classify_command(command);
-    format!("{}（{}）", profile.risk.label(), profile.reasons.join("；"))
+    format!(
+        "{} / {}（{}）",
+        profile.risk.severity(),
+        profile.risk.label(),
+        profile.reasons.join("；")
+    )
 }
 
 fn classify_command(command: &str) -> ShellSafetyProfile {
-    let lower = command.to_ascii_lowercase();
-    let mut risk = ShellRiskClass::Low;
+    let lower = format!(" {} ", command.to_ascii_lowercase());
+    let mut risk = ShellRiskClass::ReadOnly;
     let mut reasons = Vec::new();
 
-    if contains_any(&lower, &["rm ", "del ", "rmdir", "remove-item", "format "]) {
-        risk = ShellRiskClass::High;
-        reasons.push("包含删除/破坏性文件操作关键词");
-    }
-    if contains_any(
-        &lower,
-        &["curl ", "wget ", "irm ", "iwr ", "http://", "https://"],
-    ) {
-        risk = risk.max(ShellRiskClass::High);
-        reasons.push("包含联网下载或外部 URL");
-    }
-    if contains_any(
-        &lower,
-        &["sudo", "runas", "chmod ", "chown ", "setfacl", "takeown"],
-    ) {
-        risk = risk.max(ShellRiskClass::High);
-        reasons.push("包含权限/所有权变更关键词");
-    }
-    if contains_any(
-        &lower,
-        &[
-            "npm install",
-            "pnpm add",
-            "yarn add",
-            "cargo install",
-            "pip install",
-        ],
-    ) {
-        risk = risk.max(ShellRiskClass::High);
-        reasons.push("包含依赖安装或可执行代码获取");
-    }
-    if contains_any(
-        &lower,
-        &[">", "tee ", "touch ", "mkdir ", "mv ", "cp ", "copy "],
-    ) {
-        risk = risk.max(ShellRiskClass::Medium);
-        reasons.push("可能写入或移动沙盒内文件");
-    }
-    if contains_any(
-        &lower,
-        &[
-            "npm test",
-            "npm run",
-            "cargo test",
-            "cargo check",
-            "pytest",
-            "vitest",
-        ],
-    ) {
-        risk = risk.max(ShellRiskClass::Medium);
-        reasons.push("会执行本地构建/测试脚本");
+    for rule in RISK_RULES {
+        if contains_any(&lower, rule.needles) {
+            risk = risk.max(rule.class);
+            if !reasons.contains(&rule.reason) {
+                reasons.push(rule.reason);
+            }
+        }
     }
     if reasons.is_empty() {
-        reasons.push("未匹配高风险关键词，仍会按 shell 进程执行请求确认");
+        reasons.push("未匹配写入/联网/提权关键词，按只读 shell 命令处理但仍需确认");
     }
 
     ShellSafetyProfile { risk, reasons }
+}
+
+fn validate_isolation_policy(req: &ShellRequest, profile: &ShellSafetyProfile) -> Result<(), String> {
+    if req.isolation == ShellIsolationMode::Strict && profile.risk.blocked_in_strict() {
+        return Err(format!(
+            "strict isolation 拒绝执行 {} 命令：{}",
+            profile.risk.label(),
+            profile.reasons.join("；")
+        ));
+    }
+    Ok(())
+}
+
+fn env_policy_label(req: &ShellRequest) -> &'static str {
+    if req.isolation == ShellIsolationMode::Strict {
+        "strict 模式强制 env_clear，仅传递最小跨平台环境白名单（PATH/HOME/TEMP/SystemRoot 等）"
+    } else if req.inherit_env {
+        "继承当前进程环境变量（可能暴露本机凭据环境变量）"
+    } else {
+        "使用最小跨平台环境白名单（PATH/HOME/TEMP/SystemRoot 等）"
+    }
 }
 
 fn contains_any(haystack: &str, needles: &[&str]) -> bool {
@@ -292,15 +422,41 @@ fn truncate(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
-    fn classifies_read_only_and_destructive_commands() {
+    fn classifies_read_only_and_high_risk_commands() {
         assert_eq!(
             classify_command("git status --short").risk,
-            ShellRiskClass::Low
+            ShellRiskClass::ReadOnly
         );
-        assert_eq!(classify_command("rm -rf target").risk, ShellRiskClass::High);
-        assert_eq!(classify_command("npm test").risk, ShellRiskClass::Medium);
+        assert_eq!(classify_command("cargo test").risk, ShellRiskClass::BuildTest);
+        assert_eq!(classify_command("touch out.txt").risk, ShellRiskClass::FileWrite);
+        assert_eq!(classify_command("curl https://example.com").risk, ShellRiskClass::ExternalExecution);
+        assert_eq!(classify_command("npm install").risk, ShellRiskClass::DependencyInstall);
+        assert_eq!(classify_command("rm -rf target").risk, ShellRiskClass::Destructive);
+        assert_eq!(classify_command("sudo chown a b").risk, ShellRiskClass::Privilege);
+    }
+
+    #[test]
+    fn strict_isolation_rejects_inherit_env_and_high_risk() {
+        assert!(parse_args(&json!({
+            "command": "git status",
+            "isolation": "strict",
+            "inherit_env": true
+        }))
+        .is_err());
+
+        let req = parse_args(&json!({ "command": "npm install", "isolation": "strict" })).unwrap();
+        let profile = classify_command(&req.command);
+        assert!(validate_isolation_policy(&req, &profile).is_err());
+    }
+
+    #[test]
+    fn strict_isolation_uses_shorter_default_timeout() {
+        let req = parse_args(&json!({ "command": "git status", "isolation": "strict" })).unwrap();
+        assert_eq!(req.timeout_secs, STRICT_TIMEOUT_SECS);
+        assert_eq!(req.isolation, ShellIsolationMode::Strict);
     }
 
     #[test]
