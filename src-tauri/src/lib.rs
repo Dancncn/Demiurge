@@ -47,6 +47,7 @@ pub struct AppState {
     pub edit_undo_stack: Mutex<Vec<tools::EditUndoEntry>>,
     pub workflow_runs: Mutex<Vec<agent::workflow_runtime::WorkflowRunProgress>>,
     pub workflow_cancels: Mutex<HashMap<String, Arc<AtomicBool>>>,
+    pub session_engine: Mutex<agent::session_engine::SessionEngineState>,
     pub mcp: mcp::McpManager,
     /// 用户中断标志
     pub cancel: AtomicBool,
@@ -86,6 +87,7 @@ impl AppState {
             edit_undo_stack: Mutex::new(Vec::new()),
             workflow_runs: Mutex::new(Vec::new()),
             workflow_cancels: Mutex::new(HashMap::new()),
+            session_engine: Mutex::new(agent::session_engine::SessionEngineState::default()),
             mcp: mcp::McpManager::default(),
             cancel: AtomicBool::new(false),
             busy: AtomicBool::new(false),
@@ -160,9 +162,18 @@ fn session_list(store: &SessionStore) -> SessionList {
 #[tauri::command]
 async fn send(app: AppHandle, state: State<'_, AppState>, text: String) -> Result<(), String> {
     let st = state.inner();
-    if st.busy.swap(true, Ordering::SeqCst) {
-        return Err("正在处理上一条消息，请稍候。".to_string());
-    }
+    let session_id = st.sessions.lock().unwrap().active.clone();
+    let turn = agent::session_engine::begin_turn(
+        &app,
+        st,
+        agent::session_engine::TurnStart {
+            entrypoint: agent::session_engine::TurnEntrypoint::Send,
+            session_id,
+            input: text.clone(),
+            workflow_run_id: None,
+            agent_names: Vec::new(),
+        },
+    )?;
     let trimmed = text.trim();
     let mut should_drive_goal = false;
     let res = if trimmed == "/dream" || trimmed.starts_with("/dream ") {
@@ -267,7 +278,15 @@ async fn send(app: AppHandle, state: State<'_, AppState>, text: String) -> Resul
     } else {
         res
     };
-    st.busy.store(false, Ordering::SeqCst);
+    let status = if st.cancel.load(Ordering::Relaxed) {
+        agent::session_engine::TurnStatus::Interrupted
+    } else if res.is_ok() {
+        agent::session_engine::TurnStatus::Completed
+    } else {
+        agent::session_engine::TurnStatus::Failed
+    };
+    let error = res.as_ref().err().cloned();
+    agent::session_engine::finish_turn(&app, st, &turn, status, error);
     res
 }
 
@@ -279,9 +298,18 @@ async fn send_with_agents(
     agent_names: Vec<String>,
 ) -> Result<(), String> {
     let st = state.inner();
-    if st.busy.swap(true, Ordering::SeqCst) {
-        return Err("正在处理上一条消息，请稍候。".to_string());
-    }
+    let session_id = st.sessions.lock().unwrap().active.clone();
+    let turn = agent::session_engine::begin_turn(
+        &app,
+        st,
+        agent::session_engine::TurnStart {
+            entrypoint: agent::session_engine::TurnEntrypoint::SendWithAgents,
+            session_id,
+            input: text.clone(),
+            workflow_run_id: None,
+            agent_names: agent_names.clone(),
+        },
+    )?;
     let res = agent::run_turn_with_options(
         &app,
         st,
@@ -297,19 +325,34 @@ async fn send_with_agents(
     } else {
         res
     };
-    st.busy.store(false, Ordering::SeqCst);
+    let status = if st.cancel.load(Ordering::Relaxed) {
+        agent::session_engine::TurnStatus::Interrupted
+    } else if res.is_ok() {
+        agent::session_engine::TurnStatus::Completed
+    } else {
+        agent::session_engine::TurnStatus::Failed
+    };
+    let error = res.as_ref().err().cloned();
+    agent::session_engine::finish_turn(&app, st, &turn, status, error);
     res
 }
 
 /// 中断当前流式生成。
 #[tauri::command]
-fn interrupt(state: State<'_, AppState>) {
-    state.cancel.store(true, Ordering::Relaxed);
+fn interrupt(app: AppHandle, state: State<'_, AppState>) {
+    agent::session_engine::request_interrupt(&app, state.inner());
     // 立即唤醒所有正在等待的确认（按「中断」处理），否则确认弹窗的 await 会把整轮卡住最长 5 分钟
     let mut pending = state.pending_confirms.lock().unwrap();
     for (_, tx) in pending.drain() {
         let _ = tx.send(PermissionResponse::deny_once());
     }
+}
+
+#[tauri::command]
+fn session_engine_state(
+    state: State<'_, AppState>,
+) -> agent::session_engine::SessionEnginePanelState {
+    agent::session_engine::panel_state(state.inner())
 }
 
 /// 前端确认对话框的回执：取出对应 oneshot 发送端回填裁决。
@@ -495,7 +538,10 @@ async fn mcp_panel_state(state: State<'_, AppState>) -> Result<mcp::McpPanelStat
 }
 
 #[tauri::command]
-async fn mcp_refresh(app: AppHandle, state: State<'_, AppState>) -> Result<mcp::McpPanelState, String> {
+async fn mcp_refresh(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<mcp::McpPanelState, String> {
     mcp::refresh_all(state.inner()).await;
     let panel = mcp::panel_state(state.inner());
     let _ = app.emit("mcp-updated", panel.clone());
@@ -979,6 +1025,7 @@ pub fn run() {
             send,
             send_with_agents,
             interrupt,
+            session_engine_state,
             respond_confirm,
             get_settings,
             save_settings,
