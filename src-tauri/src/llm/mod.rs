@@ -73,16 +73,56 @@ pub enum StructuredOutputCapability {
 }
 
 #[allow(dead_code)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PromptCacheCapability {
+    Unsupported,
+    AnthropicCacheControl,
+    OpenAiCompatibleHint,
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ThinkingCapability {
+    Unsupported,
+    AnthropicThinking,
+    GeminiThinking,
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ParallelToolCallCapability {
+    Unsupported,
+    OpenAiCompatibleField,
+    ProviderManaged,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ProviderTokenBudget {
+    pub max_input_tokens: usize,
+    pub reserved_output_tokens: usize,
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StructuredOutputRequest {
+    pub name: String,
+    pub description: Option<String>,
+    pub schema: Value,
+    pub strict: bool,
+}
+
+#[allow(dead_code)]
 #[derive(Clone, Copy, Debug)]
 pub struct ProviderProfile {
     pub supports_tools: bool,
     pub supports_streaming: bool,
-    pub supports_prompt_cache: bool,
-    pub supports_thinking: bool,
-    pub supports_parallel_tool_calls: bool,
+    pub prompt_cache: PromptCacheCapability,
+    pub thinking: ThinkingCapability,
+    pub parallel_tool_calls: ParallelToolCallCapability,
     pub requires_api_key: bool,
     pub max_input_tokens: Option<u32>,
     pub max_output_tokens: Option<u32>,
+    pub token_budget_multiplier: u32,
     pub tool_schema_dialect: ToolSchemaDialect,
     pub structured_output: StructuredOutputCapability,
 }
@@ -92,14 +132,24 @@ impl ProviderProfile {
         ProviderProfile {
             supports_tools: true,
             supports_streaming: true,
-            supports_prompt_cache: false,
-            supports_thinking: false,
-            supports_parallel_tool_calls: false,
+            prompt_cache: PromptCacheCapability::Unsupported,
+            thinking: ThinkingCapability::Unsupported,
+            parallel_tool_calls: ParallelToolCallCapability::Unsupported,
             requires_api_key: true,
             max_input_tokens: None,
             max_output_tokens: None,
+            token_budget_multiplier: 1,
             tool_schema_dialect: ToolSchemaDialect::OpenAiCompatible,
             structured_output: StructuredOutputCapability::OpenAiJsonSchema,
+        }
+    }
+
+    pub const fn openai() -> Self {
+        ProviderProfile {
+            parallel_tool_calls: ParallelToolCallCapability::OpenAiCompatibleField,
+            max_input_tokens: Some(128_000),
+            max_output_tokens: Some(16_384),
+            ..ProviderProfile::openai_compatible()
         }
     }
 
@@ -114,12 +164,13 @@ impl ProviderProfile {
         ProviderProfile {
             supports_tools: true,
             supports_streaming: true,
-            supports_prompt_cache: false,
-            supports_thinking: false,
-            supports_parallel_tool_calls: false,
+            prompt_cache: PromptCacheCapability::AnthropicCacheControl,
+            thinking: ThinkingCapability::AnthropicThinking,
+            parallel_tool_calls: ParallelToolCallCapability::ProviderManaged,
             requires_api_key: true,
-            max_input_tokens: None,
-            max_output_tokens: None,
+            max_input_tokens: Some(200_000),
+            max_output_tokens: Some(64_000),
+            token_budget_multiplier: 1,
             tool_schema_dialect: ToolSchemaDialect::Anthropic,
             structured_output: StructuredOutputCapability::AnthropicJsonSchema,
         }
@@ -129,12 +180,13 @@ impl ProviderProfile {
         ProviderProfile {
             supports_tools: true,
             supports_streaming: true,
-            supports_prompt_cache: false,
-            supports_thinking: false,
-            supports_parallel_tool_calls: false,
+            prompt_cache: PromptCacheCapability::Unsupported,
+            thinking: ThinkingCapability::GeminiThinking,
+            parallel_tool_calls: ParallelToolCallCapability::ProviderManaged,
             requires_api_key: true,
-            max_input_tokens: None,
-            max_output_tokens: None,
+            max_input_tokens: Some(1_000_000),
+            max_output_tokens: Some(65_536),
+            token_budget_multiplier: 1,
             tool_schema_dialect: ToolSchemaDialect::Gemini,
             structured_output: StructuredOutputCapability::GeminiSchema,
         }
@@ -142,9 +194,9 @@ impl ProviderProfile {
 
     pub const fn for_kind(kind: ProviderKind) -> Self {
         match kind {
+            ProviderKind::OpenAi => ProviderProfile::openai(),
             ProviderKind::DeepSeek
             | ProviderKind::DashScope
-            | ProviderKind::OpenAi
             | ProviderKind::OpenRouter
             | ProviderKind::Glm
             | ProviderKind::MiniMax
@@ -160,10 +212,57 @@ impl ProviderProfile {
         self.supports_tools && non_empty_tools(tools)
     }
 
+    pub fn supports_parallel_tool_call_field(self) -> bool {
+        matches!(self.parallel_tool_calls, ParallelToolCallCapability::OpenAiCompatibleField)
+    }
+
+    pub fn supports_structured_output(self) -> bool {
+        !matches!(self.structured_output, StructuredOutputCapability::Unsupported)
+    }
+
+    #[allow(dead_code)]
+    pub fn supports_prompt_cache(self) -> bool {
+        !matches!(self.prompt_cache, PromptCacheCapability::Unsupported)
+    }
+
+    #[allow(dead_code)]
+    pub fn supports_thinking(self) -> bool {
+        !matches!(self.thinking, ThinkingCapability::Unsupported)
+    }
+
+    pub fn effective_max_input_tokens(self, settings: &Settings) -> usize {
+        self.max_input_tokens
+            .map(|limit| settings.max_input_tokens.min(limit as usize))
+            .unwrap_or(settings.max_input_tokens)
+            .max(1)
+    }
+
+    pub fn effective_reserved_output_tokens(self, settings: &Settings) -> usize {
+        self.max_output_tokens
+            .map(|limit| settings.reserved_output_tokens.min(limit as usize))
+            .unwrap_or(settings.reserved_output_tokens)
+            .max(1)
+    }
+
+    pub fn effective_token_budget(self, settings: &Settings) -> ProviderTokenBudget {
+        ProviderTokenBudget {
+            max_input_tokens: self.effective_max_input_tokens(settings),
+            reserved_output_tokens: self.effective_reserved_output_tokens(settings),
+        }
+    }
+
+    #[allow(dead_code)]
     pub fn effective_max_output_tokens(self, requested: usize) -> usize {
         self.max_output_tokens
             .map(|limit| requested.min(limit as usize))
             .unwrap_or(requested)
+    }
+
+    pub fn structured_output_request<'a>(
+        self,
+        request: Option<&'a StructuredOutputRequest>,
+    ) -> Option<&'a StructuredOutputRequest> {
+        request.filter(|_| self.supports_structured_output())
     }
 
     pub fn empty_tool_schema(self) -> Value {

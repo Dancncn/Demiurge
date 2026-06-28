@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::conversation::Message;
+use crate::llm::ProviderProfile;
 use crate::store::Settings;
 
 const MESSAGE_OVERHEAD_TOKENS: usize = 8;
@@ -119,14 +120,34 @@ pub fn estimate_tools_tokens(tools: &Value) -> usize {
     estimate_text_tokens(&tools.to_string())
 }
 
+#[allow(dead_code)]
 pub fn history_budget(
     settings: &Settings,
     system: &str,
     tools: &Value,
     history: &[Message],
 ) -> ContextBudget {
-    let max_input_tokens = settings.max_input_tokens.max(MIN_HISTORY_BUDGET_TOKENS * 2);
-    let reserved_output_tokens = settings
+    history_budget_for_profile(
+        settings,
+        ProviderProfile::for_kind(settings.provider),
+        system,
+        tools,
+        history,
+    )
+}
+
+pub fn history_budget_for_profile(
+    settings: &Settings,
+    profile: ProviderProfile,
+    system: &str,
+    tools: &Value,
+    history: &[Message],
+) -> ContextBudget {
+    let provider_budget = profile.effective_token_budget(settings);
+    let max_input_tokens = provider_budget
+        .max_input_tokens
+        .max(MIN_HISTORY_BUDGET_TOKENS * 2);
+    let reserved_output_tokens = provider_budget
         .reserved_output_tokens
         .min(max_input_tokens.saturating_sub(MIN_HISTORY_BUDGET_TOKENS))
         .max(1);
@@ -178,5 +199,24 @@ mod tests {
         assert!(budget.record_usage_or_estimate(Some(exact), 99));
         assert_eq!(budget.used_exact, 10);
         assert_eq!(budget.used_estimated, 0);
+    }
+
+    #[test]
+    fn history_budget_uses_profile_token_limits() {
+        let settings = Settings {
+            provider: crate::store::ProviderKind::OpenAi,
+            max_input_tokens: 500_000,
+            reserved_output_tokens: 200_000,
+            ..Settings::default()
+        };
+        let budget = history_budget_for_profile(
+            &settings,
+            ProviderProfile::openai(),
+            "system",
+            &serde_json::json!([]),
+            &[Message::user("hi")],
+        );
+        assert_eq!(budget.max_input_tokens, 128_000);
+        assert_eq!(budget.reserved_output_tokens, 16_384);
     }
 }

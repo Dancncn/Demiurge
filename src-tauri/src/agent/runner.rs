@@ -156,7 +156,8 @@ pub async fn run_turn_with_options(
         }
         apply_system_overlay(&mut system, Some(&selected_agents.prompt_overlay));
         apply_system_overlay(&mut system, options.system_overlay.as_deref());
-        let mut current_budget = budget::history_budget(&settings, &system, &tools_schema, &msgs);
+        let mut current_budget =
+            budget::history_budget_for_profile(&settings, profile, &system, &tools_schema, &msgs);
         let mut removed_messages = context::trim_collect_removed_by_tokens(
             &mut msgs,
             current_budget.history_budget_tokens,
@@ -189,7 +190,8 @@ pub async fn run_turn_with_options(
                 }
                 apply_system_overlay(&mut system, Some(&selected_agents.prompt_overlay));
                 apply_system_overlay(&mut system, options.system_overlay.as_deref());
-                current_budget = budget::history_budget(&settings, &system, &tools_schema, &msgs);
+                current_budget =
+                    budget::history_budget_for_profile(&settings, profile, &system, &tools_schema, &msgs);
                 removed_messages = context::trim_collect_removed_by_tokens(
                     &mut msgs,
                     current_budget.history_budget_tokens,
