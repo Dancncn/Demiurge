@@ -3,6 +3,7 @@ pub mod budget;
 pub mod collapse;
 pub mod context;
 pub mod conversation;
+pub mod custom;
 pub mod dream;
 pub mod goal;
 pub mod memory;

@@ -131,6 +131,32 @@ export interface PackManifest {
   avatar?: string;
 }
 
+export type AgentKind = "template" | "team";
+
+export interface AgentBudget {
+  max_input_tokens?: number;
+  reserved_output_tokens?: number;
+  max_steps?: number;
+}
+
+export interface AgentDefinitionInfo {
+  name: string;
+  description: string;
+  kind: AgentKind;
+  path: string;
+  prompt: string;
+  allowed_tools: string[];
+  invalid_tools: string[];
+  budget?: AgentBudget;
+  handoff_format: string;
+  members: string[];
+}
+
+export interface AgentPanelState {
+  definitions: AgentDefinitionInfo[];
+  agents_dir: string;
+}
+
 export interface SessionMeta {
   id: string;
   title: string;

@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
+  AgentPanelState,
   ConfirmRequestEvent,
   ContextPanelState,
   GoalProgressEvent,
@@ -30,6 +31,7 @@ export const permissionPanelState = () => invoke<PermissionPanelState>("permissi
 export const permissionResetRule = (scope: PermissionScope, tool: string) =>
   invoke<PermissionPanelState>("permission_reset_rule", { scope, tool });
 export const listPacks = () => invoke<PackManifest[]>("list_packs");
+export const agentPanelState = () => invoke<AgentPanelState>("agent_panel_state");
 export const getHistory = () => invoke<Message[]>("get_history");
 export const contextPanelState = () => invoke<ContextPanelState>("context_panel_state");
 export const openSandbox = () => invoke<void>("open_sandbox");

@@ -280,6 +280,11 @@ fn list_packs(state: State<'_, AppState>) -> Vec<pack::PackManifest> {
     pack::list_packs(&dir)
 }
 
+#[tauri::command]
+fn agent_panel_state(state: State<'_, AppState>) -> agent::custom::AgentPanelState {
+    agent::custom::panel_state(state.inner())
+}
+
 // ---- 会话管理 ----
 
 #[tauri::command]
@@ -484,6 +489,7 @@ pub fn run() {
             permission_panel_state,
             permission_reset_rule,
             list_packs,
+            agent_panel_state,
             list_sessions,
             get_history,
             context_panel_state,
