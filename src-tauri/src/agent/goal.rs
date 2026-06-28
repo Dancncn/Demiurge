@@ -368,8 +368,27 @@ pub fn increment_turns(state: &crate::AppState) -> usize {
     .unwrap_or(0)
 }
 
+pub fn add_provider_usage(
+    state: &crate::AppState,
+    session_id: &str,
+    usage: Option<&crate::llm::Usage>,
+) -> bool {
+    let Some(tokens) = usage.and_then(|usage| usage.total_or_sum()) else {
+        return false;
+    };
+    add_tokens(state, session_id, tokens);
+    true
+}
+
 pub fn add_estimated_tokens(state: &crate::AppState, session_id: &str, text: &str) {
     let tokens = budget::estimate_text_tokens(text);
+    if tokens == 0 {
+        return;
+    }
+    add_tokens(state, session_id, tokens);
+}
+
+fn add_tokens(state: &crate::AppState, session_id: &str, tokens: usize) {
     if tokens == 0 {
         return;
     }

@@ -191,6 +191,8 @@ pub async fn run_turn_with_options(
         )
         .await?;
 
+        let exact_usage_recorded = goal::add_provider_usage(state, &sid, turn.usage.as_ref());
+
         // 被用户中断：保留已生成的部分正文
         if turn.finish_reason == "interrupted" {
             if !turn.content.is_empty() {
@@ -213,8 +215,10 @@ pub async fn run_turn_with_options(
         if turn.tool_calls.is_empty() {
             let assistant_text = turn.content.clone();
             push(Message::assistant_text(assistant_text.clone()));
-            goal::add_estimated_tokens(state, &sid, &original_user_text);
-            goal::add_estimated_tokens(state, &sid, &assistant_text);
+            if !exact_usage_recorded {
+                goal::add_estimated_tokens(state, &sid, &original_user_text);
+                goal::add_estimated_tokens(state, &sid, &assistant_text);
+            }
             state.persist_sessions();
             if let Some(run_id) = &options.workflow_run_id {
                 let _ = workflow_journal::append(
@@ -372,8 +376,10 @@ pub async fn run_turn_with_options(
                 );
             }
 
-            goal::add_estimated_tokens(state, &sid, &tc.function.arguments);
-            goal::add_estimated_tokens(state, &sid, &truncate_ui(&result));
+            if !exact_usage_recorded {
+                goal::add_estimated_tokens(state, &sid, &tc.function.arguments);
+                goal::add_estimated_tokens(state, &sid, &truncate_ui(&result));
+            }
             push(Message::tool_result(tc.id.clone(), name, result));
         }
 

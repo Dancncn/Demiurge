@@ -11,12 +11,49 @@ use serde_json::Value;
 use crate::agent::conversation::Message;
 use crate::store::{ProviderKind, Settings};
 
+/// Normalized token usage returned by a provider.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Usage {
+    pub input_tokens: Option<usize>,
+    pub output_tokens: Option<usize>,
+    pub total_tokens: Option<usize>,
+}
+
+impl Usage {
+    pub fn total_or_sum(self) -> Option<usize> {
+        self.total_tokens
+            .or_else(|| match (self.input_tokens, self.output_tokens) {
+                (Some(input), Some(output)) => Some(input.saturating_add(output)),
+                (Some(input), None) => Some(input),
+                (None, Some(output)) => Some(output),
+                (None, None) => None,
+            })
+    }
+
+    pub fn merge(self, next: Usage) -> Usage {
+        let input_tokens = next.input_tokens.or(self.input_tokens);
+        let output_tokens = next.output_tokens.or(self.output_tokens);
+        let total_tokens = next
+            .total_tokens
+            .or_else(|| match (input_tokens, output_tokens) {
+                (Some(input), Some(output)) => Some(input.saturating_add(output)),
+                _ => self.total_tokens,
+            });
+        Usage {
+            input_tokens,
+            output_tokens,
+            total_tokens,
+        }
+    }
+}
+
 /// 一次 LLM 调用的结果。
 pub struct AssistantTurn {
     pub content: String,
     pub tool_calls: Vec<crate::agent::conversation::ToolCall>,
     /// stop | tool_calls | length | interrupted | ...
     pub finish_reason: String,
+    pub usage: Option<Usage>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

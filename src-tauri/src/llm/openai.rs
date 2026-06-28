@@ -7,7 +7,7 @@ use serde_json::{json, Value};
 use crate::agent::conversation::{FunctionCall, Message, ToolCall};
 use crate::store::Settings;
 
-use super::{require_api_key, AssistantTurn, ProviderProfile};
+use super::{require_api_key, AssistantTurn, ProviderProfile, Usage};
 
 pub async fn stream_completion_with_profile(
     client: &reqwest::Client,
@@ -93,6 +93,7 @@ struct OpenAiStreamState {
     content: String,
     tool_accum: BTreeMap<u64, (String, String, String)>,
     finish: String,
+    usage: Option<Usage>,
 }
 
 impl OpenAiStreamState {
@@ -134,6 +135,7 @@ impl OpenAiStreamState {
             content: self.content,
             tool_calls,
             finish_reason,
+            usage: self.usage,
         }
     }
 }
@@ -146,6 +148,15 @@ fn parse_openai_stream_data(
     let Ok(v) = serde_json::from_str::<Value>(data) else {
         return;
     };
+    if let Some(usage) = parse_openai_usage(&v["usage"]) {
+        state.usage = Some(
+            state
+                .usage
+                .map(|current| current.merge(usage))
+                .unwrap_or(usage),
+        );
+    }
+
     let Some(choice) = v["choices"].get(0) else {
         return;
     };
@@ -180,6 +191,18 @@ fn parse_openai_stream_data(
     }
 }
 
+fn parse_openai_usage(v: &Value) -> Option<Usage> {
+    if !v.is_object() {
+        return None;
+    }
+    Some(Usage {
+        input_tokens: v["prompt_tokens"].as_u64().map(|n| n as usize),
+        output_tokens: v["completion_tokens"].as_u64().map(|n| n as usize),
+        total_tokens: v["total_tokens"].as_u64().map(|n| n as usize),
+    })
+    .filter(|usage| usage.total_or_sum().is_some())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -206,6 +229,20 @@ mod tests {
         assert_eq!(body["stream"], true);
         assert!(body["tools"].is_array());
         assert_eq!(body["tool_choice"], "auto");
+    }
+
+    #[test]
+    fn openai_stream_captures_usage() {
+        let mut state = OpenAiStreamState::default();
+        parse_openai_stream_data(
+            r#"{"choices":[{"delta":{"content":"hi"},"finish_reason":null}],"usage":{"prompt_tokens":12,"completion_tokens":3,"total_tokens":15}}"#,
+            &mut state,
+            &mut |_| {},
+        );
+        let turn = state.finish();
+        assert_eq!(turn.usage.unwrap().input_tokens, Some(12));
+        assert_eq!(turn.usage.unwrap().output_tokens, Some(3));
+        assert_eq!(turn.usage.unwrap().total_tokens, Some(15));
     }
 
     #[test]

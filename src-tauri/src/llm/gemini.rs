@@ -6,7 +6,7 @@ use serde_json::{json, Value};
 use crate::agent::conversation::{FunctionCall, Message, ToolCall};
 use crate::store::Settings;
 
-use super::{require_api_key, AssistantTurn, ProviderProfile};
+use super::{require_api_key, AssistantTurn, ProviderProfile, Usage};
 
 pub async fn stream_completion(
     client: &reqwest::Client,
@@ -155,6 +155,7 @@ struct GeminiStreamState {
     content: String,
     tool_calls: Vec<ToolCall>,
     finish: String,
+    usage: Option<Usage>,
 }
 
 impl GeminiStreamState {
@@ -179,6 +180,7 @@ impl GeminiStreamState {
             content: self.content,
             tool_calls: self.tool_calls,
             finish_reason,
+            usage: self.usage,
         }
     }
 }
@@ -191,6 +193,15 @@ fn parse_gemini_stream_data(
     let Ok(v) = serde_json::from_str::<Value>(data) else {
         return;
     };
+    if let Some(usage) = parse_gemini_usage(&v["usageMetadata"]) {
+        state.usage = Some(
+            state
+                .usage
+                .map(|current| current.merge(usage))
+                .unwrap_or(usage),
+        );
+    }
+
     let Some(candidate) = v["candidates"].get(0) else {
         return;
     };
@@ -223,6 +234,18 @@ fn parse_gemini_stream_data(
     if let Some(finish) = candidate["finishReason"].as_str() {
         state.finish = finish.to_string();
     }
+}
+
+fn parse_gemini_usage(v: &Value) -> Option<Usage> {
+    if !v.is_object() {
+        return None;
+    }
+    Some(Usage {
+        input_tokens: v["promptTokenCount"].as_u64().map(|n| n as usize),
+        output_tokens: v["candidatesTokenCount"].as_u64().map(|n| n as usize),
+        total_tokens: v["totalTokenCount"].as_u64().map(|n| n as usize),
+    })
+    .filter(|usage| usage.total_or_sum().is_some())
 }
 
 #[cfg(test)]
@@ -286,5 +309,19 @@ mod tests {
         assert_eq!(turn.finish_reason, "tool_calls");
         assert_eq!(turn.tool_calls[0].function.name, "read_file");
         assert_eq!(turn.tool_calls[0].function.arguments, "{\"path\":\"a\"}");
+    }
+
+    #[test]
+    fn gemini_stream_parses_usage_metadata() {
+        let mut state = GeminiStreamState::default();
+        parse_gemini_stream_data(
+            r#"{"usageMetadata":{"promptTokenCount":21,"candidatesTokenCount":5,"totalTokenCount":26}}"#,
+            &mut state,
+            &mut |_| {},
+        );
+        let usage = state.finish().usage.unwrap();
+        assert_eq!(usage.input_tokens, Some(21));
+        assert_eq!(usage.output_tokens, Some(5));
+        assert_eq!(usage.total_tokens, Some(26));
     }
 }

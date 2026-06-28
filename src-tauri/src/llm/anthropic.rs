@@ -7,7 +7,7 @@ use serde_json::{json, Value};
 use crate::agent::conversation::{FunctionCall, Message, ToolCall};
 use crate::store::Settings;
 
-use super::{require_api_key, AssistantTurn, ProviderProfile};
+use super::{require_api_key, AssistantTurn, ProviderProfile, Usage};
 
 pub async fn stream_completion(
     client: &reqwest::Client,
@@ -152,6 +152,7 @@ struct AnthropicStreamState {
     content: String,
     tools: BTreeMap<u64, ToolAccum>,
     finish: String,
+    usage: Option<Usage>,
     message_stopped: bool,
 }
 
@@ -198,6 +199,7 @@ impl AnthropicStreamState {
             content: self.content,
             tool_calls,
             finish_reason,
+            usage: self.usage,
         }
     }
 }
@@ -211,6 +213,16 @@ fn parse_anthropic_stream_data(
         return;
     };
     match v["type"].as_str().unwrap_or_default() {
+        "message_start" => {
+            if let Some(usage) = parse_anthropic_usage(&v["message"]["usage"]) {
+                state.usage = Some(
+                    state
+                        .usage
+                        .map(|current| current.merge(usage))
+                        .unwrap_or(usage),
+                );
+            }
+        }
         "content_block_start" => {
             let idx = v["index"].as_u64().unwrap_or(0);
             let block = &v["content_block"];
@@ -250,10 +262,45 @@ fn parse_anthropic_stream_data(
             if let Some(stop) = v["delta"]["stop_reason"].as_str() {
                 state.finish = stop.to_string();
             }
+            if let Some(usage) = parse_anthropic_usage(&v["usage"]) {
+                state.usage = Some(
+                    state
+                        .usage
+                        .map(|current| current.merge(usage))
+                        .unwrap_or(usage),
+                );
+            }
         }
         "message_stop" => state.message_stopped = true,
         _ => {}
     }
+}
+
+fn parse_anthropic_usage(v: &Value) -> Option<Usage> {
+    if !v.is_object() {
+        return None;
+    }
+    let base_input = v["input_tokens"].as_u64().map(|n| n as usize);
+    let cache_read = v["cache_read_input_tokens"].as_u64().map(|n| n as usize);
+    let cache_creation = v["cache_creation_input_tokens"]
+        .as_u64()
+        .map(|n| n as usize);
+    let input_tokens = [base_input, cache_read, cache_creation]
+        .into_iter()
+        .flatten()
+        .fold(None, |acc: Option<usize>, n| {
+            Some(acc.unwrap_or(0).saturating_add(n))
+        });
+    let output_tokens = v["output_tokens"].as_u64().map(|n| n as usize);
+    Some(Usage {
+        input_tokens,
+        output_tokens,
+        total_tokens: match (input_tokens, output_tokens) {
+            (Some(input), Some(output)) => Some(input.saturating_add(output)),
+            _ => None,
+        },
+    })
+    .filter(|usage| usage.total_or_sum().is_some())
 }
 
 #[cfg(test)]
@@ -331,5 +378,24 @@ mod tests {
         assert_eq!(turn.finish_reason, "tool_calls");
         assert_eq!(turn.tool_calls[0].function.name, "grep");
         assert_eq!(turn.tool_calls[0].function.arguments, "{\"query\":\"x\"}");
+    }
+
+    #[test]
+    fn anthropic_stream_captures_usage() {
+        let mut state = AnthropicStreamState::default();
+        parse_anthropic_stream_data(
+            r#"{"type":"message_start","message":{"usage":{"input_tokens":10,"cache_read_input_tokens":2,"cache_creation_input_tokens":3,"output_tokens":1}}}"#,
+            &mut state,
+            &mut |_| {},
+        );
+        parse_anthropic_stream_data(
+            r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":7}}"#,
+            &mut state,
+            &mut |_| {},
+        );
+        let usage = state.finish().usage.unwrap();
+        assert_eq!(usage.input_tokens, Some(15));
+        assert_eq!(usage.output_tokens, Some(7));
+        assert_eq!(usage.total_tokens, Some(22));
     }
 }
