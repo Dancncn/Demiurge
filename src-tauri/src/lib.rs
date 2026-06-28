@@ -421,6 +421,15 @@ async fn provider_check_connection(
 }
 
 #[tauri::command]
+async fn web_search_check_connection(
+    state: State<'_, AppState>,
+    settings: Settings,
+    provider: Option<String>,
+) -> Result<connection_tests::ConnectionTestResult, String> {
+    connection_tests::test_web_search(&state.http, settings, provider).await
+}
+
+#[tauri::command]
 async fn webdav_check_connection(
     state: State<'_, AppState>,
     config: WebDavConfig,
@@ -1211,6 +1220,7 @@ pub fn run() {
             get_settings,
             save_settings,
             provider_check_connection,
+            web_search_check_connection,
             set_permission_mode,
             plan_state,
             approve_plan,

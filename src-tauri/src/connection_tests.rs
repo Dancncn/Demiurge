@@ -8,6 +8,7 @@ use crate::store::{ProviderKind, Settings};
 
 const CONNECTION_TEST_TIMEOUT_SECS: u64 = 20;
 const CONNECTION_TEST_MAX_ERROR_CHARS: usize = 600;
+const WEB_SEARCH_TEST_QUERY: &str = "Demiurge connection test";
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 pub struct ConnectionTestResult {
@@ -111,6 +112,60 @@ pub async fn test_provider(
     })
 }
 
+pub async fn test_web_search(
+    client: &reqwest::Client,
+    settings: Settings,
+    provider: Option<String>,
+) -> Result<ConnectionTestResult, String> {
+    let request = WebSearchTestRequest::from_settings(&settings, provider.as_deref())?;
+    let started = Instant::now();
+    let (target, detail) = match request.adapter {
+        WebSearchAdapter::Auto => match check_bing_search(client).await {
+            Ok(target) => (target, "Bing search connected for auto Web Search.".to_string()),
+            Err(bing_err) => match check_duckduckgo_search(client).await {
+                Ok(target) => (
+                    target,
+                    format!(
+                        "DuckDuckGo fallback connected for auto Web Search. Bing check failed: {bing_err}"
+                    ),
+                ),
+                Err(duck_err) => {
+                    return Err(format!(
+                        "Auto Web Search connection test failed. Bing: {bing_err}; DuckDuckGo: {duck_err}"
+                    ));
+                }
+            },
+        },
+        WebSearchAdapter::Bing => (
+            check_bing_search(client).await?,
+            "Bing search connected.".to_string(),
+        ),
+        WebSearchAdapter::DuckDuckGo => (
+            check_duckduckgo_search(client).await?,
+            "DuckDuckGo search connected.".to_string(),
+        ),
+        WebSearchAdapter::Tavily => (
+            check_tavily_search(client, &request).await?,
+            "Tavily key accepted a minimal search request.".to_string(),
+        ),
+        WebSearchAdapter::Brave => (
+            check_brave_search(client, &request).await?,
+            "Brave Search key accepted a minimal search request.".to_string(),
+        ),
+        WebSearchAdapter::Exa => (
+            check_exa_search(client, &request).await?,
+            "Exa key accepted a minimal search request.".to_string(),
+        ),
+    };
+
+    Ok(ConnectionTestResult {
+        ok: true,
+        target,
+        detail,
+        latency_ms: elapsed_ms(started),
+    })
+}
+
 impl ProviderTestRequest {
     fn from_settings(settings: Settings) -> Result<Self, String> {
         let profile = ProviderProfile::for_kind(settings.provider);
@@ -191,6 +246,229 @@ fn build_gemini_provider_test_body() -> Value {
     })
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum WebSearchAdapter {
+    Auto,
+    Bing,
+    DuckDuckGo,
+    Tavily,
+    Brave,
+    Exa,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct WebSearchTestRequest {
+    adapter: WebSearchAdapter,
+    tavily_key: Option<String>,
+    brave_key: Option<String>,
+    exa_key: Option<String>,
+    tavily_endpoint: String,
+    exa_endpoint: String,
+}
+
+impl WebSearchTestRequest {
+    fn from_settings(settings: &Settings, provider: Option<&str>) -> Result<Self, String> {
+        Self::from_settings_with_env(settings, provider, |key| std::env::var(key).ok())
+    }
+
+    fn from_settings_with_env(
+        settings: &Settings,
+        provider: Option<&str>,
+        env: impl Fn(&str) -> Option<String>,
+    ) -> Result<Self, String> {
+        let selected = provider
+            .and_then(non_empty)
+            .or_else(|| non_empty(settings.web_search_provider.as_str()))
+            .unwrap_or("auto");
+        let adapter = parse_web_search_adapter(selected)?;
+        let request = Self {
+            adapter,
+            tavily_key: setting_or_env(&settings.tavily_api_key, &env, &["TAVILY_API_KEY"]),
+            brave_key: setting_or_env(
+                &settings.brave_search_api_key,
+                &env,
+                &["BRAVE_SEARCH_API_KEY", "BRAVE_API_KEY"],
+            ),
+            exa_key: setting_or_env(&settings.exa_api_key, &env, &["EXA_API_KEY"]),
+            tavily_endpoint: env_first(
+                &env,
+                &["TAVILY_SEARCH_URL", "TAVILY_ENDPOINT_URL"],
+            )
+            .unwrap_or_else(|| "https://tavily.claude-code-best.win/search".to_string()),
+            exa_endpoint: env_first(&env, &["EXA_MCP_URL"])
+                .unwrap_or_else(|| "https://mcp.exa.ai/mcp".to_string()),
+        };
+        request.validate_keys()?;
+        Ok(request)
+    }
+
+    fn validate_keys(&self) -> Result<(), String> {
+        match self.adapter {
+            WebSearchAdapter::Tavily if self.tavily_key.is_none() => Err(
+                "Tavily connection test requires a Tavily API Key or TAVILY_API_KEY.".to_string(),
+            ),
+            WebSearchAdapter::Brave if self.brave_key.is_none() => Err(
+                "Brave connection test requires a Brave Search API Key, BRAVE_SEARCH_API_KEY, or BRAVE_API_KEY."
+                    .to_string(),
+            ),
+            WebSearchAdapter::Exa if self.exa_key.is_none() => {
+                Err("Exa connection test requires an Exa API Key or EXA_API_KEY.".to_string())
+            }
+            _ => Ok(()),
+        }
+    }
+}
+
+async fn check_bing_search(client: &reqwest::Client) -> Result<String, String> {
+    let target = "https://www.bing.com/search".to_string();
+    let resp = client
+        .get(&target)
+        .timeout(Duration::from_secs(CONNECTION_TEST_TIMEOUT_SECS))
+        .query(&[("q", WEB_SEARCH_TEST_QUERY), ("setmkt", "en-US")])
+        .header(
+            "User-Agent",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 \
+             (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0",
+        )
+        .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+        .header("Accept-Language", "en-US,en;q=0.9")
+        .send()
+        .await
+        .map_err(|e| request_error("Bing", e))?;
+    ensure_success("Bing", resp).await?;
+    Ok(format!("{target}?q={WEB_SEARCH_TEST_QUERY}"))
+}
+
+async fn check_duckduckgo_search(client: &reqwest::Client) -> Result<String, String> {
+    let target = "https://api.duckduckgo.com/".to_string();
+    let resp = client
+        .get(&target)
+        .timeout(Duration::from_secs(CONNECTION_TEST_TIMEOUT_SECS))
+        .query(&[
+            ("q", WEB_SEARCH_TEST_QUERY),
+            ("format", "json"),
+            ("no_html", "1"),
+            ("no_redirect", "1"),
+            ("skip_disambig", "1"),
+        ])
+        .send()
+        .await
+        .map_err(|e| request_error("DuckDuckGo", e))?;
+    ensure_success("DuckDuckGo", resp).await?;
+    Ok(format!("{target}?q={WEB_SEARCH_TEST_QUERY}&format=json"))
+}
+
+async fn check_tavily_search(
+    client: &reqwest::Client,
+    request: &WebSearchTestRequest,
+) -> Result<String, String> {
+    let key = request
+        .tavily_key
+        .as_deref()
+        .ok_or_else(|| "Tavily connection test requires an API key.".to_string())?;
+    let body = json!({
+        "query": WEB_SEARCH_TEST_QUERY,
+        "search_depth": "basic",
+        "max_results": 1,
+    });
+    let resp = client
+        .post(&request.tavily_endpoint)
+        .timeout(Duration::from_secs(CONNECTION_TEST_TIMEOUT_SECS))
+        .header("User-Agent", "Demiurge WebSearch")
+        .bearer_auth(key)
+        .header("x-api-key", key)
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| request_error("Tavily", e))?;
+    ensure_success("Tavily", resp).await?;
+    Ok(request.tavily_endpoint.clone())
+}
+
+async fn check_brave_search(
+    client: &reqwest::Client,
+    request: &WebSearchTestRequest,
+) -> Result<String, String> {
+    let key = request
+        .brave_key
+        .as_deref()
+        .ok_or_else(|| "Brave connection test requires an API key.".to_string())?;
+    let target = "https://api.search.brave.com/res/v1/llm/context".to_string();
+    let resp = client
+        .get(&target)
+        .timeout(Duration::from_secs(CONNECTION_TEST_TIMEOUT_SECS))
+        .query(&[("q", WEB_SEARCH_TEST_QUERY)])
+        .header("Accept", "application/json")
+        .header("X-Subscription-Token", key)
+        .send()
+        .await
+        .map_err(|e| request_error("Brave", e))?;
+    ensure_success("Brave", resp).await?;
+    Ok(target)
+}
+
+async fn check_exa_search(
+    client: &reqwest::Client,
+    request: &WebSearchTestRequest,
+) -> Result<String, String> {
+    let key = request
+        .exa_key
+        .as_deref()
+        .ok_or_else(|| "Exa connection test requires an API key.".to_string())?;
+    let body = json!({
+        "jsonrpc": "2.0",
+        "id": "demiurge-web-search-connection-test",
+        "method": "tools/call",
+        "params": {
+            "name": "web_search_exa",
+            "arguments": {
+                "query": WEB_SEARCH_TEST_QUERY,
+                "type": "fast",
+                "numResults": 1,
+                "livecrawl": "never",
+                "contextMaxCharacters": 1000,
+            }
+        }
+    });
+    let resp = client
+        .post(&request.exa_endpoint)
+        .timeout(Duration::from_secs(CONNECTION_TEST_TIMEOUT_SECS))
+        .header("Accept", "application/json, text/event-stream")
+        .bearer_auth(key)
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| request_error("Exa", e))?;
+    ensure_success("Exa", resp).await?;
+    Ok(request.exa_endpoint.clone())
+}
+
+async fn ensure_success(label: &str, resp: reqwest::Response) -> Result<(), String> {
+    let status = resp.status();
+    if status.is_success() {
+        return Ok(());
+    }
+    let body = resp.text().await.unwrap_or_default();
+    Err(format!(
+        "{label} 连接测试返回 HTTP {status}：{}",
+        cap_chars(body.trim(), CONNECTION_TEST_MAX_ERROR_CHARS)
+    ))
+}
+
+fn parse_web_search_adapter(value: &str) -> Result<WebSearchAdapter, String> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "" | "auto" => Ok(WebSearchAdapter::Auto),
+        "bing" => Ok(WebSearchAdapter::Bing),
+        "duckduckgo" | "ddg" => Ok(WebSearchAdapter::DuckDuckGo),
+        "tavily" => Ok(WebSearchAdapter::Tavily),
+        "brave" => Ok(WebSearchAdapter::Brave),
+        "exa" => Ok(WebSearchAdapter::Exa),
+        other => Err(format!(
+            "Web Search provider 不支持 {other:?}；可选：auto, bing, duckduckgo, tavily, brave, exa"
+        )),
+    }
+}
+
 fn normalize_base_url(base_url: &str) -> Result<String, String> {
     let base_url = base_url.trim().trim_end_matches('/').to_string();
     if base_url.is_empty() {
@@ -202,6 +480,31 @@ fn normalize_base_url(base_url: &str) -> Result<String, String> {
         "http" | "https" => Ok(base_url),
         _ => Err("Base URL must start with http:// or https://.".to_string()),
     }
+}
+
+fn non_empty(value: &str) -> Option<&str> {
+    let value = value.trim();
+    if value.is_empty() {
+        None
+    } else {
+        Some(value)
+    }
+}
+
+fn setting_or_env(
+    setting: &str,
+    env: &impl Fn(&str) -> Option<String>,
+    names: &[&str],
+) -> Option<String> {
+    non_empty(setting)
+        .map(str::to_string)
+        .or_else(|| env_first(env, names))
+}
+
+fn env_first(env: &impl Fn(&str) -> Option<String>, names: &[&str]) -> Option<String> {
+    names
+        .iter()
+        .find_map(|name| env(name).and_then(|value| non_empty(&value).map(str::to_string)))
 }
 
 fn provider_label(provider: ProviderKind) -> &'static str {
@@ -328,5 +631,70 @@ mod tests {
         cfg.base_url = "ftp://example.test".to_string();
         let err = ProviderTestRequest::from_settings(cfg).unwrap_err();
         assert!(err.contains("http:// or https://"));
+    }
+
+    fn web_settings(provider: &str) -> Settings {
+        Settings {
+            web_search_provider: provider.to_string(),
+            ..Settings::default()
+        }
+    }
+
+    #[test]
+    fn web_search_request_uses_provider_override_and_settings_key() {
+        let mut cfg = web_settings("auto");
+        cfg.tavily_api_key = " tvly-test ".to_string();
+        let req =
+            WebSearchTestRequest::from_settings_with_env(&cfg, Some("tavily"), |_| None).unwrap();
+        assert_eq!(req.adapter, WebSearchAdapter::Tavily);
+        assert_eq!(req.tavily_key.as_deref(), Some("tvly-test"));
+    }
+
+    #[test]
+    fn web_search_request_uses_env_fallbacks() {
+        let cfg = web_settings("exa");
+        let req = WebSearchTestRequest::from_settings_with_env(&cfg, None, |name| match name {
+            "EXA_API_KEY" => Some(" exa-env ".to_string()),
+            "EXA_MCP_URL" => Some(" https://exa.test/mcp ".to_string()),
+            _ => None,
+        })
+        .unwrap();
+        assert_eq!(req.adapter, WebSearchAdapter::Exa);
+        assert_eq!(req.exa_key.as_deref(), Some("exa-env"));
+        assert_eq!(req.exa_endpoint, "https://exa.test/mcp");
+    }
+
+    #[test]
+    fn web_search_request_requires_key_for_keyed_adapters() {
+        let err =
+            WebSearchTestRequest::from_settings_with_env(&web_settings("brave"), None, |_| None)
+                .unwrap_err();
+        assert!(err.contains("Brave"));
+        assert!(err.contains("API Key"));
+    }
+
+    #[test]
+    fn web_search_request_allows_public_adapters_without_key() {
+        let bing =
+            WebSearchTestRequest::from_settings_with_env(&web_settings("bing"), None, |_| None)
+                .unwrap();
+        assert_eq!(bing.adapter, WebSearchAdapter::Bing);
+
+        let duckduckgo = WebSearchTestRequest::from_settings_with_env(
+            &web_settings("duckduckgo"),
+            None,
+            |_| None,
+        )
+        .unwrap();
+        assert_eq!(duckduckgo.adapter, WebSearchAdapter::DuckDuckGo);
+    }
+
+    #[test]
+    fn web_search_adapter_parse_supports_aliases() {
+        assert_eq!(
+            parse_web_search_adapter("ddg").unwrap(),
+            WebSearchAdapter::DuckDuckGo
+        );
+        assert!(parse_web_search_adapter("unknown").is_err());
     }
 }
