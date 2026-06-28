@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import * as api from "../lib/api";
 import type {
   AgentPanelState,
@@ -12,9 +12,11 @@ import type {
   PermissionScope,
   ProviderKind,
   Settings,
+  WebDavBackupFile,
+  WebDavConfig,
   WebSearchProvider,
 } from "../lib/types";
-import { CloseIcon } from "./Icons";
+import { CheckIcon, CloseIcon } from "./Icons";
 
 interface Props {
   open: boolean;
@@ -25,54 +27,71 @@ interface Props {
   onSave: (s: Settings) => void;
 }
 
-const inputCls =
-  "w-full rounded-xl border border-[#e5e5e5] bg-white px-3 py-2.5 text-[#171717] outline-none transition focus:border-[#10a37f]";
-const labelCls = "mb-1.5 block text-sm font-medium text-[#3f3f3f]";
+type SettingsTab = "provider" | "web" | "files" | "context" | "tools" | "voice" | "advanced";
 
-const providerOptions: { value: ProviderKind; label: string; baseUrl: string; apiKeyHelp: string }[] = [
+type ProviderOption = {
+  value: ProviderKind;
+  label: string;
+  short: string;
+  baseUrl: string;
+  model: string;
+  help: string;
+};
+
+const providerOptions: ProviderOption[] = [
   {
     value: "open_ai_compatible",
-    label: "OpenAI-compatible / DeepSeek",
-    baseUrl: "例如：https://api.deepseek.com/v1",
-    apiKeyHelp: "保存到系统凭据管理器；settings.json 不落明文密钥。",
+    label: "OpenAI Compatible",
+    short: "OA",
+    baseUrl: "https://api.deepseek.com/v1",
+    model: "deepseek-chat",
+    help: "DeepSeek, OpenRouter, siliconflow and other OpenAI-compatible endpoints.",
   },
   {
     value: "local",
-    label: "Local OpenAI-compatible",
-    baseUrl: "例如：http://localhost:11434/v1 或 LM Studio endpoint",
-    apiKeyHelp: "本地服务通常可留空；如服务要求 token，会保存到系统凭据管理器。",
+    label: "Local Endpoint",
+    short: "LO",
+    baseUrl: "http://localhost:11434/v1",
+    model: "llama3.1",
+    help: "Ollama, LM Studio, vLLM or any local OpenAI-compatible service.",
   },
   {
     value: "anthropic",
     label: "Anthropic",
-    baseUrl: "例如：https://api.anthropic.com/v1",
-    apiKeyHelp: "用于 Anthropic x-api-key header，保存到系统凭据管理器。",
+    short: "AN",
+    baseUrl: "https://api.anthropic.com/v1",
+    model: "claude-sonnet-4-5",
+    help: "Claude API. The key is stored in the system credential manager.",
   },
   {
     value: "gemini",
     label: "Gemini",
-    baseUrl: "例如：https://generativelanguage.googleapis.com/v1beta",
-    apiKeyHelp: "用于 Google AI Studio API key，保存到系统凭据管理器。",
+    short: "GE",
+    baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+    model: "gemini-2.5-pro",
+    help: "Google AI Studio compatible Gemini endpoint.",
   },
 ];
 
-const ocrSources: { value: OcrModelSource; label: string }[] = [
-  { value: "modelscope", label: "ModelScope 国内源" },
-  { value: "huggingface", label: "Hugging Face 国际源" },
-];
-
 const webSearchProviders: { value: WebSearchProvider; label: string; help: string }[] = [
-  { value: "auto", label: "Auto (Bing → DuckDuckGo)", help: "默认：先尝试 Bing HTML，失败后回退 DuckDuckGo。" },
-  { value: "bing", label: "Bing", help: "使用公开 Bing 搜索结果页，不需要 API Key。" },
-  { value: "duckduckgo", label: "DuckDuckGo", help: "使用 DuckDuckGo Instant Answer API，不需要 API Key。" },
-  { value: "tavily", label: "Tavily", help: "需要 Tavily API Key；也兼容 TAVILY_API_KEY 环境变量。" },
-  { value: "brave", label: "Brave Search", help: "需要 Brave Search API Key；也兼容 BRAVE_SEARCH_API_KEY 环境变量。" },
-  { value: "exa", label: "Exa", help: "需要 Exa API Key；也兼容 EXA_API_KEY 环境变量。" },
+  { value: "auto", label: "Auto", help: "Try Bing first, then fall back to DuckDuckGo." },
+  { value: "bing", label: "Bing", help: "Public Bing result page. No API key required." },
+  { value: "duckduckgo", label: "DuckDuckGo", help: "DuckDuckGo Instant Answer API. No API key required." },
+  { value: "tavily", label: "Tavily", help: "Requires a Tavily API key." },
+  { value: "brave", label: "Brave", help: "Requires a Brave Search API key." },
+  { value: "exa", label: "Exa", help: "Requires an Exa API key." },
 ];
 
-function normalizeWebSearchProvider(value: string): WebSearchProvider {
-  return webSearchProviders.some((p) => p.value === value) ? (value as WebSearchProvider) : "auto";
-}
+const ocrSources: { value: OcrModelSource; label: string }[] = [
+  { value: "modelscope", label: "ModelScope" },
+  { value: "huggingface", label: "Hugging Face" },
+];
+
+const inputCls =
+  "h-9 w-full rounded-md border border-[#d9d9d9] bg-white px-3 text-[13px] text-[#202124] outline-none transition focus:border-[#7a7f87] focus:ring-2 focus:ring-[#202124]/5";
+const labelCls = "mb-1.5 block text-[12px] font-medium text-[#5f6368]";
+const secondaryButtonCls =
+  "inline-flex h-8 items-center justify-center rounded-md border border-[#d9d9d9] bg-white px-3 text-[12px] font-medium text-[#333] transition hover:bg-[#f5f5f5] disabled:cursor-not-allowed disabled:opacity-50";
 
 function formatBytes(n: number) {
   if (!Number.isFinite(n) || n <= 0) return "0 B";
@@ -86,16 +105,20 @@ function formatBytes(n: number) {
   return `${value.toFixed(idx === 0 ? 0 : 1)} ${units[idx]}`;
 }
 
+function normalizeWebSearchProvider(value: string): WebSearchProvider {
+  return webSearchProviders.some((p) => p.value === value) ? (value as WebSearchProvider) : "auto";
+}
+
 function permissionEffectLabel(effect: string) {
-  if (effect === "allow") return "允许";
-  if (effect === "deny") return "拒绝";
-  return "询问";
+  if (effect === "allow") return "Allow";
+  if (effect === "deny") return "Deny";
+  return "Ask";
 }
 
 function permissionScopeLabel(scope: string) {
-  if (scope === "session") return "本会话";
-  if (scope === "project") return "本项目";
-  return "仅本次";
+  if (scope === "session") return "Session";
+  if (scope === "project") return "Project";
+  return "Once";
 }
 
 function formatTime(ms: number) {
@@ -103,17 +126,95 @@ function formatTime(ms: number) {
   return new Date(ms).toLocaleString();
 }
 
+function ProviderMark({ short, selected }: { short: string; selected?: boolean }) {
+  return (
+    <span
+      className={`grid size-8 shrink-0 place-items-center rounded-lg border text-[11px] font-semibold ${
+        selected ? "border-[#111827] bg-[#111827] text-white" : "border-[#dcdfe4] bg-[#f8f9fb] text-[#49515c]"
+      }`}
+    >
+      {short}
+    </span>
+  );
+}
+
+function Section({
+  title,
+  description,
+  children,
+}: {
+  title: string;
+  description?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <section className="border-b border-[#eceff3] py-5 first:pt-0 last:border-b-0">
+      <div className="mb-4">
+        <h3 className="text-[14px] font-semibold text-[#202124]">{title}</h3>
+        {description && <p className="mt-1 max-w-2xl text-[12px] leading-5 text-[#7a8088]">{description}</p>}
+      </div>
+      {children}
+    </section>
+  );
+}
+
+function Field({
+  label,
+  help,
+  children,
+}: {
+  label: string;
+  help?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <label className="block">
+      <span className={labelCls}>{label}</span>
+      {children}
+      {help && <span className="mt-1.5 block text-[12px] leading-5 text-[#8a9099]">{help}</span>}
+    </label>
+  );
+}
+
+function ToggleRow({
+  checked,
+  title,
+  description,
+  onChange,
+}: {
+  checked: boolean;
+  title: string;
+  description: string;
+  onChange: (checked: boolean) => void;
+}) {
+  return (
+    <label className="flex items-start justify-between gap-4 rounded-lg border border-[#e2e5ea] bg-[#fbfcfd] px-3 py-3">
+      <span>
+        <span className="block text-[13px] font-medium text-[#202124]">{title}</span>
+        <span className="mt-1 block text-[12px] leading-5 text-[#7a8088]">{description}</span>
+      </span>
+      <input
+        className="mt-0.5 h-4 w-4 shrink-0 accent-[#111827]"
+        type="checkbox"
+        checked={checked}
+        onChange={(e) => onChange(e.target.checked)}
+      />
+    </label>
+  );
+}
+
 function ContextMetric({ label, value }: { label: string; value: number }) {
   return (
-    <div className="rounded-xl border border-[#ececec] bg-white px-3 py-2">
-      <div className="text-[#9a9a9a]">{label}</div>
-      <div className="mt-1 font-medium text-[#333]">{value}</div>
+    <div className="rounded-lg border border-[#e5e8ed] bg-white px-3 py-2">
+      <div className="text-[11px] text-[#8a9099]">{label}</div>
+      <div className="mt-1 text-[15px] font-semibold text-[#202124]">{value}</div>
     </div>
   );
 }
 
 export default function SettingsDialog({ open, settings, packs, agentPanel, onClose, onSave }: Props) {
   const [form, setForm] = useState<Settings>(settings);
+  const [activeTab, setActiveTab] = useState<SettingsTab>("provider");
   const [ocrStatus, setOcrStatus] = useState<OcrModelStatus | null>(null);
   const [ocrProgress, setOcrProgress] = useState<OcrDownloadProgress | null>(null);
   const [ocrBusy, setOcrBusy] = useState(false);
@@ -124,70 +225,53 @@ export default function SettingsDialog({ open, settings, packs, agentPanel, onCl
   const [memoryState, setMemoryState] = useState<MemoryPanelState | null>(null);
   const [memoryBusy, setMemoryBusy] = useState(false);
   const [memoryError, setMemoryError] = useState("");
+  const [webdavBusy, setWebdavBusy] = useState(false);
+  const [webdavStatus, setWebdavStatus] = useState("");
+  const [webdavFiles, setWebdavFiles] = useState<WebDavBackupFile[]>([]);
 
   useEffect(() => {
-    if (open) setForm(settings);
+    if (open) {
+      setForm(settings);
+      setWebdavStatus("");
+      setWebdavFiles([]);
+    }
   }, [open, settings]);
 
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
-    api
-      .ocrModelStatus()
-      .then((status) => {
+    void api.ocrModelStatus().then(
+      (status) => {
         if (!cancelled) setOcrStatus(status);
-      })
-      .catch((err) => {
+      },
+      (err) => {
         if (!cancelled) setOcrError(String(err));
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [open]);
-
-  useEffect(() => {
-    if (!open) return;
-    let cancelled = false;
-    api
-      .contextPanelState()
-      .then((state) => {
+      },
+    );
+    void api.contextPanelState().then(
+      (state) => {
         if (!cancelled) setContextState(state);
-      })
-      .catch((err) => {
-        if (!cancelled) console.error("读取上下文状态失败", err);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [open]);
-
-  useEffect(() => {
-    if (!open) return;
-    let cancelled = false;
-    api
-      .memoryPanelState()
-      .then((state) => {
+      },
+      (err) => {
+        if (!cancelled) console.error("Failed to read context state", err);
+      },
+    );
+    void api.memoryPanelState().then(
+      (state) => {
         if (!cancelled) setMemoryState(state);
-      })
-      .catch((err) => {
+      },
+      (err) => {
         if (!cancelled) setMemoryError(String(err));
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [open]);
-
-  useEffect(() => {
-    if (!open) return;
-    let cancelled = false;
-    api
-      .permissionPanelState()
-      .then((state) => {
+      },
+    );
+    void api.permissionPanelState().then(
+      (state) => {
         if (!cancelled) setPermissionState(state);
-      })
-      .catch((err) => {
-        if (!cancelled) console.error("读取权限规则失败", err);
-      });
+      },
+      (err) => {
+        if (!cancelled) console.error("Failed to read permission state", err);
+      },
+    );
     return () => {
       cancelled = true;
     };
@@ -197,7 +281,7 @@ export default function SettingsDialog({ open, settings, packs, agentPanel, onCl
     if (!open) return;
     let disposed = false;
     let unlisten: (() => void) | undefined;
-    api.listenOcrDownloadProgress((event) => {
+    void api.listenOcrDownloadProgress((event) => {
       if (!disposed) setOcrProgress(event);
     }).then((fn) => {
       if (disposed) fn();
@@ -209,12 +293,18 @@ export default function SettingsDialog({ open, settings, packs, agentPanel, onCl
     };
   }, [open]);
 
+  const selectedProvider = useMemo(
+    () => providerOptions.find((p) => p.value === form.provider) ?? providerOptions[0],
+    [form.provider],
+  );
+  const selectedWebSearchProvider = useMemo(
+    () => webSearchProviders.find((p) => p.value === form.web_search_provider) ?? webSearchProviders[0],
+    [form.web_search_provider],
+  );
+
   if (!open) return null;
 
   const set = <K extends keyof Settings>(k: K, v: Settings[K]) => setForm((f) => ({ ...f, [k]: v }));
-  const selectedProvider = providerOptions.find((p) => p.value === form.provider) ?? providerOptions[0];
-  const selectedWebSearchProvider =
-    webSearchProviders.find((p) => p.value === form.web_search_provider) ?? webSearchProviders[0];
   const runMemoryAction = async (action: () => Promise<MemoryPanelState>) => {
     setMemoryBusy(true);
     setMemoryError("");
@@ -226,536 +316,857 @@ export default function SettingsDialog({ open, settings, packs, agentPanel, onCl
       setMemoryBusy(false);
     }
   };
-  const resetPermissionRule = async (scope: PermissionScope, tool: string) => {
+
+  const webdavConfig: WebDavConfig = {
+    url: form.webdav_url,
+    username: form.webdav_username,
+    password: form.webdav_password,
+    path: form.webdav_path,
+  };
+
+  async function resetPermissionRule(scope: PermissionScope, tool: string) {
     setPermissionBusy(true);
     try {
       setPermissionState(await api.permissionResetRule(scope, tool));
     } finally {
       setPermissionBusy(false);
     }
-  };
-  const downloadOcrModels = async () => {
+  }
+
+  async function downloadOcrModels() {
     setOcrBusy(true);
     setOcrError("");
     setOcrProgress(null);
     try {
-      const status = await api.ocrDownloadModels(form.ocr_model_source);
-      setOcrStatus(status);
+      setOcrStatus(await api.ocrDownloadModels(form.ocr_model_source));
     } catch (err) {
       setOcrError(String(err));
     } finally {
       setOcrBusy(false);
     }
-  };
+  }
+
+  async function checkWebDav() {
+    setWebdavBusy(true);
+    setWebdavStatus("");
+    try {
+      const message = await api.webdavCheckConnection(webdavConfig);
+      setWebdavStatus(message);
+    } catch (err) {
+      setWebdavStatus(String(err));
+    } finally {
+      setWebdavBusy(false);
+    }
+  }
+
+  async function backupToWebDav() {
+    setWebdavBusy(true);
+    setWebdavStatus("");
+    try {
+      const fileName = await api.webdavBackupNow(webdavConfig);
+      setWebdavStatus(`Backup created: ${fileName}`);
+      setWebdavFiles(await api.webdavListBackups(webdavConfig));
+    } catch (err) {
+      setWebdavStatus(String(err));
+    } finally {
+      setWebdavBusy(false);
+    }
+  }
+
+  async function refreshWebDavFiles() {
+    setWebdavBusy(true);
+    setWebdavStatus("");
+    try {
+      setWebdavFiles(await api.webdavListBackups(webdavConfig));
+      setWebdavStatus("Backup list refreshed.");
+    } catch (err) {
+      setWebdavStatus(String(err));
+    } finally {
+      setWebdavBusy(false);
+    }
+  }
+
+  async function deleteWebDavFile(fileName: string) {
+    setWebdavBusy(true);
+    setWebdavStatus("");
+    try {
+      await api.webdavDeleteBackup(webdavConfig, fileName);
+      setWebdavFiles((files) => files.filter((file) => file.file_name !== fileName));
+      setWebdavStatus(`Deleted: ${fileName}`);
+    } catch (err) {
+      setWebdavStatus(String(err));
+    } finally {
+      setWebdavBusy(false);
+    }
+  }
+
   const progressPct =
     ocrProgress?.totalBytes && ocrProgress.totalBytes > 0
       ? Math.min(100, Math.round((ocrProgress.downloadedBytes / ocrProgress.totalBytes) * 100))
       : null;
+  const tokenPct = Math.min(
+    100,
+    Math.round(((contextState?.estimated_history_tokens ?? 0) / Math.max(1, contextState?.max_input_tokens ?? 1)) * 100),
+  );
+
+  const navItems: { id: SettingsTab; label: string; detail: string }[] = [
+    { id: "provider", label: "Providers", detail: selectedProvider.label },
+    { id: "web", label: "Web Search", detail: selectedWebSearchProvider.label },
+    { id: "files", label: "Files", detail: form.webdav_enabled ? "WebDAV enabled" : "Docs and backup" },
+    { id: "context", label: "Context", detail: `${form.max_input_tokens} tokens` },
+    { id: "tools", label: "Tools", detail: ocrStatus?.installed ? "OCR ready" : "OCR models" },
+    { id: "voice", label: "Voice", detail: form.voice_enabled ? "Enabled" : "Disabled" },
+    { id: "advanced", label: "Advanced", detail: "Storage and limits" },
+  ];
+
+  function save() {
+    const maxInput = Math.max(4000, form.max_input_tokens || 0);
+    const reserved = Math.min(Math.max(512, form.reserved_output_tokens || 0), maxInput - 512);
+    onSave({
+      ...form,
+      base_url: form.base_url.trim(),
+      api_key: form.api_key.trim(),
+      model: form.model.trim(),
+      max_context_chars: Math.max(2000, form.max_context_chars || 0),
+      max_input_tokens: maxInput,
+      reserved_output_tokens: reserved,
+      voice_stt_backend: form.voice_stt_backend.trim() || "none",
+      voice_tts_backend: form.voice_tts_backend.trim() || "none",
+      voice_id: form.voice_id.trim(),
+      ocr_model_source: form.ocr_model_source || "modelscope",
+      web_search_provider: normalizeWebSearchProvider(form.web_search_provider),
+      tavily_api_key: form.tavily_api_key.trim(),
+      brave_search_api_key: form.brave_search_api_key.trim(),
+      exa_api_key: form.exa_api_key.trim(),
+      webdav_url: form.webdav_url.trim(),
+      webdav_username: form.webdav_username.trim(),
+      webdav_password: form.webdav_password.trim(),
+      webdav_path: form.webdav_path.trim() || "Demiurge",
+    });
+  }
 
   return (
     <div
-      className="fixed inset-0 z-40 flex items-center justify-center bg-black/30 p-4 backdrop-blur-[2px]"
+      className="fixed inset-0 z-40 flex items-center justify-center bg-[#111827]/35 p-4 backdrop-blur-[2px]"
       onClick={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      <div className="max-h-[92vh] w-full max-w-lg overflow-y-auto rounded-3xl border border-[#ececec] bg-white p-6 shadow-[0_24px_60px_rgba(0,0,0,0.18)]">
-        <div className="mb-5 flex items-center">
-          <h2 className="text-lg font-semibold text-[#171717]">设置</h2>
-          <button
-            className="ml-auto grid h-8 w-8 place-items-center rounded-lg text-[#8a8a8a] transition hover:bg-[#f5f5f5] hover:text-[#3f3f3f]"
-            onClick={onClose}
-            aria-label="关闭"
-          >
-            <CloseIcon size={18} />
-          </button>
-        </div>
-
-        <div className="space-y-4">
-          <label className="block">
-            <span className={labelCls}>Provider</span>
-            <select className={inputCls} value={form.provider} onChange={(e) => set("provider", e.target.value as ProviderKind)}>
-              {providerOptions.map((p) => (
-                <option key={p.value} value={p.value}>
-                  {p.label}
-                </option>
-              ))}
-            </select>
-          </label>
-
-          <label className="block">
-            <span className={labelCls}>LLM 接口地址 (base_url)</span>
-            <input
-              className={inputCls}
-              value={form.base_url}
-              placeholder="https://api.deepseek.com/v1"
-              onChange={(e) => set("base_url", e.target.value)}
-            />
-            <span className="mt-1.5 block text-xs text-[#9a9a9a]">{selectedProvider.baseUrl}</span>
-          </label>
-
-          <label className="block">
-            <span className={labelCls}>API Key</span>
-            <input
-              className={inputCls}
-              type="password"
-              value={form.api_key}
-              placeholder="sk-..."
-              onChange={(e) => set("api_key", e.target.value)}
-            />
-            <span className="mt-1.5 block text-xs text-[#9a9a9a]">{selectedProvider.apiKeyHelp}</span>
-          </label>
-
-          <label className="block">
-            <span className={labelCls}>模型 (model)</span>
-            <input
-              className={inputCls}
-              value={form.model}
-              placeholder="deepseek-chat"
-              onChange={(e) => set("model", e.target.value)}
-            />
-          </label>
-
-          <label className="block">
-            <span className={labelCls}>角色包</span>
-            <select className={inputCls} value={form.current_pack} onChange={(e) => set("current_pack", e.target.value)}>
-              {packs.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name} ({p.id})
-                </option>
-              ))}
-            </select>
-          </label>
-
-          <div className="rounded-2xl border border-[#eeeeee] bg-[#fafafa] p-3">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <div className="text-sm font-medium text-[#3f3f3f]">自定义 Agents</div>
-                <div className="mt-1 break-all text-xs text-[#9a9a9a]">{agentPanel.agents_dir || ".demiurge/agents"}</div>
-              </div>
-              <span className="rounded-full bg-white px-2.5 py-1 text-xs text-[#6f6f6f]">{agentPanel.definitions.length}</span>
-            </div>
-            <div className="mt-3 space-y-2">
-              {agentPanel.definitions.length ? (
-                agentPanel.definitions.slice(0, 6).map((agent) => (
-                  <div key={agent.name} className="rounded-xl border border-[#ececec] bg-white p-3 text-xs text-[#6f6f6f]">
-                    <div className="font-medium text-[#333]">{agent.name}</div>
-                    <div className="mt-1 text-[#8a8a8a]">
-                      {agent.kind} · {agent.description || "无描述"}
-                    </div>
-                    <div className="mt-1 truncate text-[#9a9a9a]">
-                      tools: {agent.allowed_tools.length ? agent.allowed_tools.join(", ") : "默认主工具集"}
-                    </div>
-                    {agent.invalid_tools.length ? (
-                      <div className="mt-1 text-[#b42318]">无效工具：{agent.invalid_tools.join(", ")}</div>
-                    ) : null}
-                  </div>
-                ))
-              ) : (
-                <div className="rounded-xl border border-dashed border-[#e0e0e0] bg-white p-3 text-xs text-[#8a8a8a]">
-                  在该目录放入 JSON 文件后，会出现在顶部 Agents 多选器中。
-                </div>
-              )}
-            </div>
+      <div className="flex h-[min(760px,92vh)] w-[min(1040px,96vw)] overflow-hidden rounded-xl border border-[#d7dbe2] bg-[#f6f7f9] shadow-[0_24px_80px_rgba(15,23,42,0.28)]">
+        <aside className="flex w-[232px] shrink-0 flex-col border-r border-[#dfe3e8] bg-[#eef1f5]">
+          <div className="flex h-12 items-center border-b border-[#dfe3e8] px-4">
+            <div className="text-[13px] font-semibold text-[#202124]">Settings</div>
+            <button
+              className="ml-auto grid size-8 place-items-center rounded-md text-[#69707a] transition hover:bg-[#e3e7ed] hover:text-[#202124]"
+              onClick={onClose}
+              aria-label="Close settings"
+            >
+              <CloseIcon size={16} />
+            </button>
           </div>
+          <nav className="min-h-0 flex-1 overflow-y-auto p-2">
+            {navItems.map((item) => {
+              const selected = item.id === activeTab;
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={() => setActiveTab(item.id)}
+                  className={`mb-1 flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left transition ${
+                    selected ? "bg-white text-[#111827] shadow-sm" : "text-[#4f5661] hover:bg-[#e4e8ee]"
+                  }`}
+                >
+                  <span
+                    className={`size-1.5 shrink-0 rounded-full ${selected ? "bg-[#111827]" : "bg-[#a6adb8]"}`}
+                    aria-hidden
+                  />
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-[13px] font-medium">{item.label}</span>
+                    <span className="mt-0.5 block truncate text-[11px] text-[#8a9099]">{item.detail}</span>
+                  </span>
+                </button>
+              );
+            })}
+          </nav>
+          <div className="border-t border-[#dfe3e8] p-3 text-[11px] leading-5 text-[#7a8088]">
+            API keys are stored in the system credential manager.
+          </div>
+        </aside>
 
-          <label className="block">
-            <span className={labelCls}>最大输入 Token 预算</span>
-            <input
-              className={inputCls}
-              type="number"
-              min={4000}
-              step={1000}
-              value={form.max_input_tokens}
-              onChange={(e) => set("max_input_tokens", Number(e.target.value) || 0)}
-            />
-            <span className="mt-1.5 block text-xs text-[#9a9a9a]">用于估算 system prompt、工具 schema 与历史消息的总输入上限。</span>
-          </label>
-
-          <label className="block">
-            <span className={labelCls}>保留输出 Token</span>
-            <input
-              className={inputCls}
-              type="number"
-              min={512}
-              step={256}
-              value={form.reserved_output_tokens}
-              onChange={(e) => set("reserved_output_tokens", Number(e.target.value) || 0)}
-            />
-          </label>
-
-          <div className="rounded-2xl border border-[#eeeeee] bg-[#fafafa] p-3">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <div className="text-sm font-medium text-[#3f3f3f]">上下文可视化</div>
-                <div className="mt-1 text-xs text-[#9a9a9a]">当前会话历史、摘要和 token 预算的轻量统计。</div>
+        <section className="flex min-w-0 flex-1 flex-col bg-white">
+          <header className="flex h-12 shrink-0 items-center border-b border-[#eceff3] px-5">
+            <div className="min-w-0">
+              <div className="text-[14px] font-semibold text-[#202124]">
+                {navItems.find((item) => item.id === activeTab)?.label}
               </div>
+            </div>
+            <div className="ml-auto flex items-center gap-2">
+              <button type="button" className={secondaryButtonCls} onClick={onClose}>
+                Cancel
+              </button>
               <button
-                className="rounded-full border border-[#e5e5e5] px-3 py-1.5 text-xs text-[#3f3f3f] transition hover:bg-white"
                 type="button"
-                onClick={async () => setContextState(await api.contextPanelState())}
+                className="inline-flex h-8 items-center justify-center rounded-md bg-[#111827] px-4 text-[12px] font-medium text-white transition hover:bg-[#2b3442]"
+                onClick={save}
               >
-                刷新
+                Save
               </button>
             </div>
-            <div className="mt-3 grid grid-cols-2 gap-2 text-xs sm:grid-cols-4">
-              <ContextMetric label="消息" value={contextState?.message_count ?? 0} />
-              <ContextMetric label="User" value={contextState?.user_messages ?? 0} />
-              <ContextMetric label="Assistant" value={contextState?.assistant_messages ?? 0} />
-              <ContextMetric label="Tool" value={contextState?.tool_messages ?? 0} />
-            </div>
-            <div className="mt-3 h-2 overflow-hidden rounded-full bg-white">
-              <div
-                className="h-full rounded-full bg-[#10a37f] transition-all"
-                style={{
-                  width: `${Math.min(100, Math.round(((contextState?.estimated_history_tokens ?? 0) / Math.max(1, contextState?.max_input_tokens ?? 1)) * 100))}%`,
-                }}
-              />
-            </div>
-            <div className="mt-2 text-xs text-[#7a7a7a]">
-              历史估算 {contextState?.estimated_history_tokens ?? 0} / {contextState?.max_input_tokens ?? form.max_input_tokens} tokens；摘要 {contextState?.summary_chars ?? 0} 字符；输出保留 {contextState?.reserved_output_tokens ?? form.reserved_output_tokens} tokens。
-            </div>
-          </div>
+          </header>
 
-          <label className="flex items-start gap-3 rounded-2xl border border-[#eeeeee] bg-[#fafafa] p-3">
-            <input
-              className="mt-1 h-4 w-4 accent-[#10a37f]"
-              type="checkbox"
-              checked={form.auto_memory_enabled}
-              onChange={(e) => set("auto_memory_enabled", e.target.checked)}
-            />
-            <span>
-              <span className="block text-sm font-medium text-[#3f3f3f]">自动提取长期记忆</span>
-              <span className="mt-1 block text-xs text-[#9a9a9a]">保守提取用户偏好和项目长期约束，写入沙盒 .demiurge/memory.md。</span>
-            </span>
-          </label>
-
-          <div className="rounded-2xl border border-[#eeeeee] bg-[#fafafa] p-3">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <div className="text-sm font-medium text-[#3f3f3f]">项目记忆审计</div>
-                <div className="mt-1 break-all text-xs text-[#9a9a9a]">{memoryState?.path || ".demiurge/memory.md"}</div>
-              </div>
-              <div className="flex gap-2">
-                <button
-                  className="rounded-full border border-[#e5e5e5] px-3 py-1.5 text-xs text-[#3f3f3f] transition hover:bg-white disabled:opacity-50"
-                  type="button"
-                  disabled={memoryBusy}
-                  onClick={() => runMemoryAction(api.memoryPanelState)}
-                >
-                  刷新
-                </button>
-                <button
-                  className="rounded-full border border-[#e5e5e5] px-3 py-1.5 text-xs text-[#3f3f3f] transition hover:bg-white disabled:opacity-50"
-                  type="button"
-                  disabled={memoryBusy || !memoryState?.duplicates.length}
-                  onClick={() => runMemoryAction(api.memoryDedupeApply)}
-                >
-                  去重 {memoryState?.duplicates.length || 0}
-                </button>
-              </div>
-            </div>
-            {memoryError ? <div className="mt-2 rounded-xl bg-[#fff1f1] p-2 text-xs text-[#9f1d1d]">{memoryError}</div> : null}
-            <div className="mt-3 max-h-72 space-y-2 overflow-auto">
-              {memoryState?.entries.length ? (
-                memoryState.entries.map((entry) => {
-                  const duplicate = memoryState.duplicates.some((group) => group.duplicate_ids.includes(entry.id));
-                  return (
-                    <div key={entry.id} className="rounded-xl border border-[#ececec] bg-white p-3 text-xs text-[#5f5f5f]">
-                      <div className="mb-2 flex items-center gap-2">
-                        <span className="rounded bg-[#f3eef6] px-1.5 py-0.5 text-[#6c6073]">{entry.kind}</span>
-                        <span className="text-[#9a9a9a]">line {entry.line}</span>
-                        {duplicate ? <span className="rounded bg-[#fff4d6] px-1.5 py-0.5 text-[#8a5a00]">duplicate</span> : null}
+          <div className="min-h-0 flex-1 overflow-y-auto">
+            <div className="mx-auto max-w-[760px] px-6 py-5">
+              {activeTab === "provider" && (
+                <>
+                  <Section title="Provider" description="Select the active LLM provider and configure its endpoint.">
+                    <div className="grid gap-3 md:grid-cols-[240px_minmax(0,1fr)]">
+                      <div className="space-y-1 rounded-lg border border-[#e2e5ea] bg-[#f8f9fb] p-1.5">
+                        {providerOptions.map((provider) => {
+                          const selected = provider.value === form.provider;
+                          return (
+                            <button
+                              key={provider.value}
+                              type="button"
+                              onClick={() => {
+                                set("provider", provider.value);
+                                if (!form.base_url.trim()) set("base_url", provider.baseUrl);
+                                if (!form.model.trim()) set("model", provider.model);
+                              }}
+                              className={`flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left transition ${
+                                selected ? "bg-white shadow-sm" : "hover:bg-white/70"
+                              }`}
+                            >
+                              <ProviderMark short={provider.short} selected={selected} />
+                              <span className="min-w-0 flex-1">
+                                <span className="block truncate text-[13px] font-medium text-[#202124]">
+                                  {provider.label}
+                                </span>
+                                <span className="block truncate text-[11px] text-[#8a9099]">{provider.model}</span>
+                              </span>
+                              {selected && <CheckIcon size={14} className="text-[#111827]" />}
+                            </button>
+                          );
+                        })}
                       </div>
-                      <textarea
-                        className="min-h-16 w-full rounded-lg border border-[#ececec] px-2 py-1.5 text-[#333] outline-none focus:border-[#10a37f]"
-                        value={entry.text}
-                        onChange={(e) => {
-                          const text = e.target.value;
-                          setMemoryState((cur) => cur ? {
-                            ...cur,
-                            entries: cur.entries.map((item) => item.id === entry.id ? { ...item, text } : item),
-                          } : cur);
-                        }}
-                      />
-                      <div className="mt-2 flex justify-end gap-2">
-                        <button
-                          className="rounded-full border border-[#e5e5e5] px-3 py-1 text-[#6f6f6f] transition hover:bg-[#f7f7f7] disabled:opacity-50"
-                          type="button"
-                          disabled={memoryBusy}
-                          onClick={() => runMemoryAction(() => api.memoryDeleteEntry(entry.id))}
-                        >
-                          删除
-                        </button>
-                        <button
-                          className="rounded-full bg-[#111] px-3 py-1 text-white transition hover:bg-[#333] disabled:opacity-50"
-                          type="button"
-                          disabled={memoryBusy}
-                          onClick={() => runMemoryAction(() => api.memoryUpdateEntry(entry.id, entry.kind, entry.text))}
-                        >
-                          保存
-                        </button>
-                      </div>
-                    </div>
-                  );
-                })
-              ) : (
-                <div className="rounded-xl border border-dashed border-[#e0e0e0] bg-white p-3 text-xs text-[#8a8a8a]">暂无项目记忆。</div>
-              )}
-            </div>
-          </div>
 
-          <div className="rounded-2xl border border-[#eeeeee] bg-[#fafafa] p-3">
-            <div className="text-sm font-medium text-[#3f3f3f]">Web Search</div>
-            <div className="mt-1 text-xs text-[#9a9a9a]">配置联网搜索 provider；密钥保存到系统凭据管理器，不写入 settings.json。</div>
-            <label className="mt-3 block">
-              <span className={labelCls}>搜索 Provider</span>
-              <select
-                className={inputCls}
-                value={form.web_search_provider}
-                onChange={(e) => set("web_search_provider", normalizeWebSearchProvider(e.target.value))}
-              >
-                {webSearchProviders.map((p) => (
-                  <option key={p.value} value={p.value}>
-                    {p.label}
-                  </option>
-                ))}
-              </select>
-              <span className="mt-1.5 block text-xs text-[#9a9a9a]">{selectedWebSearchProvider.help}</span>
-            </label>
-            <div className="mt-3 grid grid-cols-1 gap-3">
-              <label className="block">
-                <span className={labelCls}>Tavily API Key</span>
-                <input
-                  className={inputCls}
-                  type="password"
-                  value={form.tavily_api_key}
-                  placeholder="tvly-..."
-                  onChange={(e) => set("tavily_api_key", e.target.value)}
-                />
-              </label>
-              <label className="block">
-                <span className={labelCls}>Brave Search API Key</span>
-                <input
-                  className={inputCls}
-                  type="password"
-                  value={form.brave_search_api_key}
-                  placeholder="BSA..."
-                  onChange={(e) => set("brave_search_api_key", e.target.value)}
-                />
-              </label>
-              <label className="block">
-                <span className={labelCls}>Exa API Key</span>
-                <input
-                  className={inputCls}
-                  type="password"
-                  value={form.exa_api_key}
-                  placeholder="exa-..."
-                  onChange={(e) => set("exa_api_key", e.target.value)}
-                />
-              </label>
-            </div>
-          </div>
-
-          <div className="rounded-2xl border border-[#eeeeee] bg-[#fafafa] p-3">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <div className="text-sm font-medium text-[#3f3f3f]">权限规则</div>
-                <div className="mt-1 text-xs text-[#9a9a9a]">查看已记住的会话/项目规则和最近审计记录，可清除单条规则。</div>
-              </div>
-              <button
-                className="rounded-full border border-[#e5e5e5] px-3 py-1.5 text-xs text-[#3f3f3f] transition hover:bg-white disabled:opacity-50"
-                type="button"
-                disabled={permissionBusy}
-                onClick={async () => setPermissionState(await api.permissionPanelState())}
-              >
-                刷新
-              </button>
-            </div>
-            <div className="mt-3 space-y-2">
-              {permissionState?.rules.length ? (
-                permissionState.rules.map((rule) => (
-                  <div key={`${rule.scope}:${rule.tool}`} className="rounded-xl border border-[#ececec] bg-white p-3 text-xs text-[#5f5f5f]">
-                    <div className="flex items-start gap-2">
-                      <div className="min-w-0 flex-1">
-                        <div className="truncate font-medium text-[#333]">{rule.tool}</div>
-                        <div className="mt-1">
-                          {permissionEffectLabel(rule.effect)} · {permissionScopeLabel(rule.scope)} · {formatTime(rule.updated_at)}
+                      <div className="rounded-lg border border-[#e2e5ea] bg-white">
+                        <div className="flex items-center gap-3 border-b border-[#eceff3] px-4 py-3">
+                          <ProviderMark short={selectedProvider.short} selected />
+                          <div className="min-w-0 flex-1">
+                            <div className="truncate text-[14px] font-semibold text-[#202124]">
+                              {selectedProvider.label}
+                            </div>
+                            <div className="mt-0.5 truncate text-[12px] text-[#7a8088]">{selectedProvider.help}</div>
+                          </div>
                         </div>
-                        <div className="mt-1 text-[#8a8a8a]">{rule.reason}</div>
+                        <div className="grid gap-4 p-4">
+                          <Field label="Base URL" help={`Default: ${selectedProvider.baseUrl}`}>
+                            <input
+                              className={inputCls}
+                              value={form.base_url}
+                              placeholder={selectedProvider.baseUrl}
+                              onChange={(e) => set("base_url", e.target.value)}
+                            />
+                          </Field>
+                          <Field label="API Key" help="Saved securely outside settings.json. Local providers may leave this empty.">
+                            <input
+                              className={inputCls}
+                              type="password"
+                              value={form.api_key}
+                              placeholder="sk-..."
+                              onChange={(e) => set("api_key", e.target.value)}
+                            />
+                          </Field>
+                          <Field label="Model">
+                            <input
+                              className={inputCls}
+                              value={form.model}
+                              placeholder={selectedProvider.model}
+                              onChange={(e) => set("model", e.target.value)}
+                            />
+                          </Field>
+                          <Field label="Persona Pack">
+                            <select
+                              className={inputCls}
+                              value={form.current_pack}
+                              onChange={(e) => set("current_pack", e.target.value)}
+                            >
+                              {packs.map((p) => (
+                                <option key={p.id} value={p.id}>
+                                  {p.name} ({p.id})
+                                </option>
+                              ))}
+                            </select>
+                          </Field>
+                          <div className="flex flex-wrap gap-2">
+                            <button
+                              type="button"
+                              className={secondaryButtonCls}
+                              onClick={() => {
+                                set("base_url", selectedProvider.baseUrl);
+                                set("model", selectedProvider.model);
+                              }}
+                            >
+                              Use defaults
+                            </button>
+                          </div>
+                        </div>
                       </div>
-                      <button
-                        className="rounded-full border border-[#e5e5e5] px-2.5 py-1 text-[#6f6f6f] transition hover:bg-[#f7f7f7] disabled:opacity-50"
-                        type="button"
-                        disabled={permissionBusy}
-                        onClick={() => resetPermissionRule(rule.scope, rule.tool)}
-                      >
-                        清除
+                    </div>
+                  </Section>
+                </>
+              )}
+
+              {activeTab === "web" && (
+                <>
+                  <Section title="Search Provider" description="Configure the search backend used by the web_search tool.">
+                    <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                      {webSearchProviders.map((provider) => {
+                        const selected = provider.value === form.web_search_provider;
+                        return (
+                          <button
+                            key={provider.value}
+                            type="button"
+                            onClick={() => set("web_search_provider", provider.value)}
+                            className={`rounded-lg border p-3 text-left transition ${
+                              selected
+                                ? "border-[#111827] bg-[#f8f9fb]"
+                                : "border-[#e2e5ea] bg-white hover:bg-[#f8f9fb]"
+                            }`}
+                          >
+                            <div className="flex items-center gap-2">
+                              <span className="text-[13px] font-semibold text-[#202124]">{provider.label}</span>
+                              {selected && <CheckIcon size={14} className="ml-auto text-[#111827]" />}
+                            </div>
+                            <div className="mt-1 text-[12px] leading-5 text-[#7a8088]">{provider.help}</div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </Section>
+                  <Section title="API Keys" description="Only Tavily, Brave and Exa require keys. Environment variables still work.">
+                    <div className="grid gap-4">
+                      <Field label="Tavily API Key">
+                        <input
+                          className={inputCls}
+                          type="password"
+                          value={form.tavily_api_key}
+                          placeholder="tvly-..."
+                          onChange={(e) => set("tavily_api_key", e.target.value)}
+                        />
+                      </Field>
+                      <Field label="Brave Search API Key">
+                        <input
+                          className={inputCls}
+                          type="password"
+                          value={form.brave_search_api_key}
+                          placeholder="BSA..."
+                          onChange={(e) => set("brave_search_api_key", e.target.value)}
+                        />
+                      </Field>
+                      <Field label="Exa API Key">
+                        <input
+                          className={inputCls}
+                          type="password"
+                          value={form.exa_api_key}
+                          placeholder="exa-..."
+                          onChange={(e) => set("exa_api_key", e.target.value)}
+                        />
+                      </Field>
+                    </div>
+                  </Section>
+                </>
+              )}
+
+              {activeTab === "files" && (
+                <>
+                  <Section
+                    title="Document Processing"
+                    description="Composer attachments are converted into prompt context before the agent turn starts."
+                  >
+                    <div className="grid gap-2 sm:grid-cols-2">
+                      {[
+                        ["Text and code", "TXT, Markdown, JSON, CSV and common source files are read as text."],
+                        ["Images", "Images show as attachment previews. OCR can be run separately through screen/OCR tools."],
+                        ["PDF", "PDF text is extracted in the renderer, up to the first 80 pages."],
+                        ["Office", "DOCX, PPTX, XLSX and XLSM are parsed from OpenXML content into plain text."],
+                        ["Mermaid", "```mermaid code blocks render as diagrams in assistant messages."],
+                        ["Syntax highlight", "Language-tagged code blocks use highlight.js and keep copy controls."],
+                      ].map(([title, description]) => (
+                        <div key={title} className="rounded-lg border border-[#e2e5ea] bg-[#fbfcfd] p-3">
+                          <div className="text-[13px] font-semibold text-[#202124]">{title}</div>
+                          <div className="mt-1 text-[12px] leading-5 text-[#7a8088]">{description}</div>
+                        </div>
+                      ))}
+                    </div>
+                  </Section>
+
+                  <Section
+                    title="WebDAV Backup"
+                    description="Back up Demiurge settings and sessions to a WebDAV directory. Passwords are stored in the system credential manager."
+                  >
+                    <ToggleRow
+                      checked={form.webdav_enabled}
+                      title="Enable WebDAV backup controls"
+                      description="Keeps the configuration visible and ready for manual backup operations."
+                      onChange={(checked) => set("webdav_enabled", checked)}
+                    />
+                    <div className="mt-4 grid gap-4">
+                      <Field label="WebDAV URL" help="Example: https://example.com/remote.php/dav/files/you">
+                        <input
+                          className={inputCls}
+                          value={form.webdav_url}
+                          placeholder="https://..."
+                          onChange={(e) => set("webdav_url", e.target.value)}
+                        />
+                      </Field>
+                      <div className="grid gap-4 sm:grid-cols-2">
+                        <Field label="Username">
+                          <input
+                            className={inputCls}
+                            value={form.webdav_username}
+                            onChange={(e) => set("webdav_username", e.target.value)}
+                          />
+                        </Field>
+                        <Field label="Password">
+                          <input
+                            className={inputCls}
+                            type="password"
+                            value={form.webdav_password}
+                            onChange={(e) => set("webdav_password", e.target.value)}
+                          />
+                        </Field>
+                      </div>
+                      <Field label="Backup path" help="A collection under the WebDAV URL. Demiurge will create it if possible.">
+                        <input
+                          className={inputCls}
+                          value={form.webdav_path}
+                          placeholder="Demiurge"
+                          onChange={(e) => set("webdav_path", e.target.value)}
+                        />
+                      </Field>
+                    </div>
+
+                    <div className="mt-4 flex flex-wrap gap-2">
+                      <button className={secondaryButtonCls} disabled={webdavBusy} type="button" onClick={checkWebDav}>
+                        Test connection
+                      </button>
+                      <button className={secondaryButtonCls} disabled={webdavBusy} type="button" onClick={backupToWebDav}>
+                        Backup now
+                      </button>
+                      <button className={secondaryButtonCls} disabled={webdavBusy} type="button" onClick={refreshWebDavFiles}>
+                        List backups
                       </button>
                     </div>
-                  </div>
-                ))
-              ) : (
-                <div className="rounded-xl border border-dashed border-[#e0e0e0] bg-white p-3 text-xs text-[#8a8a8a]">暂无已记住的权限规则。</div>
+                    {webdavStatus && (
+                      <div className="mt-3 rounded-lg border border-[#e2e5ea] bg-[#fbfcfd] p-3 text-[12px] leading-5 text-[#6f7782]">
+                        {webdavStatus}
+                      </div>
+                    )}
+                    <div className="mt-4 overflow-hidden rounded-lg border border-[#e2e5ea]">
+                      <div className="grid grid-cols-[minmax(0,1fr)_120px_80px] gap-2 border-b border-[#eceff3] bg-[#f8f9fb] px-3 py-2 text-[11px] font-semibold text-[#7a8088]">
+                        <span>File</span>
+                        <span>Modified</span>
+                        <span className="text-right">Action</span>
+                      </div>
+                      {webdavFiles.length ? (
+                        webdavFiles.map((file) => (
+                          <div
+                            key={file.file_name}
+                            className="grid grid-cols-[minmax(0,1fr)_120px_80px] items-center gap-2 border-b border-[#f0f2f5] px-3 py-2 text-[12px] last:border-b-0"
+                          >
+                            <div className="min-w-0">
+                              <div className="truncate font-medium text-[#202124]" title={file.file_name}>
+                                {file.file_name}
+                              </div>
+                              <div className="text-[#8a9099]">{formatBytes(file.size)}</div>
+                            </div>
+                            <div className="truncate text-[#7a8088]" title={file.modified_time}>
+                              {file.modified_time || "-"}
+                            </div>
+                            <button
+                              className="justify-self-end rounded-md px-2 py-1 text-[12px] text-[#b42318] transition hover:bg-[#fff1f2]"
+                              disabled={webdavBusy}
+                              type="button"
+                              onClick={() => deleteWebDavFile(file.file_name)}
+                            >
+                              Delete
+                            </button>
+                          </div>
+                        ))
+                      ) : (
+                        <div className="px-3 py-4 text-[12px] text-[#7a8088]">No backup files loaded.</div>
+                      )}
+                    </div>
+                  </Section>
+                </>
+              )}
+
+              {activeTab === "context" && (
+                <>
+                  <Section title="Context Budget" description="These limits control prompt assembly and history trimming.">
+                    <div className="grid gap-4 sm:grid-cols-2">
+                      <Field label="Max input tokens">
+                        <input
+                          className={inputCls}
+                          type="number"
+                          min={4000}
+                          step={1000}
+                          value={form.max_input_tokens}
+                          onChange={(e) => set("max_input_tokens", Number(e.target.value) || 0)}
+                        />
+                      </Field>
+                      <Field label="Reserved output tokens">
+                        <input
+                          className={inputCls}
+                          type="number"
+                          min={512}
+                          step={256}
+                          value={form.reserved_output_tokens}
+                          onChange={(e) => set("reserved_output_tokens", Number(e.target.value) || 0)}
+                        />
+                      </Field>
+                    </div>
+                    <div className="mt-4 rounded-lg border border-[#e2e5ea] bg-[#fbfcfd] p-3">
+                      <div className="mb-3 flex items-center justify-between gap-3">
+                        <div className="text-[13px] font-medium text-[#202124]">Current session</div>
+                        <button
+                          className={secondaryButtonCls}
+                          type="button"
+                          onClick={async () => setContextState(await api.contextPanelState())}
+                        >
+                          Refresh
+                        </button>
+                      </div>
+                      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                        <ContextMetric label="Messages" value={contextState?.message_count ?? 0} />
+                        <ContextMetric label="User" value={contextState?.user_messages ?? 0} />
+                        <ContextMetric label="Assistant" value={contextState?.assistant_messages ?? 0} />
+                        <ContextMetric label="Tool" value={contextState?.tool_messages ?? 0} />
+                      </div>
+                      <div className="mt-3 h-2 overflow-hidden rounded-full bg-[#e8ebef]">
+                        <div className="h-full rounded-full bg-[#111827]" style={{ width: `${tokenPct}%` }} />
+                      </div>
+                      <div className="mt-2 text-[12px] text-[#7a8088]">
+                        Estimated history {contextState?.estimated_history_tokens ?? 0} /{" "}
+                        {contextState?.max_input_tokens ?? form.max_input_tokens} tokens. Summary{" "}
+                        {contextState?.summary_chars ?? 0} chars.
+                      </div>
+                    </div>
+                  </Section>
+                  <Section title="Memory">
+                    <ToggleRow
+                      checked={form.auto_memory_enabled}
+                      title="Automatic long-term memory extraction"
+                      description="Extract durable user preferences and project constraints into sandbox/.demiurge/memory.md."
+                      onChange={(checked) => set("auto_memory_enabled", checked)}
+                    />
+                    <div className="mt-4 rounded-lg border border-[#e2e5ea] bg-[#fbfcfd] p-3">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="text-[13px] font-medium text-[#202124]">Project memory audit</div>
+                          <div className="mt-1 break-all text-[12px] text-[#7a8088]">
+                            {memoryState?.path || ".demiurge/memory.md"}
+                          </div>
+                        </div>
+                        <div className="flex shrink-0 gap-2">
+                          <button
+                            className={secondaryButtonCls}
+                            type="button"
+                            disabled={memoryBusy}
+                            onClick={() => runMemoryAction(api.memoryPanelState)}
+                          >
+                            Refresh
+                          </button>
+                          <button
+                            className={secondaryButtonCls}
+                            type="button"
+                            disabled={memoryBusy || !memoryState?.duplicates.length}
+                            onClick={() => runMemoryAction(api.memoryDedupeApply)}
+                          >
+                            Dedupe {memoryState?.duplicates.length || 0}
+                          </button>
+                        </div>
+                      </div>
+                      {memoryError && (
+                        <div className="mt-3 rounded-lg border border-[#ffd7d7] bg-[#fff7f7] p-3 text-[12px] text-[#b42318]">
+                          {memoryError}
+                        </div>
+                      )}
+                      <div className="mt-3 max-h-72 space-y-2 overflow-auto">
+                        {memoryState?.entries.length ? (
+                          memoryState.entries.map((entry) => {
+                            const duplicate = memoryState.duplicates.some((group) =>
+                              group.duplicate_ids.includes(entry.id),
+                            );
+                            return (
+                              <div key={entry.id} className="rounded-lg border border-[#e2e5ea] bg-white p-3">
+                                <div className="mb-2 flex flex-wrap items-center gap-2 text-[11px] text-[#7a8088]">
+                                  <span className="rounded-md bg-[#eef1f5] px-1.5 py-0.5 text-[#4f5661]">
+                                    {entry.kind}
+                                  </span>
+                                  <span>line {entry.line}</span>
+                                  {duplicate && (
+                                    <span className="rounded-md bg-[#fff6dd] px-1.5 py-0.5 text-[#8a5a00]">
+                                      duplicate
+                                    </span>
+                                  )}
+                                </div>
+                                <textarea
+                                  className="min-h-16 w-full resize-y rounded-md border border-[#d9d9d9] px-2 py-1.5 text-[12px] text-[#202124] outline-none transition focus:border-[#7a7f87] focus:ring-2 focus:ring-[#202124]/5"
+                                  value={entry.text}
+                                  onChange={(e) => {
+                                    const text = e.target.value;
+                                    setMemoryState((cur) =>
+                                      cur
+                                        ? {
+                                            ...cur,
+                                            entries: cur.entries.map((item) =>
+                                              item.id === entry.id ? { ...item, text } : item,
+                                            ),
+                                          }
+                                        : cur,
+                                    );
+                                  }}
+                                />
+                                <div className="mt-2 flex justify-end gap-2">
+                                  <button
+                                    className={secondaryButtonCls}
+                                    type="button"
+                                    disabled={memoryBusy}
+                                    onClick={() => runMemoryAction(() => api.memoryDeleteEntry(entry.id))}
+                                  >
+                                    Delete
+                                  </button>
+                                  <button
+                                    className="inline-flex h-8 items-center justify-center rounded-md bg-[#111827] px-3 text-[12px] font-medium text-white transition hover:bg-[#2b3442] disabled:cursor-not-allowed disabled:bg-[#b8bec8]"
+                                    type="button"
+                                    disabled={memoryBusy}
+                                    onClick={() =>
+                                      runMemoryAction(() => api.memoryUpdateEntry(entry.id, entry.kind, entry.text))
+                                    }
+                                  >
+                                    Save
+                                  </button>
+                                </div>
+                              </div>
+                            );
+                          })
+                        ) : (
+                          <div className="rounded-lg border border-dashed border-[#d8dde5] bg-white p-4 text-[12px] text-[#7a8088]">
+                            No project memory entries.
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </Section>
+                  <Section title="Custom Agents" description="Agent definitions loaded from the project sandbox.">
+                    <div className="rounded-lg border border-[#e2e5ea] bg-[#fbfcfd] p-3">
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="text-[13px] font-medium text-[#202124]">
+                            {agentPanel.definitions.length} definitions
+                          </div>
+                          <div className="mt-1 break-all text-[12px] text-[#7a8088]">
+                            {agentPanel.agents_dir || ".demiurge/agents"}
+                          </div>
+                        </div>
+                      </div>
+                      <div className="mt-3 grid gap-2">
+                        {agentPanel.definitions.length ? (
+                          agentPanel.definitions.slice(0, 6).map((agent) => (
+                            <div key={agent.name} className="rounded-md border border-[#e2e5ea] bg-white p-3">
+                              <div className="truncate text-[13px] font-semibold text-[#202124]">{agent.name}</div>
+                              <div className="mt-1 truncate text-[12px] text-[#7a8088]">
+                                {agent.kind} / {agent.description || agent.path}
+                              </div>
+                              <div className="mt-1 truncate text-[12px] text-[#8a9099]">
+                                tools: {agent.allowed_tools.length ? agent.allowed_tools.join(", ") : "default"}
+                              </div>
+                              {agent.invalid_tools.length ? (
+                                <div className="mt-1 truncate text-[12px] text-[#b42318]">
+                                  invalid: {agent.invalid_tools.join(", ")}
+                                </div>
+                              ) : null}
+                            </div>
+                          ))
+                        ) : (
+                          <div className="rounded-md border border-dashed border-[#d8dde5] bg-white p-4 text-[12px] text-[#7a8088]">
+                            No custom agent definitions loaded.
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </Section>
+                </>
+              )}
+
+              {activeTab === "tools" && (
+                <>
+                  <Section title="Computer Use / OCR">
+                    <ToggleRow
+                      checked={form.computer_use_enabled}
+                      title="Enable screen and OCR tools"
+                      description="Screen capture and OCR still require explicit confirmation before reading pixels."
+                      onChange={(checked) => set("computer_use_enabled", checked)}
+                    />
+                    <div className="mt-4 grid gap-3 sm:grid-cols-[1fr_auto]">
+                      <Field label="OCR model source">
+                        <select
+                          className={inputCls}
+                          value={form.ocr_model_source}
+                          onChange={(e) => set("ocr_model_source", e.target.value as OcrModelSource)}
+                        >
+                          {ocrSources.map((s) => (
+                            <option key={s.value} value={s.value}>
+                              {s.label}
+                            </option>
+                          ))}
+                        </select>
+                      </Field>
+                      <button
+                        className="mt-[22px] inline-flex h-9 items-center justify-center rounded-md bg-[#111827] px-4 text-[12px] font-medium text-white transition hover:bg-[#2b3442] disabled:cursor-not-allowed disabled:bg-[#b8bec8]"
+                        disabled={ocrBusy}
+                        onClick={downloadOcrModels}
+                        type="button"
+                      >
+                        {ocrBusy ? "Downloading" : ocrStatus?.installed ? "Redownload" : "Download models"}
+                      </button>
+                    </div>
+                    <div className="mt-3 rounded-lg border border-[#e2e5ea] bg-[#fbfcfd] p-3 text-[12px] leading-5 text-[#6f7782]">
+                      <div>Status: {ocrStatus?.installed ? "Installed" : "Not installed"} {ocrStatus ? `(${formatBytes(ocrStatus.totalBytes)})` : ""}</div>
+                      {ocrStatus?.modelDir && <div className="break-all">Path: {ocrStatus.modelDir}</div>}
+                      {ocrStatus && !ocrStatus.installed && <div>Missing: {ocrStatus.missing.join(", ")}</div>}
+                      {ocrProgress && (
+                        <div>
+                          {ocrProgress.file}: {formatBytes(ocrProgress.downloadedBytes)}
+                          {ocrProgress.totalBytes ? ` / ${formatBytes(ocrProgress.totalBytes)}` : ""}
+                          {progressPct !== null ? ` (${progressPct}%)` : ""}
+                        </div>
+                      )}
+                      {ocrError && <div className="text-[#b42318]">{ocrError}</div>}
+                    </div>
+                  </Section>
+                  <Section title="Permission Rules" description="Rules remembered from confirmation dialogs.">
+                    <div className="mb-3 flex justify-end">
+                      <button
+                        className={secondaryButtonCls}
+                        type="button"
+                        disabled={permissionBusy}
+                        onClick={async () => setPermissionState(await api.permissionPanelState())}
+                      >
+                        Refresh
+                      </button>
+                    </div>
+                    <div className="space-y-2">
+                      {permissionState?.rules.length ? (
+                        permissionState.rules.map((rule) => (
+                          <div key={`${rule.scope}:${rule.tool}`} className="rounded-lg border border-[#e2e5ea] bg-white p-3">
+                            <div className="flex items-start gap-3">
+                              <div className="min-w-0 flex-1">
+                                <div className="truncate text-[13px] font-semibold text-[#202124]">{rule.tool}</div>
+                                <div className="mt-1 text-[12px] text-[#7a8088]">
+                                  {permissionEffectLabel(rule.effect)} / {permissionScopeLabel(rule.scope)} /{" "}
+                                  {formatTime(rule.updated_at)}
+                                </div>
+                                <div className="mt-1 text-[12px] leading-5 text-[#8a9099]">{rule.reason}</div>
+                              </div>
+                              <button
+                                className={secondaryButtonCls}
+                                type="button"
+                                disabled={permissionBusy}
+                                onClick={() => resetPermissionRule(rule.scope, rule.tool)}
+                              >
+                                Clear
+                              </button>
+                            </div>
+                          </div>
+                        ))
+                      ) : (
+                        <div className="rounded-lg border border-dashed border-[#d8dde5] bg-[#fbfcfd] p-4 text-[12px] text-[#7a8088]">
+                          No remembered permission rules.
+                        </div>
+                      )}
+                    </div>
+                    <div className="mt-4 max-h-44 overflow-auto rounded-lg border border-[#e2e5ea] bg-[#fbfcfd] p-3 text-[12px] text-[#6f7782]">
+                      <div className="mb-2 font-semibold text-[#202124]">Recent audit</div>
+                      {permissionState?.audit.length ? (
+                        permissionState.audit.slice(0, 8).map((entry) => (
+                          <div key={`${entry.timestamp}:${entry.tool}:${entry.reason}`} className="border-t border-[#e8ebef] py-2 first:border-t-0">
+                            <span className="font-medium text-[#202124]">{entry.tool}</span> /{" "}
+                            {permissionEffectLabel(entry.effect)} / {permissionScopeLabel(entry.scope)} /{" "}
+                            {formatTime(entry.timestamp)}
+                            <div className="text-[#8a9099]">{entry.reason}</div>
+                          </div>
+                        ))
+                      ) : (
+                        <div>No audit entries.</div>
+                      )}
+                    </div>
+                  </Section>
+                </>
+              )}
+
+              {activeTab === "voice" && (
+                <>
+                  <Section title="Voice">
+                    <ToggleRow
+                      checked={form.voice_enabled}
+                      title="Enable voice adapters"
+                      description="The backend interface is reserved. Concrete STT/TTS providers can be wired later."
+                      onChange={(checked) => set("voice_enabled", checked)}
+                    />
+                    <div className="mt-4 grid gap-4 sm:grid-cols-2">
+                      <Field label="STT backend">
+                        <input
+                          className={inputCls}
+                          value={form.voice_stt_backend}
+                          placeholder="none / whisper / doubao"
+                          onChange={(e) => set("voice_stt_backend", e.target.value)}
+                        />
+                      </Field>
+                      <Field label="TTS backend">
+                        <input
+                          className={inputCls}
+                          value={form.voice_tts_backend}
+                          placeholder="none / GPT-SoVITS / CosyVoice"
+                          onChange={(e) => set("voice_tts_backend", e.target.value)}
+                        />
+                      </Field>
+                    </div>
+                    <div className="mt-4">
+                      <Field label="Voice ID">
+                        <input
+                          className={inputCls}
+                          value={form.voice_id}
+                          placeholder="default"
+                          onChange={(e) => set("voice_id", e.target.value)}
+                        />
+                      </Field>
+                    </div>
+                  </Section>
+                </>
+              )}
+
+              {activeTab === "advanced" && (
+                <>
+                  <Section title="Compatibility Limits">
+                    <Field label="Max context characters" help="Legacy character limit retained for older trimming paths.">
+                      <input
+                        className={inputCls}
+                        type="number"
+                        min={2000}
+                        step={1000}
+                        value={form.max_context_chars}
+                        onChange={(e) => set("max_context_chars", Number(e.target.value) || 0)}
+                      />
+                    </Field>
+                  </Section>
+                </>
               )}
             </div>
-            <div className="mt-3 max-h-40 overflow-auto rounded-xl border border-[#ececec] bg-white p-3 text-xs text-[#6f6f6f]">
-              <div className="mb-2 font-medium text-[#3f3f3f]">最近审计</div>
-              {permissionState?.audit.length ? (
-                permissionState.audit.slice(0, 8).map((entry) => (
-                  <div key={`${entry.timestamp}:${entry.tool}:${entry.reason}`} className="border-t border-[#f1f1f1] py-1.5 first:border-t-0">
-                    <span className="font-medium text-[#333]">{entry.tool}</span> · {permissionEffectLabel(entry.effect)} · {permissionScopeLabel(entry.scope)} · {formatTime(entry.timestamp)}
-                    <div className="text-[#9a9a9a]">{entry.reason}</div>
-                  </div>
-                ))
-              ) : (
-                <div className="text-[#9a9a9a]">暂无审计记录。</div>
-              )}
-            </div>
           </div>
-
-          <div className="rounded-2xl border border-[#eeeeee] bg-[#fafafa] p-3">
-            <label className="flex items-start gap-3">
-              <input
-                className="mt-1 h-4 w-4 accent-[#10a37f]"
-                type="checkbox"
-                checked={form.voice_enabled}
-                onChange={(e) => set("voice_enabled", e.target.checked)}
-              />
-              <span>
-                <span className="block text-sm font-medium text-[#3f3f3f]">Voice API 预留</span>
-                <span className="mt-1 block text-xs text-[#9a9a9a]">先保存 STT/TTS 后端选择；录音、转写和合成实现后续接入。</span>
-              </span>
-            </label>
-            <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
-              <label className="block">
-                <span className={labelCls}>STT 后端</span>
-                <input
-                  className={inputCls}
-                  value={form.voice_stt_backend}
-                  placeholder="none / whisper / doubao"
-                  onChange={(e) => set("voice_stt_backend", e.target.value)}
-                />
-              </label>
-              <label className="block">
-                <span className={labelCls}>TTS 后端</span>
-                <input
-                  className={inputCls}
-                  value={form.voice_tts_backend}
-                  placeholder="none / GPT-SoVITS / CosyVoice"
-                  onChange={(e) => set("voice_tts_backend", e.target.value)}
-                />
-              </label>
-            </div>
-            <label className="mt-3 block">
-              <span className={labelCls}>Voice ID / 角色音色</span>
-              <input
-                className={inputCls}
-                value={form.voice_id}
-                placeholder="例如 default、角色名或服务端 voice id"
-                onChange={(e) => set("voice_id", e.target.value)}
-              />
-            </label>
-          </div>
-
-          <div className="rounded-2xl border border-[#eeeeee] bg-[#fafafa] p-3">
-            <label className="flex items-start gap-3">
-              <input
-                className="mt-1 h-4 w-4 accent-[#10a37f]"
-                type="checkbox"
-                checked={form.computer_use_enabled}
-                onChange={(e) => set("computer_use_enabled", e.target.checked)}
-              />
-              <span>
-                <span className="block text-sm font-medium text-[#3f3f3f]">Computer Use / OCR</span>
-                <span className="mt-1 block text-xs text-[#9a9a9a]">
-                  启用后，Agent 可在确认后读取窗口标题、截图并用本地 OCR 识别屏幕文本。
-                </span>
-              </span>
-            </label>
-            <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-[1fr_auto]">
-              <label className="block">
-                <span className={labelCls}>OCR 模型下载源</span>
-                <select
-                  className={inputCls}
-                  value={form.ocr_model_source}
-                  onChange={(e) => set("ocr_model_source", e.target.value as OcrModelSource)}
-                >
-                  {ocrSources.map((s) => (
-                    <option key={s.value} value={s.value}>
-                      {s.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <button
-                className="self-end rounded-xl bg-[#111] px-4 py-2.5 text-sm text-white transition disabled:cursor-not-allowed disabled:bg-[#b9b9b9]"
-                disabled={ocrBusy}
-                onClick={downloadOcrModels}
-                type="button"
-              >
-                {ocrBusy ? "下载中" : ocrStatus?.installed ? "重新下载" : "下载模型"}
-              </button>
-            </div>
-            <div className="mt-2 space-y-1 text-xs text-[#7a7a7a]">
-              <div>状态：{ocrStatus?.installed ? "已安装" : "未安装"} {ocrStatus ? `(${formatBytes(ocrStatus.totalBytes)})` : ""}</div>
-              {ocrStatus?.modelDir ? <div className="break-all">目录：{ocrStatus.modelDir}</div> : null}
-              {ocrStatus && !ocrStatus.installed ? <div>缺少：{ocrStatus.missing.join(", ")}</div> : null}
-              {ocrProgress ? (
-                <div>
-                  {ocrProgress.file}：{formatBytes(ocrProgress.downloadedBytes)}
-                  {ocrProgress.totalBytes ? ` / ${formatBytes(ocrProgress.totalBytes)}` : ""}
-                  {progressPct !== null ? ` (${progressPct}%)` : ""}
-                </div>
-              ) : null}
-              {ocrError ? <div className="text-[#b42318]">{ocrError}</div> : null}
-            </div>
-          </div>
-
-          <label className="block">
-            <span className={labelCls}>上下文上限（字符数，兼容兜底）</span>
-            <input
-              className={inputCls}
-              type="number"
-              min={2000}
-              step={1000}
-              value={form.max_context_chars}
-              onChange={(e) => set("max_context_chars", Number(e.target.value) || 0)}
-            />
-          </label>
-        </div>
-
-        <div className="mt-6 flex justify-end gap-2">
-          <button
-            className="rounded-full border border-[#e5e5e5] px-4 py-2 text-sm text-[#3f3f3f] transition hover:bg-[#f7f7f7]"
-            onClick={onClose}
-          >
-            取消
-          </button>
-          <button
-            className="rounded-full bg-[#111] px-5 py-2 text-sm text-white transition hover:bg-[#333]"
-            onClick={() => {
-              const maxInput = Math.max(4000, form.max_input_tokens || 0);
-              const reserved = Math.min(Math.max(512, form.reserved_output_tokens || 0), maxInput - 512);
-              onSave({
-                ...form,
-                max_context_chars: Math.max(2000, form.max_context_chars || 0),
-                max_input_tokens: maxInput,
-                reserved_output_tokens: reserved,
-                voice_stt_backend: form.voice_stt_backend.trim() || "none",
-                voice_tts_backend: form.voice_tts_backend.trim() || "none",
-                voice_id: form.voice_id.trim(),
-                ocr_model_source: form.ocr_model_source || "modelscope",
-                web_search_provider: normalizeWebSearchProvider(form.web_search_provider),
-                tavily_api_key: form.tavily_api_key.trim(),
-                brave_search_api_key: form.brave_search_api_key.trim(),
-                exa_api_key: form.exa_api_key.trim(),
-              });
-            }}
-          >
-            保存
-          </button>
-        </div>
+        </section>
       </div>
     </div>
   );

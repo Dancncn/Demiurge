@@ -3,6 +3,14 @@ node_modules/
 dist/
 src-tauri/target/
 src-tauri/gen/
+.tauri-dev/
+
+# 本地调试与 Playwright MCP 产物
+.playwright-mcp/
+.tmp/
+demiurge-*.png
+playwright-report/
+test-results/
 
 # 本地编译加速：把 target 指向另一个项目以复用已编译依赖（含绝对路径，仅本机有效，不入库）
 src-tauri/.cargo/

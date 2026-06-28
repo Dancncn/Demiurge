@@ -75,21 +75,21 @@ export function Sidebar({
     <>
       {open && <div onClick={onToggle} aria-hidden className="fixed inset-0 z-30 bg-black/20 md:hidden" />}
       <aside
-        className={`fixed inset-y-0 left-0 z-40 flex w-[260px] flex-col border-r border-[#ededed] bg-[#f9f9f7] px-3 py-3 shadow-[12px_0_32px_rgba(0,0,0,0.08)] transition-transform duration-200 md:relative md:z-auto md:shrink-0 md:translate-x-0 md:shadow-none md:transition-[width] ${
+        className={`fixed inset-y-0 left-0 z-40 flex w-[260px] flex-col border-r border-[#dfe3e8] bg-[#eef1f5] px-2 py-2 shadow-[12px_0_32px_rgba(15,23,42,0.12)] transition-transform duration-200 md:relative md:z-auto md:shrink-0 md:translate-x-0 md:shadow-none md:transition-[width] ${
           open ? "translate-x-0" : "-translate-x-full"
         } ${open ? "md:w-[230px]" : "md:w-[64px]"}`}
       >
-        <div className={`mb-4 flex items-center ${open ? "justify-between px-1" : "justify-center"}`}>
+        <div className={`mb-3 flex h-9 items-center ${open ? "justify-between px-1" : "justify-center"}`}>
           <button
             onClick={onToggle}
-            className="grid h-9 w-9 shrink-0 place-items-center rounded-lg text-[#3f3f3f] transition hover:bg-[#ececea]"
+            className="grid h-8 w-8 shrink-0 place-items-center rounded-md text-[#4f5661] transition hover:bg-[#dfe4ea]"
             aria-label="折叠侧边栏"
           >
             <PanelLeftIcon size={20} />
           </button>
           <button
             onClick={onNewChat}
-            className={`grid h-9 w-9 place-items-center rounded-lg text-[#3f3f3f] transition hover:bg-[#ececea] ${open ? "" : "hidden"}`}
+            className={`grid h-8 w-8 place-items-center rounded-md text-[#4f5661] transition hover:bg-[#dfe4ea] ${open ? "" : "hidden"}`}
             aria-label="新建对话"
           >
             <ComposeIcon size={19} />
@@ -98,21 +98,21 @@ export function Sidebar({
 
         <button
           onClick={onNewChat}
-          className={`mb-5 flex h-10 items-center gap-3 rounded-lg text-left text-sm hover:bg-[#ececea] ${open ? "px-3" : "justify-center px-0"}`}
+          className={`mb-4 flex h-9 items-center gap-2 rounded-md text-left text-[13px] text-[#202124] hover:bg-[#dfe4ea] ${open ? "px-2" : "justify-center px-0"}`}
         >
-          <img src="/demiurge.png" alt="Demiurge" className="size-8 shrink-0 rounded-full bg-[#faf8fd] object-contain" />
+          <img src="/demiurge.png" alt="Demiurge" className="size-7 shrink-0 rounded-md border border-[#dfe3e8] bg-white object-contain" />
           {open && <span>新对话</span>}
         </button>
 
         <div className={`min-h-0 flex-1 overflow-y-auto ${open ? "" : "hidden"}`}>
-          <div className="px-3 pb-2 text-xs font-medium text-[#8a8a8a]">对话</div>
-          {sessions.length === 0 && <div className="px-3 py-2 text-sm text-[#b4b4b4]">还没有对话</div>}
+          <div className="px-2 pb-1.5 text-[11px] font-semibold uppercase tracking-wide text-[#8a9099]">Chats</div>
+          {sessions.length === 0 && <div className="px-2 py-2 text-[13px] text-[#9aa1ab]">还没有对话</div>}
           {sessions.map((s) => {
             const editing = editingId === s.id;
             return (
               <div
                 key={s.id}
-                className={`group relative mb-1 rounded-lg ${s.id === activeId ? "bg-[#ececea]" : "hover:bg-[#ececea]"}`}
+                className={`group relative mb-1 rounded-md ${s.id === activeId ? "bg-white shadow-sm" : "hover:bg-[#dfe4ea]"}`}
               >
                 <div className="flex items-center">
                   {editing ? (
@@ -134,7 +134,7 @@ export function Sidebar({
                           setRenameError(null);
                         }
                       }}
-                      className="mx-1 min-w-0 flex-1 rounded-md border border-[#d8d8d6] bg-white px-2 py-1.5 text-sm outline-none focus:border-[#171717] disabled:opacity-60"
+                      className="mx-1 min-w-0 flex-1 rounded-md border border-[#cfd5dd] bg-white px-2 py-1.5 text-[13px] outline-none focus:border-[#111827] disabled:opacity-60"
                       aria-label="会话标题"
                     />
                   ) : (
@@ -142,7 +142,7 @@ export function Sidebar({
                       onClick={() => onSelectSession(s.id)}
                       onDoubleClick={() => beginRename(s)}
                       disabled={busy}
-                      className="min-w-0 flex-1 truncate px-3 py-2 text-left text-sm disabled:cursor-not-allowed disabled:opacity-60"
+                      className="min-w-0 flex-1 truncate px-2.5 py-2 text-left text-[13px] text-[#202124] disabled:cursor-not-allowed disabled:opacity-60"
                       title={`${s.title}\n双击重命名`}
                     >
                       {s.title}
@@ -152,7 +152,7 @@ export function Sidebar({
                     <button
                       onClick={() => beginRename(s)}
                       disabled={busy}
-                      className="grid h-7 w-7 shrink-0 place-items-center rounded-md text-[#6f6f6f] opacity-0 transition hover:bg-[#dededc] hover:text-[#111] group-hover:opacity-100 disabled:opacity-0"
+                      className="grid h-7 w-7 shrink-0 place-items-center rounded-md text-[#69707a] opacity-0 transition hover:bg-[#cfd5dd] hover:text-[#111827] group-hover:opacity-100 disabled:opacity-0"
                       aria-label="重命名对话"
                       title="重命名"
                     >
@@ -162,7 +162,7 @@ export function Sidebar({
                   <button
                     onClick={() => onDeleteSession(s.id)}
                     disabled={busy || editing}
-                    className="mr-1 grid h-7 w-7 shrink-0 place-items-center rounded-md text-[#6f6f6f] opacity-0 transition hover:bg-[#dededc] hover:text-[#dc2626] group-hover:opacity-100 disabled:opacity-0"
+                    className="mr-1 grid h-7 w-7 shrink-0 place-items-center rounded-md text-[#69707a] opacity-0 transition hover:bg-[#cfd5dd] hover:text-[#dc2626] group-hover:opacity-100 disabled:opacity-0"
                     aria-label="删除对话"
                   >
                     <TrashIcon size={15} />
@@ -173,25 +173,25 @@ export function Sidebar({
             );
           })}
 
-          <div className="mt-4 px-3 pb-2 text-xs font-medium text-[#8a8a8a]">工具</div>
+          <div className="mt-4 px-2 pb-1.5 text-[11px] font-semibold uppercase tracking-wide text-[#8a9099]">Tools</div>
           <button
             onClick={onOpenSandbox}
-            className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-sm transition hover:bg-[#ececea]"
+            className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-[13px] text-[#202124] transition hover:bg-[#dfe4ea]"
           >
             <FolderIcon size={16} className="text-[#8a8a8a]" />
             打开沙盒目录
           </button>
         </div>
 
-        <div className="border-t border-[#ededed] pt-3">
+        <div className="border-t border-[#dfe3e8] pt-2">
           <button
             onClick={onOpenSettings}
-            className={`flex w-full items-center gap-3 rounded-lg py-2 text-left text-sm transition hover:bg-[#ececea] ${open ? "px-2" : "justify-center px-0"}`}
+            className={`flex w-full items-center gap-2 rounded-md py-2 text-left text-[13px] transition hover:bg-[#dfe4ea] ${open ? "px-2" : "justify-center px-0"}`}
             aria-label="设置"
           >
             {open ? (
               <>
-                <img src="/demiurge.png" alt="Demiurge" className="size-8 shrink-0 rounded-full bg-[#faf8fd] object-contain" />
+                <img src="/demiurge.png" alt="Demiurge" className="size-7 shrink-0 rounded-md border border-[#dfe3e8] bg-white object-contain" />
                 <span className="min-w-0 flex-1 truncate text-[#3f3f3f]">{packName}</span>
                 <SettingsIcon size={17} className="shrink-0 text-[#8a8a8a]" />
               </>

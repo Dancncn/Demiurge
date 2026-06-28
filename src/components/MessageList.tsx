@@ -23,7 +23,7 @@ const UserMessage = memo(function UserMessage({ text }: { text: string }) {
   return (
     <article className="cf-message-in flex justify-end">
       <div className="max-w-[78%]">
-        <div className="whitespace-pre-wrap rounded-[22px] bg-[#f4f4f4] px-5 py-2.5 text-[15px] leading-[1.6]">
+        <div className="whitespace-pre-wrap rounded-lg bg-[#eef1f5] px-4 py-2.5 text-[14px] leading-[1.6] text-[#202124]">
           {text}
         </div>
       </div>
@@ -53,11 +53,11 @@ const AssistantMessage = memo(function AssistantMessage({
 
   return (
     <article className="cf-message-in group flex justify-start">
-      <img src={AVATAR} alt="AI" className="mr-3 mt-0.5 size-8 shrink-0 rounded-full border border-[#ececec] object-contain bg-[#faf8fd]" />
+      <img src={AVATAR} alt="AI" className="mr-3 mt-0.5 size-7 shrink-0 rounded-md border border-[#dfe3e8] bg-white object-contain" />
       <div className="min-w-0 max-w-[82%]">
-        <div className="py-0.5 text-[15px] leading-[1.55]">
+        <div className="py-0.5 text-[14px] leading-[1.6]">
           {error ? (
-            <div className="rounded-2xl border border-[#fde68a] bg-[#fffbeb] px-4 py-3 text-sm text-[#92400e]">{text}</div>
+            <div className="rounded-lg border border-[#fde68a] bg-[#fffbeb] px-4 py-3 text-[13px] text-[#92400e]">{text}</div>
           ) : (
             <Markdown text={text} streaming={streaming} />
           )}
@@ -67,7 +67,7 @@ const AssistantMessage = memo(function AssistantMessage({
                 type="button"
                 onClick={copy}
                 title="复制"
-                className="grid h-8 w-8 place-items-center rounded-lg transition hover:bg-[#f0f0f0] hover:text-[#3f3f3f]"
+                className="grid h-8 w-8 place-items-center rounded-md transition hover:bg-[#eef1f5] hover:text-[#202124]"
               >
                 {copied ? <CheckIcon size={16} /> : <CopyIcon size={16} />}
               </button>
@@ -94,22 +94,27 @@ export function MessageList({ items, thinking, greeting, suggestions, onSuggesti
   }, [items, thinking]);
 
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain [-webkit-overflow-scrolling:touch]">
-      <div className="mx-auto flex w-full max-w-3xl flex-col px-4 pb-44 pt-6">
+    <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain bg-white [-webkit-overflow-scrolling:touch]">
+      <div className="mx-auto flex w-full max-w-3xl flex-col px-4 pb-40 pt-5">
         {items.length === 0 && !thinking ? (
-          <div className="cf-message-in flex flex-1 flex-col items-center justify-center pb-24 text-center">
-            <img
-              src={AVATAR}
-              alt="AI"
-              className="mb-6 size-14 rounded-full border border-[#ececec] object-contain bg-[#faf8fd] shadow-[0_8px_24px_rgba(0,0,0,0.08)]"
-            />
-            <h1 className="mb-8 text-[28px] font-semibold tracking-tight text-[#2b2b2b]">{greeting}</h1>
-            <div className="grid w-full max-w-2xl grid-cols-1 gap-2.5 sm:grid-cols-2">
+          <div className="cf-message-in flex flex-1 flex-col justify-center pb-24">
+            <div className="mb-5 flex items-center gap-3">
+              <img
+                src={AVATAR}
+                alt="AI"
+                className="size-10 rounded-lg border border-[#dfe3e8] bg-white object-contain shadow-sm"
+              />
+              <div>
+                <h1 className="text-[18px] font-semibold text-[#202124]">{greeting}</h1>
+                <p className="mt-1 text-[12px] text-[#7a8088]">Pick a starter or type directly in the composer.</p>
+              </div>
+            </div>
+            <div className="grid w-full grid-cols-1 gap-2 sm:grid-cols-2">
               {suggestions.map((item) => (
                 <button
                   key={item}
                   onClick={() => onSuggestionClick(item)}
-                  className="rounded-2xl border border-[#e8e8e8] px-4 py-3.5 text-left text-sm text-[#3f3f3f] transition hover:border-[#dcdcdc] hover:bg-[#f7f7f7] hover:shadow-[0_4px_14px_rgba(0,0,0,0.04)]"
+                  className="rounded-lg border border-[#e2e5ea] bg-[#fbfcfd] px-3 py-2.5 text-left text-[13px] text-[#3f4652] transition hover:border-[#cfd5dd] hover:bg-[#f6f7f9]"
                 >
                   {item}
                 </button>
@@ -137,7 +142,7 @@ export function MessageList({ items, thinking, greeting, suggestions, onSuggesti
             )}
             {thinking && (
               <article className="cf-message-in flex justify-start">
-                <img src={AVATAR} alt="AI" className="mr-3 mt-0.5 size-8 shrink-0 rounded-full border border-[#ececec] object-contain bg-[#faf8fd]" />
+                <img src={AVATAR} alt="AI" className="mr-3 mt-0.5 size-7 shrink-0 rounded-md border border-[#dfe3e8] bg-white object-contain" />
                 <div className="py-1.5">
                   <ThinkingDots label="正在思考…" />
                 </div>

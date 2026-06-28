@@ -18,6 +18,7 @@ import ConfirmDialog from "./components/ConfirmDialog";
 import SettingsDialog from "./components/SettingsDialog";
 import WorkflowsPanel from "./components/WorkflowsPanel";
 import { CheckIcon, ChevronDownIcon, PanelLeftIcon, WrenchIcon } from "./components/Icons";
+import { attachmentKindLabel, buildAttachmentPrompt, formatAttachmentSize, type ProcessedAttachment } from "./lib/fileProcessing";
 
 const SUGGESTIONS = [
   "现在几点了？顺便说说今天该做点什么",
@@ -63,6 +64,20 @@ function buildHistory(msgs: Message[]): DisplayItem[] {
     }
   }
   return out;
+}
+
+function buildUserDisplayText(text: string, attachments: ProcessedAttachment[]) {
+  if (attachments.length === 0) return text;
+  const lines = text ? [text] : ["Attached files"];
+  lines.push("");
+  lines.push("Attachments:");
+  for (const attachment of attachments) {
+    const status = attachment.status === "error" ? `failed: ${attachment.error ?? "unable to read"}` : "ready";
+    lines.push(
+      `- ${attachment.name} (${attachmentKindLabel(attachment.kind)}, ${formatAttachmentSize(attachment.size)}, ${status})`,
+    );
+  }
+  return lines.join("\n");
 }
 
 export default function App() {
@@ -260,18 +275,20 @@ export default function App() {
     return () => document.removeEventListener("mousedown", onDown);
   }, [agentMenuOpen]);
 
-  async function handleSend(textArg?: string) {
+  async function handleSend(textArg?: string, attachments: ProcessedAttachment[] = []) {
     const text = (textArg ?? input).trim();
-    if (!text || busy) return;
+    const attachmentPrompt = buildAttachmentPrompt(attachments);
+    if ((!text && !attachmentPrompt) || busy) return false;
     setInput("");
     const uid = genId();
-    setItems((p) => [...p, { id: uid, kind: "user", text }]);
+    setItems((p) => [...p, { id: uid, kind: "user", text: buildUserDisplayText(text, attachments) }]);
     setBusy(true);
     try {
+      const prompt = `${text || "Please review the attached files."}${attachmentPrompt}`;
       if (selectedAgentNames.length) {
-        await api.sendWithAgents(text, selectedAgentNames);
+        await api.sendWithAgents(prompt, selectedAgentNames);
       } else {
-        await api.send(text);
+        await api.send(prompt);
       }
     } catch (err) {
       const id = curAssistantId.current;
@@ -285,6 +302,7 @@ export default function App() {
       setBusy(false);
       void refreshSessions(); // 标题/排序可能因本轮更新
     }
+    return true;
   }
 
   async function handleRespondConfirm(allow: boolean, scope: PermissionScope) {
@@ -387,14 +405,6 @@ export default function App() {
     );
   }
 
-  function onKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
-    if (e.nativeEvent.isComposing) return;
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      void handleSend();
-    }
-  }
-
   const last = items[items.length - 1];
   const tailStreaming = last?.kind === "assistant" && last.streaming;
   const tailToolRunning = last?.kind === "tool" && last.status === "running";
@@ -402,7 +412,7 @@ export default function App() {
   const canSend = input.trim().length > 0 && !busy;
 
   return (
-    <main className="flex h-[100dvh] overflow-hidden bg-gradient-to-b from-[#fdfbff] to-[#f6f0fb] text-[#171717]">
+    <main className="flex h-[100dvh] overflow-hidden bg-[#eef1f5] text-[#202124]">
       <Sidebar
         open={sidebarOpen}
         packName={packName}
@@ -418,12 +428,13 @@ export default function App() {
         onOpenSettings={() => setSettingsOpen(true)}
       />
 
-      <section className="flex min-h-0 min-w-0 flex-1 flex-col">
-        <header className="flex h-14 shrink-0 items-center gap-2 px-4">
+      <section className="flex min-h-0 min-w-0 flex-1 flex-col p-2 pl-0">
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-xl border border-[#dfe3e8] bg-white shadow-[0_1px_2px_rgba(15,23,42,0.06)]">
+        <header className="flex h-12 shrink-0 items-center gap-2 border-b border-[#eceff3] bg-[#fbfcfd] px-3">
           <button
             onClick={() => setSidebarOpen(true)}
             aria-label="打开侧边栏"
-            className="grid h-9 w-9 shrink-0 place-items-center rounded-lg text-[#3f3f3f] transition hover:bg-[#f5f5f5] md:hidden"
+            className="grid h-8 w-8 shrink-0 place-items-center rounded-md text-[#4f5661] transition hover:bg-[#eef1f5] md:hidden"
           >
             <PanelLeftIcon size={20} />
           </button>
@@ -431,7 +442,7 @@ export default function App() {
           <div ref={packMenuRef} className="relative">
             <button
               onClick={() => setPackMenuOpen((v) => !v)}
-              className="flex items-center gap-1 rounded-lg px-3 py-2 text-lg font-semibold text-[#2b2b2b] transition hover:bg-[#f5f5f5]"
+              className="flex h-8 items-center gap-1 rounded-md px-2 text-[14px] font-semibold text-[#202124] transition hover:bg-[#eef1f5]"
             >
               {packName}
               <ChevronDownIcon
@@ -440,14 +451,14 @@ export default function App() {
               />
             </button>
             {packMenuOpen && (
-              <div className="cf-pop cf-pop-down absolute left-0 top-12 z-20 max-h-[70vh] w-64 overflow-y-auto rounded-2xl border border-[#ececec] bg-white p-2 shadow-[0_16px_48px_rgba(0,0,0,0.16)]">
+              <div className="cf-pop cf-pop-down absolute left-0 top-10 z-20 max-h-[70vh] w-64 overflow-y-auto rounded-lg border border-[#dfe3e8] bg-white p-1.5 shadow-[0_16px_48px_rgba(15,23,42,0.16)]">
                 {packs.length === 0 && <div className="px-3 py-2 text-sm text-[#9a9a9a]">未找到角色包</div>}
                 {packs.map((p) => (
                   <button
                     key={p.id}
                     onClick={() => handleSelectPack(p.id)}
-                    className={`flex w-full items-center justify-between gap-2 rounded-xl px-3 py-3 text-left text-sm transition hover:bg-[#f7f7f7] ${
-                      settings?.current_pack === p.id ? "bg-[#f7f7f7]" : ""
+                    className={`flex w-full items-center justify-between gap-2 rounded-md px-2.5 py-2 text-left text-[13px] transition hover:bg-[#f6f7f9] ${
+                      settings?.current_pack === p.id ? "bg-[#eef1f5]" : ""
                     }`}
                   >
                     <span>
@@ -476,7 +487,7 @@ export default function App() {
             </button>
             {agentMenuOpen && (
               <div className="cf-pop cf-pop-down absolute left-0 top-11 z-20 max-h-[70vh] w-80 overflow-y-auto rounded-2xl border border-[#ececec] bg-white p-2 shadow-[0_16px_48px_rgba(0,0,0,0.16)]">
-                <div className="px-3 py-2 text-xs text-[#8a8a8a]">.demiurge/agents/*.json · 可多选组合</div>
+                <div className="px-3 py-2 text-xs text-[#8a8a8a]">.demiurge/agents/*.json 路 鍙閫夌粍鍚?</div>
                 {agentPanel.definitions.length === 0 && <div className="px-3 py-2 text-sm text-[#9a9a9a]">未找到自定义 Agent</div>}
                 {agentPanel.definitions.map((agent) => {
                   const selected = selectedAgentNames.includes(agent.name);
@@ -515,7 +526,7 @@ export default function App() {
             )}
           </div>
 
-          <div className="hidden min-w-0 flex-col border-l border-[#ececec] pl-3 text-xs text-[#8a8a8a] sm:flex">
+          <div className="hidden min-w-0 flex-col border-l border-[#dfe3e8] pl-3 text-[11px] text-[#8a9099] sm:flex">
             <span className="max-w-[28vw] truncate font-medium text-[#3f3f3f]" title={activeSession?.title ?? "新对话"}>
               {activeSession?.title ?? "新对话"}
             </span>
@@ -525,7 +536,7 @@ export default function App() {
           <button
             onClick={() => setWorkflowsOpen(true)}
             title="Workflows"
-            className="ml-auto inline-flex h-9 shrink-0 items-center gap-2 rounded-lg px-3 text-sm font-medium text-[#3f3f3f] transition hover:bg-[#f5f5f5]"
+            className="ml-auto inline-flex h-8 shrink-0 items-center gap-2 rounded-md px-2.5 text-[12px] font-medium text-[#4f5661] transition hover:bg-[#eef1f5]"
           >
             <WrenchIcon size={17} />
             <span className="hidden sm:inline">Workflows</span>
@@ -542,22 +553,18 @@ export default function App() {
 
         <Composer
           input={input}
-          sidebarOpen={sidebarOpen}
           canSend={canSend}
           loading={busy}
           textareaRef={textareaRef}
-          onSubmit={(e) => {
-            e.preventDefault();
-            void handleSend();
-          }}
+          onSubmit={(attachments) => handleSend(undefined, attachments)}
           onStop={() => {
             void api.interrupt();
             setConfirmReq(null);
           }}
           onInputChange={setInput}
-          onKeyDown={onKeyDown}
           onOpenSandbox={() => void api.openSandbox()}
         />
+        </div>
       </section>
 
       <WorkflowsPanel
