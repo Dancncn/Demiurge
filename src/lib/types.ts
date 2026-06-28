@@ -29,6 +29,19 @@ export interface Settings {
   max_input_tokens: number;
   reserved_output_tokens: number;
   auto_memory_enabled: boolean;
+  voice_enabled: boolean;
+  voice_stt_backend: string;
+  voice_tts_backend: string;
+  voice_id: string;
+}
+
+export interface VoiceStatus {
+  enabled: boolean;
+  stt_backend: string;
+  tts_backend: string;
+  voice_id: string;
+  ready: boolean;
+  reason: string;
 }
 
 export interface PackManifest {
