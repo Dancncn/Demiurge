@@ -416,7 +416,13 @@ pub async fn run(state: &crate::AppState, req: SubagentRequest) -> Result<String
     };
     let (tool_schema, mut msgs) = match req.context_mode {
         SubagentContextMode::Fork => {
-            let system = prompt::build(state, &settings, &persona_text, session_summary);
+            let system = prompt::build_for_input(
+                state,
+                &settings,
+                &persona_text,
+                session_summary,
+                &req.prompt,
+            );
             let mut msgs = vec![Message::system(system)];
             if let Some(session) = &session {
                 let mut parent = session.messages.clone();
@@ -435,7 +441,13 @@ pub async fn run(state: &crate::AppState, req: SubagentRequest) -> Result<String
             )
         }
         SubagentContextMode::Brief | SubagentContextMode::Recent => {
-            let mut system = prompt::build(state, &settings, &persona_text, session_summary);
+            let mut system = prompt::build_for_input(
+                state,
+                &settings,
+                &persona_text,
+                session_summary,
+                &req.prompt,
+            );
             system.push_str("\n\n---\n子 Agent 运行约束：\n");
             system.push_str(
                 "你是 Demiurge 的只读子 Agent。你帮助主 Agent 独立探索、审查、验证或反驳一个明确子任务。\n\

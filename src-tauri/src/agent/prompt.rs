@@ -55,13 +55,14 @@ struct SectionDecision {
     truncated: bool,
 }
 
-pub fn build(
+pub fn build_for_input(
     state: &crate::AppState,
     settings: &Settings,
     persona_text: &str,
     session_summary: Option<&str>,
+    user_text: &str,
 ) -> String {
-    build_with_report(state, settings, persona_text, session_summary).text
+    build_with_report_for_input(state, settings, persona_text, session_summary, Some(user_text)).text
 }
 
 pub fn build_with_report(
@@ -70,31 +71,51 @@ pub fn build_with_report(
     persona_text: &str,
     session_summary: Option<&str>,
 ) -> PromptBuild {
+    build_with_report_for_input(state, settings, persona_text, session_summary, None)
+}
+
+pub fn build_with_report_for_input(
+    state: &crate::AppState,
+    settings: &Settings,
+    persona_text: &str,
+    session_summary: Option<&str>,
+    user_text: Option<&str>,
+) -> PromptBuild {
     let sandbox = state.sandbox_dir.lock().unwrap().clone();
+    let data_dir = state.data_dir.lock().unwrap().clone();
     let packs_dir = state.packs_dir.lock().unwrap().clone();
     let goal_block = super::goal::build_goal_context_block(state);
     let drafts = build_ordered_sections(
         &sandbox,
+        &data_dir,
         &packs_dir,
         settings,
         persona_text,
         session_summary,
         goal_block,
+        user_text,
     );
     assemble_drafts(super::persona::engine_base(), drafts, settings.max_context_chars)
 }
 
 fn build_ordered_sections(
     root: &Path,
+    data_dir: &Path,
     packs_dir: &Path,
     settings: &Settings,
     persona_text: &str,
     session_summary: Option<&str>,
     goal_block: String,
+    user_text: Option<&str>,
 ) -> Vec<SectionDraft> {
     vec![
         section("pack_persona", "Pack Persona", 90, persona_section(persona_text)),
-        section("skills", "Skills", 60, skills_section(root)),
+        section(
+            "skills",
+            "Skills",
+            60,
+            skills_section(root, data_dir, packs_dir, &settings.current_pack, user_text),
+        ),
         section(
             "project_instructions",
             "Project Instructions",
@@ -235,18 +256,14 @@ fn session_summary_section(summary: Option<&str>) -> String {
     summary.unwrap_or_default().trim().to_string()
 }
 
-fn skills_section(root: &Path) -> String {
-    let mut parts = Vec::new();
-    for (label, rel) in [
-        ("Project skills", ".demiurge/skills.md"),
-        ("Repository skills", "skills/README.md"),
-        ("Claude skills", ".claude/skills.md"),
-    ] {
-        if let Some(text) = read_limited_text(&root.join(rel)) {
-            parts.push(format!("# {label} ({rel})\n{}", text.trim()));
-        }
-    }
-    cap_chars(parts.join("\n\n"), MAX_PROJECT_CHARS)
+fn skills_section(
+    root: &Path,
+    data_dir: &Path,
+    packs_dir: &Path,
+    pack_id: &str,
+    user_text: Option<&str>,
+) -> String {
+    super::skills::context_for_turn(root, data_dir, packs_dir, pack_id, user_text).text
 }
 
 fn project_section(root: &Path) -> String {

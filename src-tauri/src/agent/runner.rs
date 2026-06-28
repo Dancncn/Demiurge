@@ -233,7 +233,13 @@ pub async fn run_turn_with_options(
         // 组装本轮请求消息：system + token-aware 裁剪后的历史。若裁剪掉旧消息，先滚动更新会话摘要。
         let (mut msgs, mut session_summary) = session_store.snapshot();
 
-        let mut system = prompt::build(state, &settings, &persona_text, session_summary.as_deref());
+        let mut system = prompt::build_for_input(
+            state,
+            &settings,
+            &persona_text,
+            session_summary.as_deref(),
+            &original_user_text,
+        );
         if settings.permission_mode == store::PermissionMode::Plan {
             apply_system_overlay(&mut system, Some(plan_mode_overlay()));
         }
@@ -260,7 +266,13 @@ pub async fn run_turn_with_options(
                 session_summary = next_summary;
                 session_store.replace_messages_and_summary(msgs.clone(), session_summary.clone());
 
-                system = prompt::build(state, &settings, &persona_text, session_summary.as_deref());
+                system = prompt::build_for_input(
+                    state,
+                    &settings,
+                    &persona_text,
+                    session_summary.as_deref(),
+                    &original_user_text,
+                );
                 if settings.permission_mode == store::PermissionMode::Plan {
                     apply_system_overlay(&mut system, Some(plan_mode_overlay()));
                 }

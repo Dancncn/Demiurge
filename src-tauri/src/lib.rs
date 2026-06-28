@@ -256,6 +256,14 @@ async fn send(app: AppHandle, state: State<'_, AppState>, text: String) -> Resul
             }
             Err(e) => Err(e),
         }
+    } else if trimmed == "/skills"
+        || trimmed.starts_with("/skills ")
+        || trimmed == "/skill"
+        || trimmed.starts_with("/skill ")
+    {
+        let body = agent::skills::slash_response(st, trimmed)?;
+        events.assistant_done(body);
+        Ok(())
     } else if trimmed == "/workflows" {
         should_drive_goal = true;
         let runs = agent::workflow_runtime::panel_state(st).runs;
