@@ -590,6 +590,7 @@ mod tests {
             data_dir: Mutex::new(sandbox.clone()),
             sandbox_dir: Mutex::new(sandbox),
             packs_dir: Mutex::new(PathBuf::new()),
+            ocr: crate::ocr::OcrState::default(),
         }
     }
 

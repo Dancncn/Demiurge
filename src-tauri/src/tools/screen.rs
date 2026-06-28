@@ -29,7 +29,8 @@ struct CaptureResult {
     height: u32,
 }
 
-pub fn list_windows() -> Result<String, String> {
+pub fn list_windows(state: &crate::AppState) -> Result<String, String> {
+    ensure_enabled(state)?;
     let wins = xcap::Window::all().map_err(|e| format!("枚举窗口失败：{e}"))?;
     let mut out = Vec::new();
     for w in wins {
@@ -41,6 +42,7 @@ pub fn list_windows() -> Result<String, String> {
 }
 
 pub fn capture_region(state: &crate::AppState, args: Value) -> Result<String, String> {
+    ensure_enabled(state)?;
     let x = required_i32(&args, "x")?;
     let y = required_i32(&args, "y")?;
     let width = required_u32(&args, "width")?;
@@ -60,6 +62,7 @@ pub fn capture_region(state: &crate::AppState, args: Value) -> Result<String, St
 }
 
 pub fn capture_window(state: &crate::AppState, args: Value) -> Result<String, String> {
+    ensure_enabled(state)?;
     let title = super::args::optional_str(&args, "title")
         .unwrap_or("")
         .trim();
@@ -97,6 +100,41 @@ pub fn capture_window(state: &crate::AppState, args: Value) -> Result<String, St
     )
 }
 
+pub fn ocr_region(state: &crate::AppState, args: Value) -> Result<String, String> {
+    ensure_enabled(state)?;
+    let x = required_i32(&args, "x")?;
+    let y = required_i32(&args, "y")?;
+    let width = required_u32(&args, "width")?;
+    let height = required_u32(&args, "height")?;
+    validate_capture_size(width, height)?;
+
+    let img = capture_screen_region(x, y, width, height)?;
+    let frame = crate::ocr::recognize_rgba(state, img)?;
+    serde_json::to_string_pretty(&json!({
+        "ok": true,
+        "region": { "x": x, "y": y, "width": width, "height": height },
+        "text": frame.text,
+        "lines": frame.lines
+    }))
+    .map_err(|e| e.to_string())
+}
+
+pub fn ocr_window(state: &crate::AppState, args: Value) -> Result<String, String> {
+    ensure_enabled(state)?;
+    let (x, y, width, height) = window_capture_rect(&args)?;
+    validate_capture_size(width, height)?;
+
+    let img = capture_screen_region(x, y, width, height)?;
+    let frame = crate::ocr::recognize_rgba(state, img)?;
+    serde_json::to_string_pretty(&json!({
+        "ok": true,
+        "region": { "x": x, "y": y, "width": width, "height": height },
+        "text": frame.text,
+        "lines": frame.lines
+    }))
+    .map_err(|e| e.to_string())
+}
+
 pub fn preview_region(args: Value) -> Result<String, String> {
     let x = required_i32(&args, "x")?;
     let y = required_i32(&args, "y")?;
@@ -119,6 +157,29 @@ pub fn preview_window(args: Value) -> Result<String, String> {
     Ok(format!(
         "将读取匹配窗口的屏幕画面（title=\"{title}\", app=\"{app}\"），并保存到沙盒 .demiurge/screenshots/。"
     ))
+}
+
+pub fn preview_ocr_region(args: Value) -> Result<String, String> {
+    let preview = preview_region(args)?;
+    Ok(format!(
+        "{preview}\n随后将用本地 PP-OCRv5 模型识别截图文本。"
+    ))
+}
+
+pub fn preview_ocr_window(args: Value) -> Result<String, String> {
+    let preview = preview_window(args)?;
+    Ok(format!(
+        "{preview}\n随后将用本地 PP-OCRv5 模型识别截图文本。"
+    ))
+}
+
+fn ensure_enabled(state: &crate::AppState) -> Result<(), String> {
+    let enabled = state.settings.lock().unwrap().computer_use_enabled;
+    if enabled {
+        Ok(())
+    } else {
+        Err("Computer Use 未启用。请先在设置中启用 Computer Use / OCR。".to_string())
+    }
 }
 
 fn read_window(w: &xcap::Window) -> Option<WindowInfo> {
@@ -161,6 +222,34 @@ fn find_window(title: &str, app: &str) -> Option<(i32, i32, u32, u32)> {
         }
     }
     best.map(|(x, y, w, h, _)| (x, y, w, h))
+}
+
+fn window_capture_rect(args: &Value) -> Result<(i32, i32, u32, u32), String> {
+    let title = super::args::optional_str(args, "title")
+        .unwrap_or("")
+        .trim();
+    let app = super::args::optional_str(args, "app").unwrap_or("").trim();
+    if title.is_empty() && app.is_empty() {
+        return Err("title 和 app 至少提供一个，用于匹配窗口".to_string());
+    }
+
+    let (wx, wy, ww, wh) =
+        find_window(title, app).ok_or("目标窗口未找到（可能已关闭、最小化或标题变化）")?;
+    let l = optional_f64(args, "crop_left", 0.0).clamp(0.0, 1.0);
+    let t = optional_f64(args, "crop_top", 0.0).clamp(0.0, 1.0);
+    let r = optional_f64(args, "crop_right", 1.0)
+        .clamp(0.0, 1.0)
+        .max(l + 0.02);
+    let b = optional_f64(args, "crop_bottom", 1.0)
+        .clamp(0.0, 1.0)
+        .max(t + 0.02);
+
+    Ok((
+        wx + (ww as f64 * l).round() as i32,
+        wy + (wh as f64 * t).round() as i32,
+        (ww as f64 * (r - l)).round() as u32,
+        (wh as f64 * (b - t)).round() as u32,
+    ))
 }
 
 fn capture_screen_region(

@@ -6,7 +6,9 @@ pub mod dream;
 pub mod memory;
 pub mod persona;
 pub mod prompt;
+pub mod subagent;
 pub mod summary;
+pub mod ultracode;
 
 mod runner;
-pub use runner::run_turn;
+pub use runner::{run_turn, run_turn_with_options, TurnOptions};

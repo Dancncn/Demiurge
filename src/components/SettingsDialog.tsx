@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import type { PackManifest, ProviderKind, Settings } from "../lib/types";
+import * as api from "../lib/api";
+import type { OcrDownloadProgress, OcrModelSource, OcrModelStatus, PackManifest, ProviderKind, Settings } from "../lib/types";
 import { CloseIcon } from "./Icons";
 
 interface Props {
@@ -19,39 +20,109 @@ const providerOptions: { value: ProviderKind; label: string; baseUrl: string; ap
     value: "open_ai_compatible",
     label: "OpenAI-compatible / DeepSeek",
     baseUrl: "例如：https://api.deepseek.com/v1",
-    apiKeyHelp: "MVP 以明文存于本地配置文件，仅本机使用。",
+    apiKeyHelp: "保存到系统凭据管理器；settings.json 不落明文密钥。",
   },
   {
     value: "local",
     label: "Local OpenAI-compatible",
     baseUrl: "例如：http://localhost:11434/v1 或 LM Studio endpoint",
-    apiKeyHelp: "本地服务通常可留空；如服务要求 token，也可填写。",
+    apiKeyHelp: "本地服务通常可留空；如服务要求 token，会保存到系统凭据管理器。",
   },
   {
     value: "anthropic",
     label: "Anthropic",
     baseUrl: "例如：https://api.anthropic.com/v1",
-    apiKeyHelp: "用于 Anthropic x-api-key header，仍以明文存于本地配置文件。",
+    apiKeyHelp: "用于 Anthropic x-api-key header，保存到系统凭据管理器。",
   },
   {
     value: "gemini",
     label: "Gemini",
     baseUrl: "例如：https://generativelanguage.googleapis.com/v1beta",
-    apiKeyHelp: "用于 Google AI Studio API key，仍以明文存于本地配置文件。",
+    apiKeyHelp: "用于 Google AI Studio API key，保存到系统凭据管理器。",
   },
 ];
 
+const ocrSources: { value: OcrModelSource; label: string }[] = [
+  { value: "modelscope", label: "ModelScope 国内源" },
+  { value: "huggingface", label: "Hugging Face 国际源" },
+];
+
+function formatBytes(n: number) {
+  if (!Number.isFinite(n) || n <= 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB"];
+  let value = n;
+  let idx = 0;
+  while (value >= 1024 && idx < units.length - 1) {
+    value /= 1024;
+    idx += 1;
+  }
+  return `${value.toFixed(idx === 0 ? 0 : 1)} ${units[idx]}`;
+}
+
 export default function SettingsDialog({ open, settings, packs, onClose, onSave }: Props) {
   const [form, setForm] = useState<Settings>(settings);
+  const [ocrStatus, setOcrStatus] = useState<OcrModelStatus | null>(null);
+  const [ocrProgress, setOcrProgress] = useState<OcrDownloadProgress | null>(null);
+  const [ocrBusy, setOcrBusy] = useState(false);
+  const [ocrError, setOcrError] = useState("");
 
   useEffect(() => {
     if (open) setForm(settings);
   }, [open, settings]);
 
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    api
+      .ocrModelStatus()
+      .then((status) => {
+        if (!cancelled) setOcrStatus(status);
+      })
+      .catch((err) => {
+        if (!cancelled) setOcrError(String(err));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    api.listenOcrDownloadProgress((event) => {
+      if (!disposed) setOcrProgress(event);
+    }).then((fn) => {
+      if (disposed) fn();
+      else unlisten = fn;
+    });
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, [open]);
+
   if (!open) return null;
 
   const set = <K extends keyof Settings>(k: K, v: Settings[K]) => setForm((f) => ({ ...f, [k]: v }));
   const selectedProvider = providerOptions.find((p) => p.value === form.provider) ?? providerOptions[0];
+  const downloadOcrModels = async () => {
+    setOcrBusy(true);
+    setOcrError("");
+    setOcrProgress(null);
+    try {
+      const status = await api.ocrDownloadModels(form.ocr_model_source);
+      setOcrStatus(status);
+    } catch (err) {
+      setOcrError(String(err));
+    } finally {
+      setOcrBusy(false);
+    }
+  };
+  const progressPct =
+    ocrProgress?.totalBytes && ocrProgress.totalBytes > 0
+      ? Math.min(100, Math.round((ocrProgress.downloadedBytes / ocrProgress.totalBytes) * 100))
+      : null;
 
   return (
     <div
@@ -60,7 +131,7 @@ export default function SettingsDialog({ open, settings, packs, onClose, onSave 
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      <div className="w-full max-w-md rounded-3xl border border-[#ececec] bg-white p-6 shadow-[0_24px_60px_rgba(0,0,0,0.18)]">
+      <div className="max-h-[92vh] w-full max-w-lg overflow-y-auto rounded-3xl border border-[#ececec] bg-white p-6 shadow-[0_24px_60px_rgba(0,0,0,0.18)]">
         <div className="mb-5 flex items-center">
           <h2 className="text-lg font-semibold text-[#171717]">设置</h2>
           <button
@@ -210,6 +281,60 @@ export default function SettingsDialog({ open, settings, packs, onClose, onSave 
             </label>
           </div>
 
+          <div className="rounded-2xl border border-[#eeeeee] bg-[#fafafa] p-3">
+            <label className="flex items-start gap-3">
+              <input
+                className="mt-1 h-4 w-4 accent-[#10a37f]"
+                type="checkbox"
+                checked={form.computer_use_enabled}
+                onChange={(e) => set("computer_use_enabled", e.target.checked)}
+              />
+              <span>
+                <span className="block text-sm font-medium text-[#3f3f3f]">Computer Use / OCR</span>
+                <span className="mt-1 block text-xs text-[#9a9a9a]">
+                  启用后，Agent 可在确认后读取窗口标题、截图并用本地 OCR 识别屏幕文本。
+                </span>
+              </span>
+            </label>
+            <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-[1fr_auto]">
+              <label className="block">
+                <span className={labelCls}>OCR 模型下载源</span>
+                <select
+                  className={inputCls}
+                  value={form.ocr_model_source}
+                  onChange={(e) => set("ocr_model_source", e.target.value as OcrModelSource)}
+                >
+                  {ocrSources.map((s) => (
+                    <option key={s.value} value={s.value}>
+                      {s.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <button
+                className="self-end rounded-xl bg-[#111] px-4 py-2.5 text-sm text-white transition disabled:cursor-not-allowed disabled:bg-[#b9b9b9]"
+                disabled={ocrBusy}
+                onClick={downloadOcrModels}
+                type="button"
+              >
+                {ocrBusy ? "下载中" : ocrStatus?.installed ? "重新下载" : "下载模型"}
+              </button>
+            </div>
+            <div className="mt-2 space-y-1 text-xs text-[#7a7a7a]">
+              <div>状态：{ocrStatus?.installed ? "已安装" : "未安装"} {ocrStatus ? `(${formatBytes(ocrStatus.totalBytes)})` : ""}</div>
+              {ocrStatus?.modelDir ? <div className="break-all">目录：{ocrStatus.modelDir}</div> : null}
+              {ocrStatus && !ocrStatus.installed ? <div>缺少：{ocrStatus.missing.join(", ")}</div> : null}
+              {ocrProgress ? (
+                <div>
+                  {ocrProgress.file}：{formatBytes(ocrProgress.downloadedBytes)}
+                  {ocrProgress.totalBytes ? ` / ${formatBytes(ocrProgress.totalBytes)}` : ""}
+                  {progressPct !== null ? ` (${progressPct}%)` : ""}
+                </div>
+              ) : null}
+              {ocrError ? <div className="text-[#b42318]">{ocrError}</div> : null}
+            </div>
+          </div>
+
           <label className="block">
             <span className={labelCls}>上下文上限（字符数，兼容兜底）</span>
             <input
@@ -243,6 +368,7 @@ export default function SettingsDialog({ open, settings, packs, onClose, onSave 
                 voice_stt_backend: form.voice_stt_backend.trim() || "none",
                 voice_tts_backend: form.voice_tts_backend.trim() || "none",
                 voice_id: form.voice_id.trim(),
+                ocr_model_source: form.ocr_model_source || "modelscope",
               });
             }}
           >
