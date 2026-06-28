@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 use std::fs;
 use std::future::Future;
+use std::path::Path;
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -16,6 +17,9 @@ use crate::store;
 
 const WORKFLOW_DIR: &str = ".demiurge/workflows";
 const MAX_PARALLEL_ITEMS: usize = 8;
+const RUN_STATE_SCHEMA_VERSION: u32 = 1;
+const RUN_STATE_FILE: &str = "state.json";
+const RUN_STATE_TMP_FILE: &str = "state.json.tmp";
 
 type StepFuture<'a> = Pin<Box<dyn Future<Output = Result<(), String>> + Send + 'a>>;
 
@@ -32,11 +36,13 @@ pub struct WorkflowPanelState {
     pub runs: Vec<WorkflowRunProgress>,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct WorkflowRunProgress {
     pub run_id: String,
     pub name: String,
     pub status: WorkflowStatus,
+    #[serde(default)]
+    pub cancel_requested: bool,
     pub current_phase: Option<String>,
     pub agents: Vec<WorkflowAgentProgress>,
     pub logs: Vec<String>,
@@ -49,7 +55,7 @@ pub struct WorkflowRunProgress {
     pub steps_done: usize,
 }
 
-#[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum WorkflowStatus {
     Running,
@@ -59,7 +65,7 @@ pub enum WorkflowStatus {
     Journaled,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct WorkflowAgentProgress {
     pub id: u64,
     pub label: String,
@@ -67,6 +73,12 @@ pub struct WorkflowAgentProgress {
     pub status: WorkflowStatus,
     pub result: Option<String>,
     pub error: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct WorkflowRunStateFile {
+    schema_version: u32,
+    run: WorkflowRunProgress,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -126,6 +138,7 @@ pub fn panel_state(state: &crate::AppState) -> WorkflowPanelState {
             run_id: info.run_id,
             name: "journal".to_string(),
             status: WorkflowStatus::Journaled,
+            cancel_requested: false,
             current_phase: None,
             agents: Vec::new(),
             logs: Vec::new(),
@@ -191,6 +204,7 @@ pub fn launch(app: &AppHandle, state: &crate::AppState, name: &str) -> Result<St
         run_id: run_id.clone(),
         name: workflow.name.clone().unwrap_or_else(|| name.to_string()),
         status: WorkflowStatus::Running,
+        cancel_requested: false,
         current_phase: None,
         agents: Vec::new(),
         logs: vec![format!("loaded {}", path.display())],
@@ -229,13 +243,14 @@ pub async fn run_launched(app: AppHandle, run_id: String, name: String) {
                     state.inner(),
                     &run_id,
                     WorkflowStatus::Killed,
+                    true,
                     Some("用户停止 workflow".to_string()),
                 );
                 emit_update(&app, state.inner());
                 return Ok(());
             }
         }
-        mark_run(state.inner(), &run_id, WorkflowStatus::Done, None);
+        mark_run(state.inner(), &run_id, WorkflowStatus::Done, false, None);
         let _ = workflow_journal::append(state.inner(), &run_id, "workflow_done", json!({}));
         emit_update(&app, state.inner());
         Ok::<(), String>(())
@@ -247,6 +262,7 @@ pub async fn run_launched(app: AppHandle, run_id: String, name: String) {
             state.inner(),
             &run_id,
             WorkflowStatus::Failed,
+            false,
             Some(e.clone()),
         );
         let _ = workflow_journal::append(
@@ -269,6 +285,7 @@ pub fn stop(app: &AppHandle, state: &crate::AppState, run_id: &str) -> Result<()
         state,
         run_id,
         WorkflowStatus::Killed,
+        true,
         Some("用户请求停止".to_string()),
     );
     let _ = workflow_journal::append(state, run_id, "workflow_killed", json!({}));
@@ -689,16 +706,53 @@ fn push_log(app: &AppHandle, state: &crate::AppState, run_id: &str, message: Str
     emit_update(app, state);
 }
 
-fn mark_run(state: &crate::AppState, run_id: &str, status: WorkflowStatus, error: Option<String>) {
+fn persist_all_run_snapshots(state: &crate::AppState) {
+    let runs = state.workflow_runs.lock().unwrap().clone();
+    let sandbox = state.sandbox_dir.lock().unwrap().clone();
+    for run in runs {
+        if run.status == WorkflowStatus::Journaled {
+            continue;
+        }
+        let _ = write_run_state_in_root(&sandbox, &run);
+    }
+}
+
+fn write_run_state_in_root(root: &Path, run: &WorkflowRunProgress) -> Result<(), String> {
+    let dir = workflow_journal::run_dir(root, &run.run_id);
+    fs::create_dir_all(&dir).map_err(|e| format!("创建 workflow state 目录失败：{e}"))?;
+    let target = dir.join(RUN_STATE_FILE);
+    let tmp = dir.join(RUN_STATE_TMP_FILE);
+    let payload = WorkflowRunStateFile {
+        schema_version: RUN_STATE_SCHEMA_VERSION,
+        run: run.clone(),
+    };
+    let body = serde_json::to_vec_pretty(&payload)
+        .map_err(|e| format!("序列化 workflow state 失败：{e}"))?;
+    fs::write(&tmp, body).map_err(|e| format!("写入 workflow state 临时文件失败：{e}"))?;
+    if target.exists() {
+        fs::remove_file(&target).map_err(|e| format!("替换 workflow state 失败：{e}"))?;
+    }
+    fs::rename(&tmp, &target).map_err(|e| format!("提交 workflow state 失败：{e}"))
+}
+
+fn mark_run(
+    state: &crate::AppState,
+    run_id: &str,
+    status: WorkflowStatus,
+    cancel_requested: bool,
+    error: Option<String>,
+) {
     let mut runs = state.workflow_runs.lock().unwrap();
     if let Some(run) = runs.iter_mut().find(|run| run.run_id == run_id) {
         run.status = status;
+        run.cancel_requested = cancel_requested;
         run.error = error;
         run.updated_at = store::now_millis();
     }
 }
 
 fn emit_update(app: &AppHandle, state: &crate::AppState) {
+    persist_all_run_snapshots(state);
     let _ = app.emit("workflow-updated", panel_state(state));
 }
 
@@ -758,5 +812,59 @@ mod tests {
     #[test]
     fn caps_long_agent_result() {
         assert!(cap_chars(&"x".repeat(20), 5).contains("truncated"));
+    }
+
+    #[test]
+    fn writes_run_state_snapshot() {
+        let root = std::env::temp_dir().join(format!(
+            "demiurge_workflow_state_{}",
+            store::new_session_id()
+        ));
+        let run = WorkflowRunProgress {
+            run_id: "wf_state_test".to_string(),
+            name: "state-test".to_string(),
+            status: WorkflowStatus::Killed,
+            cancel_requested: true,
+            current_phase: Some("phase-a".to_string()),
+            agents: vec![WorkflowAgentProgress {
+                id: 1,
+                label: "reader".to_string(),
+                phase: Some("phase-a".to_string()),
+                status: WorkflowStatus::Done,
+                result: Some("ok".to_string()),
+                error: None,
+            }],
+            logs: vec!["loaded demo".to_string()],
+            journal_path: workflow_journal::run_dir(&root, "wf_state_test")
+                .join("journal.jsonl")
+                .to_string_lossy()
+                .to_string(),
+            started_at: 10,
+            updated_at: 20,
+            error: Some("stopped".to_string()),
+            budget: budget::TokenBudgetState {
+                total: Some(100),
+                used_exact: 12,
+                used_estimated: 8,
+            },
+            steps_total: 4,
+            steps_done: 2,
+        };
+
+        write_run_state_in_root(&root, &run).unwrap();
+        let raw = std::fs::read_to_string(
+            workflow_journal::run_dir(&root, "wf_state_test").join(RUN_STATE_FILE),
+        )
+        .unwrap();
+        let parsed: WorkflowRunStateFile = serde_json::from_str(&raw).unwrap();
+
+        assert_eq!(parsed.schema_version, RUN_STATE_SCHEMA_VERSION);
+        assert_eq!(parsed.run.run_id, "wf_state_test");
+        assert_eq!(parsed.run.status, WorkflowStatus::Killed);
+        assert!(parsed.run.cancel_requested);
+        assert_eq!(parsed.run.budget.used_total(), 20);
+        assert_eq!(parsed.run.steps_done, 2);
+
+        let _ = std::fs::remove_dir_all(root);
     }
 }

@@ -7,7 +7,7 @@ use serde_json::{json, Value};
 
 use crate::store;
 
-const JOURNAL_DIR: &str = ".demiurge/workflow-runs";
+pub const JOURNAL_DIR: &str = ".demiurge/workflow-runs";
 
 #[derive(Clone, Debug, Serialize)]
 pub struct WorkflowRunInfo {
@@ -31,7 +31,7 @@ pub fn append(
 }
 
 fn append_in_root(root: &Path, run_id: &str, event: &str, payload: Value) -> Result<(), String> {
-    let dir = journal_dir(root, run_id);
+    let dir = run_dir(root, run_id);
     fs::create_dir_all(&dir).map_err(|e| format!("创建 workflow journal 目录失败：{e}"))?;
     let path = dir.join("journal.jsonl");
     let line = json!({
@@ -77,7 +77,7 @@ pub fn list(state: &crate::AppState) -> Vec<WorkflowRunInfo> {
 
 pub fn resume_overlay(state: &crate::AppState, run_id: &str) -> Result<String, String> {
     let sandbox = state.sandbox_dir.lock().unwrap().clone();
-    let path = journal_dir(&sandbox, run_id).join("journal.jsonl");
+    let path = run_dir(&sandbox, run_id).join("journal.jsonl");
     let raw = fs::read_to_string(&path).map_err(|e| format!("读取 workflow journal 失败：{e}"))?;
     let tail = raw
         .lines()
@@ -95,7 +95,7 @@ pub fn resume_overlay(state: &crate::AppState, run_id: &str) -> Result<String, S
     ))
 }
 
-fn journal_dir(root: &Path, run_id: &str) -> PathBuf {
+pub fn run_dir(root: &Path, run_id: &str) -> PathBuf {
     root.join(JOURNAL_DIR).join(sanitize_run_id(run_id))
 }
 
