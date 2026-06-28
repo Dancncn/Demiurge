@@ -17,6 +17,7 @@ import type {
   PermissionScope,
   ProviderKind,
   Settings,
+  ShellPolicyState,
   WebDavBackupFile,
   WebDavConfig,
   WebSearchProvider,
@@ -194,6 +195,10 @@ function permissionRiskLabel(risk: string) {
   if (risk === "external") return "Network";
   if (risk === "privileged") return "System";
   return risk;
+}
+
+function shellPolicyValue(value: string) {
+  return value.replaceAll("_", " ");
 }
 
 function formatTime(ms: number) {
@@ -415,6 +420,7 @@ export default function SettingsDialog({
   const [ocrBusy, setOcrBusy] = useState(false);
   const [ocrError, setOcrError] = useState("");
   const [permissionState, setPermissionState] = useState<PermissionPanelState | null>(null);
+  const [shellPolicyState, setShellPolicyState] = useState<ShellPolicyState | null>(null);
   const [permissionBusy, setPermissionBusy] = useState(false);
   const [permissionDraft, setPermissionDraft] = useState<{
     tool: string;
@@ -477,6 +483,14 @@ export default function SettingsDialog({
       },
       (err) => {
         if (!cancelled) console.error("Failed to read permission state", err);
+      },
+    );
+    void api.shellPolicyState().then(
+      (state) => {
+        if (!cancelled) setShellPolicyState(state);
+      },
+      (err) => {
+        if (!cancelled) console.error("Failed to read shell policy state", err);
       },
     );
     void api.mcpPanelState().then(
@@ -591,6 +605,12 @@ export default function SettingsDialog({
   function editPermissionRule(scope: PermissionScope, tool: string, effect: PermissionEffect, reason: string) {
     if (scope === "once") return;
     setPermissionDraft({ tool, effect, scope, reason });
+  }
+
+  async function refreshPermissionState() {
+    const [permissions, shellPolicy] = await Promise.all([api.permissionPanelState(), api.shellPolicyState()]);
+    setPermissionState(permissions);
+    setShellPolicyState(shellPolicy);
   }
 
   function setAgentPanelState(next: AgentPanelState) {
@@ -1983,7 +2003,7 @@ export default function SettingsDialog({
                         className={secondaryButtonCls}
                         type="button"
                         disabled={permissionBusy}
-                        onClick={async () => setPermissionState(await api.permissionPanelState())}
+                        onClick={refreshPermissionState}
                       >
                         Refresh
                       </button>
@@ -2067,6 +2087,74 @@ export default function SettingsDialog({
                         </div>
                       )}
                     </div>
+
+                    {shellPolicyState && (
+                      <div className="mb-4 rounded-lg border border-[#e2e5ea] bg-white p-3">
+                        <div className="flex flex-wrap items-start justify-between gap-3">
+                          <div>
+                            <div className="text-[13px] font-semibold text-[#202124]">Shell Isolation Policy</div>
+                            <div className="mt-1 text-[12px] text-[#7a8088]">
+                              {shellPolicyState.platform} / default {shellPolicyValue(shellPolicyState.default_isolation)} / strict{" "}
+                              {shellPolicyState.strict_timeout_secs}s
+                            </div>
+                          </div>
+                          <div className="flex flex-wrap gap-1 text-[11px]">
+                            <span className="rounded-md bg-[#eef1f5] px-2 py-1">
+                              process group: {shellPolicyState.containment.process_group ? "on" : "off"}
+                            </span>
+                            <span className="rounded-md bg-[#eef1f5] px-2 py-1">
+                              tree kill: {shellPolicyState.containment.kill_process_tree_on_timeout ? "on" : "off"}
+                            </span>
+                          </div>
+                        </div>
+
+                        <div className="mt-3 grid gap-3 md:grid-cols-2">
+                          <div className="rounded-md border border-[#e8ebef] bg-[#fbfcfd] p-3 text-[12px] leading-5 text-[#6f7782]">
+                            <div className="font-medium text-[#202124]">Platform containment</div>
+                            <div className="mt-1">Filesystem: {shellPolicyState.containment.filesystem_sandbox}</div>
+                            <div>Network: {shellPolicyState.containment.network_sandbox}</div>
+                            <div className="mt-2 flex flex-wrap gap-1">
+                              {shellPolicyState.strict_blocked_risks.map((risk) => (
+                                <span key={risk.id} className="rounded-md bg-[#fff1f1] px-2 py-0.5 text-[#9f1d1d]">
+                                  deny {shellPolicyValue(risk.id)}
+                                </span>
+                              ))}
+                            </div>
+                          </div>
+                          <div className="rounded-md border border-[#e8ebef] bg-[#fbfcfd] p-3 text-[12px] leading-5 text-[#6f7782]">
+                            <div className="font-medium text-[#202124]">Environment allowlist</div>
+                            <div className="mt-2 flex flex-wrap gap-1">
+                              {shellPolicyState.env_allowlist.map((name) => (
+                                <span key={name} className="rounded-md bg-white px-2 py-0.5 font-mono text-[11px] text-[#344054]">
+                                  {name}
+                                </span>
+                              ))}
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="mt-3 rounded-md border border-[#e8ebef] bg-[#fbfcfd] p-3">
+                          <div className="mb-2 text-[12px] font-medium text-[#202124]">Command policy patterns</div>
+                          <div className="grid gap-2 md:grid-cols-2">
+                            {shellPolicyState.risk_rules.map((rule) => (
+                              <div key={`${rule.class.id}:${rule.reason}`} className="rounded-md bg-white p-2 text-[12px] leading-5 text-[#6f7782]">
+                                <div className="flex items-center justify-between gap-2">
+                                  <span className="font-medium text-[#202124]">{shellPolicyValue(rule.class.id)}</span>
+                                  <span className={rule.blocked_in_strict ? "text-[#9f1d1d]" : "text-[#7a8088]"}>
+                                    {rule.blocked_in_strict ? "strict deny" : rule.class.severity}
+                                  </span>
+                                </div>
+                                <div className="mt-1">{rule.reason}</div>
+                                <div className="mt-1 truncate font-mono text-[11px] text-[#8a9099]">
+                                  {rule.patterns.slice(0, 8).join(", ")}
+                                  {rule.patterns.length > 8 ? ", ..." : ""}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                    )}
 
                     <div className="space-y-2">
                       {permissionState?.rules.length ? (

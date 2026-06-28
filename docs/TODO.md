@@ -14,6 +14,7 @@ Demiurge 当前已经从 MVP 进入 Agent 能力打磨阶段。下面把现有 T
 - [x] **编辑工具**：`read_file`、`write_file`、`edit_file`、`multi_edit`、`apply_patch`、`undo_edit`。
 - [x] **搜索与状态工具**：`glob`、`grep`、`git_status`、`web_fetch`。
 - [x] **Shell 工具**：确认弹窗、沙箱 cwd、超时、输出截断、执行前预览。
+- [x] **Shell / 进程隔离加强**：shell policy state 可视化展示 env allowlist、strict deny 风险和命令模式；执行层使用独立进程组/进程树并在超时时终止整棵进程树；新增 `sandboxed` isolation，在 macOS 走 `sandbox-exec`、Linux/WSL 走 `bubblewrap`，不可用时 fail closed；补齐联网、依赖安装、外部执行、提权和破坏性命令策略测试。
 - [x] **Web Search / Fetch**：Bing、DuckDuckGo fallback、Tavily、Brave、Exa adapter，结果过滤、缓存、context cap、Sources 提醒；`web_fetch` 支持 direct 抓取与 Exa `livecrawl` 抓取。
 - [x] **权限系统**：一次/会话/项目级确认，危险操作 audit log。
 - [x] **上下文管理**：system prompt 分层、项目指令、角色设定、工作区环境、会话摘要、memory、token-aware 裁剪。
@@ -42,7 +43,7 @@ Demiurge 当前已经从 MVP 进入 Agent 能力打磨阶段。下面把现有 T
 - [x] **真实 Plan Mode**：实现用户主导的“先计划、后执行”模式；生成计划文件，在用户批准边界之后才允许写入、shell、外部发布等动作，并支持 plan/default/auto/bypass 等权限模式的清晰切换。
 - [x] **Provider Capability Profile 2.0**：在 first slice 基础上完成 prompt caching、thinking、parallel tool calls、max token 差异、structured output/schema dialect、provider-specific token budgets 的统一建模，并把 runner/budget 层切到 profile helper。
 - [x] **Workflow durable run**：把 live run 从进程内状态升级为跨进程 durable background execution，能够在应用重启后恢复真实 run 状态、取消状态、预算状态和进度，而不只是生成 resume overlay。
-- [ ] **Shell / 进程隔离加强**：从 policy-level 约束推进到 OS-level process isolation；补齐平台 sandbox、可视化 allowlist/denylist、联网/依赖安装/外部执行策略，并深测 macOS/Linux 跨平台安全策略。
+- [x] **Shell / 进程隔离加强**：从 policy-level 约束推进到 OS-level process isolation；补齐平台 sandbox、可视化 allowlist/denylist、联网/依赖安装/外部执行策略，并深测 macOS/Linux 跨平台安全策略。
 - [x] **Session Engine 成熟化**：引入或继续拆分 Session Engine，覆盖 turn management、多 tool-call loop、状态、取消、重试、错误、前端事件、store decoupling、React transcript/tool event rendering 与 Rust backend event stream。
 
 ## P1 / 高杠杆 Agent 与工作流体验
