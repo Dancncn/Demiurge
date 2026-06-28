@@ -9,6 +9,7 @@ use crate::{llm, pack, store, tools};
 
 const MAX_SUBAGENT_STEPS: usize = 6;
 const MAX_PARENT_CONTEXT_CHARS: usize = 10_000;
+const FORK_PLACEHOLDER_RESULT: &str = "Fork started - processing in background";
 
 const READ_ONLY_TOOLS: &[&str] = &[
     "read_file",
@@ -17,6 +18,7 @@ const READ_ONLY_TOOLS: &[&str] = &[
     "git_status",
     "system_info",
     "web_search",
+    "context_inspect",
 ];
 
 #[derive(Clone, Debug)]
@@ -31,12 +33,14 @@ pub struct SubagentRequest {
 pub enum SubagentContextMode {
     Brief,
     Recent,
+    Fork,
 }
 
 impl SubagentContextMode {
     pub fn parse(value: Option<&str>) -> Self {
         match value.unwrap_or("").trim().to_ascii_lowercase().as_str() {
-            "recent" | "fork" | "full" => SubagentContextMode::Recent,
+            "fork" | "full" => SubagentContextMode::Fork,
+            "recent" => SubagentContextMode::Recent,
             _ => SubagentContextMode::Brief,
         }
     }
@@ -59,25 +63,18 @@ pub async fn run(state: &crate::AppState, req: SubagentRequest) -> Result<String
         storeg.get(&sid).cloned()
     };
     let session_summary = session.as_ref().and_then(|s| s.summary.as_deref());
-    let mut system = prompt::build(state, &settings, &persona_text, session_summary);
-    system.push_str("\n\n---\n子 Agent 运行约束：\n");
-    system.push_str(
-        "你是 Demiurge 的只读子 Agent。你帮助主 Agent 独立探索、审查、验证或反驳一个明确子任务。\n\
-         你可以使用只读工具收集证据，但不能修改文件、运行 shell、截图或再次派生子 Agent。\n\
-         你的最终输出会返回给主 Agent，而不是直接给用户；请输出结构清晰、可引用的发现。\n",
-    );
-
-    let parent_context = parent_context_block(session.as_ref(), req.context_mode);
     let label = req.label.as_deref().unwrap_or("subagent");
     let agent_type = req.agent_type.as_deref().unwrap_or("general");
     let user = format!(
         "# 子 Agent 任务\n\
          label: {label}\n\
          agent_type: {agent_type}\n\n\
-         ## 父会话上下文\n\
-         {parent_context}\n\n\
          ## 指令\n\
          {}\n\n\
+         ## 子 Agent 运行约束\n\
+         - 你是 Demiurge 的只读子 Agent，最终输出会返回给主 Agent。\n\
+         - 你可以使用只读工具收集证据，但不能修改文件、运行 shell、截图或再次派生子 Agent。\n\
+         - 如果工具 schema 中出现非只读工具，不要调用；即使调用也会被拒绝。\n\n\
          ## 输出要求\n\
          - 先给出一句结论。\n\
          - 列出关键发现、证据路径或行号。\n\
@@ -87,8 +84,40 @@ pub async fn run(state: &crate::AppState, req: SubagentRequest) -> Result<String
     );
 
     let profile = llm::ProviderProfile::for_kind(settings.provider);
-    let tool_schema = tools::schemas_json_for_names(profile.tool_schema_dialect, READ_ONLY_TOOLS);
-    let mut msgs = vec![Message::system(system), Message::user(user)];
+    let (tool_schema, mut msgs) = match req.context_mode {
+        SubagentContextMode::Fork => {
+            let system = prompt::build(state, &settings, &persona_text, session_summary);
+            let mut msgs = vec![Message::system(system)];
+            if let Some(session) = &session {
+                let mut parent = session.messages.clone();
+                repair_unpaired_tool_calls(&mut parent);
+                msgs.extend(parent);
+            }
+            msgs.push(Message::user(user));
+            (
+                tools::main_schemas_json_for(profile.tool_schema_dialect),
+                msgs,
+            )
+        }
+        SubagentContextMode::Brief | SubagentContextMode::Recent => {
+            let mut system = prompt::build(state, &settings, &persona_text, session_summary);
+            system.push_str("\n\n---\n子 Agent 运行约束：\n");
+            system.push_str(
+                "你是 Demiurge 的只读子 Agent。你帮助主 Agent 独立探索、审查、验证或反驳一个明确子任务。\n\
+                 你可以使用只读工具收集证据，但不能修改文件、运行 shell、截图或再次派生子 Agent。\n\
+                 你的最终输出会返回给主 Agent，而不是直接给用户；请输出结构清晰、可引用的发现。\n",
+            );
+            let parent_context = parent_context_block(session.as_ref(), req.context_mode);
+            let user = user.replace(
+                "## 指令",
+                &format!("## 父会话上下文\n{parent_context}\n\n## 指令"),
+            );
+            (
+                tools::schemas_json_for_names(profile.tool_schema_dialect, READ_ONLY_TOOLS),
+                vec![Message::system(system), Message::user(user)],
+            )
+        }
+    };
 
     for _ in 0..MAX_SUBAGENT_STEPS {
         if state.cancel.load(Ordering::Relaxed) {
@@ -162,7 +191,7 @@ fn parent_context_block(session: Option<&store::Session>, mode: SubagentContextM
 
     let keep = match mode {
         SubagentContextMode::Brief => 8,
-        SubagentContextMode::Recent => 18,
+        SubagentContextMode::Recent | SubagentContextMode::Fork => 18,
     };
     out.push_str("### 最近消息摘录\n");
     let start = session.messages.len().saturating_sub(keep);
@@ -171,6 +200,35 @@ fn parent_context_block(session: Option<&store::Session>, mode: SubagentContextM
         out.push('\n');
     }
     cap_chars(out, MAX_PARENT_CONTEXT_CHARS)
+}
+
+fn repair_unpaired_tool_calls(messages: &mut Vec<Message>) {
+    let existing_results = messages
+        .iter()
+        .filter(|m| m.role == "tool")
+        .filter_map(|m| m.tool_call_id.as_deref())
+        .map(str::to_string)
+        .collect::<std::collections::HashSet<_>>();
+
+    let mut repaired = Vec::with_capacity(messages.len());
+    for msg in messages.drain(..) {
+        let missing = msg
+            .tool_calls
+            .as_ref()
+            .map(|calls| {
+                calls
+                    .iter()
+                    .filter(|tc| !existing_results.contains(&tc.id))
+                    .map(|tc| (tc.id.clone(), tc.function.name.clone()))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        repaired.push(msg);
+        for (id, name) in missing {
+            repaired.push(Message::tool_result(id, name, FORK_PLACEHOLDER_RESULT));
+        }
+    }
+    *messages = repaired;
 }
 
 fn compact_message(msg: &Message) -> String {
@@ -213,7 +271,7 @@ mod tests {
         );
         assert_eq!(
             SubagentContextMode::parse(Some("fork")),
-            SubagentContextMode::Recent
+            SubagentContextMode::Fork
         );
         assert_eq!(SubagentContextMode::parse(None), SubagentContextMode::Brief);
     }
@@ -222,5 +280,26 @@ mod tests {
     fn caps_parent_context() {
         let capped = cap_chars("x".repeat(12), 5);
         assert!(capped.contains("已截断"));
+    }
+
+    #[test]
+    fn repairs_unpaired_tool_calls_with_placeholder() {
+        let mut messages = vec![Message::assistant_tools(
+            None,
+            vec![super::super::conversation::ToolCall {
+                id: "tc1".to_string(),
+                kind: "function".to_string(),
+                function: super::super::conversation::FunctionCall {
+                    name: "agent_spawn".to_string(),
+                    arguments: "{}".to_string(),
+                },
+            }],
+        )];
+        repair_unpaired_tool_calls(&mut messages);
+        assert_eq!(messages.len(), 2);
+        assert_eq!(
+            messages[1].content.as_deref(),
+            Some(FORK_PLACEHOLDER_RESULT)
+        );
     }
 }

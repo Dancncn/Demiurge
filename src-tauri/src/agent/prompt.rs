@@ -15,6 +15,7 @@ pub struct PromptSections {
     pub persona: String,
     pub project: String,
     pub environment: String,
+    pub goal: String,
     pub session_summary: String,
     pub memory: String,
 }
@@ -32,6 +33,7 @@ pub fn build(
         persona: persona_section(persona_text),
         project: project_section(&sandbox),
         environment: environment_section(&sandbox, settings),
+        goal: super::goal::build_goal_context_block(state),
         session_summary: session_summary_section(session_summary),
         memory: memory_section(&sandbox, &packs_dir, &settings.current_pack),
     };
@@ -46,6 +48,7 @@ pub fn assemble(sections: PromptSections) -> String {
     push_section(&mut out, "角色设定", &sections.persona);
     push_section(&mut out, "项目指令", &sections.project);
     push_section(&mut out, "运行环境", &sections.environment);
+    push_section(&mut out, "当前目标", &sections.goal);
     push_section(&mut out, "会话摘要", &sections.session_summary);
     push_section(&mut out, "记忆", &sections.memory);
 

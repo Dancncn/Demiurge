@@ -15,7 +15,8 @@ import { Sidebar } from "./components/Sidebar";
 import { Composer } from "./components/Composer";
 import ConfirmDialog from "./components/ConfirmDialog";
 import SettingsDialog from "./components/SettingsDialog";
-import { CheckIcon, ChevronDownIcon, PanelLeftIcon } from "./components/Icons";
+import WorkflowsPanel from "./components/WorkflowsPanel";
+import { CheckIcon, ChevronDownIcon, PanelLeftIcon, WrenchIcon } from "./components/Icons";
 
 const SUGGESTIONS = [
   "现在几点了？顺便说说今天该做点什么",
@@ -35,7 +36,10 @@ function buildHistory(msgs: Message[]): DisplayItem[] {
   const id = () => `h_${++seq}`;
   for (const m of msgs) {
     if (m.role === "user") {
-      out.push({ id: id(), kind: "user", text: m.content ?? "" });
+      const text = m.content ?? "";
+      if (!text.startsWith("[Goal ")) {
+        out.push({ id: id(), kind: "user", text });
+      }
     } else if (m.role === "assistant") {
       if (m.content) out.push({ id: id(), kind: "assistant", text: m.content, streaming: false });
       for (const tc of m.tool_calls ?? []) {
@@ -71,6 +75,7 @@ export default function App() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [packMenuOpen, setPackMenuOpen] = useState(false);
+  const [workflowsOpen, setWorkflowsOpen] = useState(false);
   const [confirmReq, setConfirmReq] = useState<ConfirmRequestEvent | null>(null);
 
   const seq = useRef(0);
@@ -394,6 +399,15 @@ export default function App() {
               </div>
             )}
           </div>
+
+          <button
+            onClick={() => setWorkflowsOpen(true)}
+            title="Workflows"
+            className="ml-auto inline-flex h-9 shrink-0 items-center gap-2 rounded-lg px-3 text-sm font-medium text-[#3f3f3f] transition hover:bg-[#f5f5f5]"
+          >
+            <WrenchIcon size={17} />
+            <span className="hidden sm:inline">Workflows</span>
+          </button>
         </header>
 
         <MessageList
@@ -424,6 +438,12 @@ export default function App() {
         />
       </section>
 
+      <WorkflowsPanel
+        open={workflowsOpen}
+        busy={busy}
+        onClose={() => setWorkflowsOpen(false)}
+        onResume={(command) => void handleSend(command)}
+      />
       <ConfirmDialog req={confirmReq} onRespond={handleRespondConfirm} />
       {settings && (
         <SettingsDialog

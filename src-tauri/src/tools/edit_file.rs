@@ -585,6 +585,8 @@ mod tests {
             ),
             session_permission_rules: Mutex::new(HashMap::<String, PermissionRule>::new()),
             edit_undo_stack: Mutex::new(Vec::new()),
+            workflow_runs: Mutex::new(Vec::new()),
+            workflow_cancels: Mutex::new(HashMap::new()),
             cancel: AtomicBool::new(false),
             busy: AtomicBool::new(false),
             data_dir: Mutex::new(sandbox.clone()),
