@@ -27,6 +27,8 @@ pub struct AgentBudget {
     pub reserved_output_tokens: Option<usize>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_steps: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_total_tokens: Option<usize>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -76,6 +78,7 @@ pub struct ResolvedAgents {
     pub max_input_tokens: Option<usize>,
     pub reserved_output_tokens: Option<usize>,
     pub max_steps: Option<usize>,
+    pub max_total_tokens: Option<usize>,
 }
 
 pub fn ensure_dir(state: &crate::AppState) -> Result<PathBuf, String> {
@@ -140,6 +143,7 @@ pub fn resolve_selected(state: &crate::AppState, names: &[String]) -> Result<Res
     let mut max_input_tokens = None;
     let mut reserved_output_tokens = None;
     let mut max_steps = None;
+    let mut max_total_tokens = None;
     for def in &definitions {
         for tool in &def.allowed_tools {
             if !allowed.contains(tool) {
@@ -150,6 +154,7 @@ pub fn resolve_selected(state: &crate::AppState, names: &[String]) -> Result<Res
             min_assign(&mut max_input_tokens, budget.max_input_tokens);
             min_assign(&mut reserved_output_tokens, budget.reserved_output_tokens);
             min_assign(&mut max_steps, budget.max_steps);
+            min_assign(&mut max_total_tokens, budget.max_total_tokens);
         }
     }
 
@@ -160,6 +165,7 @@ pub fn resolve_selected(state: &crate::AppState, names: &[String]) -> Result<Res
         max_input_tokens,
         reserved_output_tokens,
         max_steps,
+        max_total_tokens,
     })
 }
 
@@ -301,5 +307,23 @@ fn cap_chars(s: String, max: usize) -> String {
     } else {
         let head: String = s.chars().take(max).collect();
         format!("{head}\n…[Agent 模板内容已截断]")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_agent_total_token_budget() {
+        let raw = r#"{
+          "name": "budgeted",
+          "budget": { "max_input_tokens": 4000, "max_total_tokens": 12000, "max_steps": 3 }
+        }"#;
+        let parsed: AgentFile = serde_json::from_str(raw).unwrap();
+        let budget = parsed.budget.unwrap();
+        assert_eq!(budget.max_input_tokens, Some(4000));
+        assert_eq!(budget.max_total_tokens, Some(12000));
+        assert_eq!(budget.max_steps, Some(3));
     }
 }

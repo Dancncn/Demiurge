@@ -86,6 +86,12 @@ export interface WorkflowDefinitionInfo {
   path: string;
 }
 
+export interface TokenBudgetState {
+  total?: number;
+  used_exact: number;
+  used_estimated: number;
+}
+
 export interface WorkflowAgentProgress {
   id: number;
   label: string;
@@ -106,6 +112,7 @@ export interface WorkflowRunProgress {
   started_at: number;
   updated_at: number;
   error?: string;
+  budget: TokenBudgetState;
 }
 
 export interface WorkflowPanelState {
@@ -137,6 +144,7 @@ export interface AgentBudget {
   max_input_tokens?: number;
   reserved_output_tokens?: number;
   max_steps?: number;
+  max_total_tokens?: number;
 }
 
 export interface AgentDefinitionInfo {

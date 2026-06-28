@@ -43,6 +43,13 @@ function statusClass(status: WorkflowStatus) {
   }
 }
 
+function budgetLabel(budget?: { total?: number; used_exact: number; used_estimated: number }) {
+  if (!budget?.total) return "unlimited";
+  const used = budget.used_exact + budget.used_estimated;
+  const remaining = Math.max(0, budget.total - used);
+  return `${used}/${budget.total} · ${remaining} left`;
+}
+
 export default function WorkflowsPanel({ open, busy, onClose, onResume }: Props) {
   const [state, setState] = useState<WorkflowPanelState>(EMPTY_STATE);
   const [selectedRunId, setSelectedRunId] = useState<string>("");
@@ -248,9 +255,10 @@ function RunDetail({
         </div>
       </div>
 
-      <div className="grid gap-3 sm:grid-cols-3">
+      <div className="grid gap-3 sm:grid-cols-4">
         <Metric label="Phase" value={run.current_phase || "-"} />
         <Metric label="Agents" value={`${doneAgents}/${run.agents.length}`} />
+        <Metric label="Token budget" value={budgetLabel(run.budget)} />
         <Metric label="Updated" value={String(run.updated_at)} />
       </div>
 

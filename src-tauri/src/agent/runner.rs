@@ -30,6 +30,7 @@ pub struct TurnOptions {
     pub stored_user_text: Option<String>,
     pub workflow_run_id: Option<String>,
     pub agent_names: Vec<String>,
+    pub token_budget: Option<budget::TokenBudgetState>,
 }
 
 pub async fn run_turn(
@@ -60,6 +61,10 @@ pub async fn run_turn_with_options(
             .min(settings.max_input_tokens.saturating_sub(512));
     }
     let max_steps = selected_agents.max_steps.unwrap_or(MAX_STEPS).min(MAX_STEPS);
+    let mut turn_budget = options
+        .token_budget
+        .clone()
+        .or_else(|| selected_agents.max_total_tokens.map(|total| budget::TokenBudgetState::new(Some(total))));
     // 捕获本轮的目标会话 id：即便用户中途切换会话，写入也始终落到这一段对话
     let sid = state.sessions.lock().unwrap().active.clone();
 
@@ -206,6 +211,22 @@ pub async fn run_turn_with_options(
             v
         };
 
+        if turn_budget.as_ref().is_some_and(|budget| budget.is_exhausted()) {
+            let message = "（已达到本轮 token 硬预算，已停止继续调用模型）".to_string();
+            push(Message::assistant_text(message.clone()));
+            state.persist_sessions();
+            if let Some(run_id) = &options.workflow_run_id {
+                let _ = workflow_journal::append(
+                    state,
+                    run_id,
+                    "token_budget_exhausted",
+                    json!({ "used": turn_budget.as_ref().map(|b| b.used_total()), "total": turn_budget.as_ref().and_then(|b| b.total) }),
+                );
+            }
+            let _ = app.emit("assistant-done", message);
+            return Ok(());
+        }
+
         let _ = app.emit("assistant-start", ());
 
         let turn = llm::stream_completion(
@@ -219,6 +240,26 @@ pub async fn run_turn_with_options(
             &state.cancel,
         )
         .await?;
+
+        if let Some(budget_state) = &mut turn_budget {
+            let estimated = budget::estimate_messages_tokens(&full)
+                .saturating_add(budget::estimate_text_tokens(&turn.content));
+            budget_state.record_usage_or_estimate(turn.usage, estimated);
+            if let Some(run_id) = &options.workflow_run_id {
+                let _ = workflow_journal::append(
+                    state,
+                    run_id,
+                    "token_budget_used",
+                    json!({
+                        "used": budget_state.used_total(),
+                        "used_exact": budget_state.used_exact,
+                        "used_estimated": budget_state.used_estimated,
+                        "total": budget_state.total,
+                        "remaining": budget_state.remaining(),
+                    }),
+                );
+            }
+        }
 
         let exact_usage_recorded = goal::add_provider_usage(state, &sid, turn.usage.as_ref());
 

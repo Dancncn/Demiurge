@@ -11,7 +11,7 @@ use serde_json::json;
 use tauri::{AppHandle, Emitter, Manager};
 
 use super::subagent::{SubagentContextMode, SubagentRequest};
-use super::{subagent, workflow_journal};
+use super::{budget, subagent, workflow_journal};
 use crate::store;
 
 const WORKFLOW_DIR: &str = ".demiurge/workflows";
@@ -44,6 +44,7 @@ pub struct WorkflowRunProgress {
     pub started_at: u64,
     pub updated_at: u64,
     pub error: Option<String>,
+    pub budget: budget::TokenBudgetState,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
@@ -130,6 +131,7 @@ pub fn panel_state(state: &crate::AppState) -> WorkflowPanelState {
             started_at: info.updated_at,
             updated_at: info.updated_at,
             error: None,
+            budget: budget::TokenBudgetState::default(),
         });
     }
     runs.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
@@ -192,6 +194,7 @@ pub fn launch(app: &AppHandle, state: &crate::AppState, name: &str) -> Result<St
         started_at: now,
         updated_at: now,
         error: None,
+        budget: budget::TokenBudgetState::default(),
     };
     state.workflow_runs.lock().unwrap().push(progress);
     state
@@ -340,6 +343,7 @@ fn run_step<'a>(
                 }
             }
             WorkflowStep::Budget { total } => {
+                set_budget(app, state, run_id, budget::TokenBudgetState::new(total));
                 push_log(
                     app,
                     state,
@@ -371,6 +375,12 @@ async fn run_agent_step(
     context_mode: Option<String>,
 ) -> Result<(), String> {
     let id = next_agent_id(state, run_id);
+    if workflow_budget(state, run_id).is_some_and(|budget| budget.is_exhausted()) {
+        let message = "workflow token budget exhausted before agent step".to_string();
+        push_log(app, state, run_id, message.clone());
+        let _ = workflow_journal::append(state, run_id, "token_budget_exhausted", json!({}));
+        return Err(message);
+    }
     let label = label.unwrap_or_else(|| format!("agent-{id}"));
     push_agent(app, state, run_id, id, label.clone(), phase.clone());
     let _ = workflow_journal::append(
@@ -388,12 +398,14 @@ async fn run_agent_step(
             agent_type,
             agent_name,
             context_mode: mode,
+            max_total_tokens: workflow_budget(state, run_id).and_then(|budget| budget.remaining()),
         },
     )
     .await;
 
     match result {
         Ok(text) => {
+            record_budget_estimate(app, state, run_id, budget::estimate_text_tokens(&text));
             update_agent(
                 app,
                 state,
@@ -563,6 +575,62 @@ fn update_agent(
     emit_update(app, state);
 }
 
+fn workflow_budget(state: &crate::AppState, run_id: &str) -> Option<budget::TokenBudgetState> {
+    state
+        .workflow_runs
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|run| run.run_id == run_id)
+        .map(|run| run.budget.clone())
+}
+
+fn set_budget(
+    app: &AppHandle,
+    state: &crate::AppState,
+    run_id: &str,
+    next_budget: budget::TokenBudgetState,
+) {
+    let mut runs = state.workflow_runs.lock().unwrap();
+    if let Some(run) = runs.iter_mut().find(|run| run.run_id == run_id) {
+        run.budget = next_budget;
+        run.updated_at = store::now_millis();
+    }
+    drop(runs);
+    emit_update(app, state);
+}
+
+fn record_budget_estimate(app: &AppHandle, state: &crate::AppState, run_id: &str, tokens: usize) {
+    if tokens == 0 {
+        return;
+    }
+    let mut snapshot = None;
+    let mut runs = state.workflow_runs.lock().unwrap();
+    if let Some(run) = runs.iter_mut().find(|run| run.run_id == run_id) {
+        if run.budget.total.is_some() {
+            run.budget.record_estimated(tokens);
+            run.updated_at = store::now_millis();
+            snapshot = Some(run.budget.clone());
+        }
+    }
+    drop(runs);
+    if let Some(budget) = snapshot {
+        let _ = workflow_journal::append(
+            state,
+            run_id,
+            "token_budget_used",
+            json!({
+                "used": budget.used_total(),
+                "used_exact": budget.used_exact,
+                "used_estimated": budget.used_estimated,
+                "total": budget.total,
+                "remaining": budget.remaining(),
+            }),
+        );
+        emit_update(app, state);
+    }
+}
+
 fn set_phase(app: &AppHandle, state: &crate::AppState, run_id: &str, phase: Option<String>) {
     let mut runs = state.workflow_runs.lock().unwrap();
     if let Some(run) = runs.iter_mut().find(|run| run.run_id == run_id) {
@@ -638,6 +706,7 @@ mod tests {
         let raw = r#"{
           "name": "demo",
           "steps": [
+            {"type": "budget", "total": 12000},
             {"type": "log", "message": "hello"},
             {"type": "phase", "name": "find", "steps": [
               {"type": "agent", "label": "reader", "prompt": "inspect"}
@@ -645,7 +714,11 @@ mod tests {
           ]
         }"#;
         let parsed = serde_json::from_str::<WorkflowFile>(raw).unwrap();
-        assert_eq!(parsed.steps.len(), 2);
+        assert_eq!(parsed.steps.len(), 3);
+        match &parsed.steps[0] {
+            WorkflowStep::Budget { total } => assert_eq!(*total, Some(12000)),
+            _ => panic!("expected budget step"),
+        }
     }
 
     #[test]

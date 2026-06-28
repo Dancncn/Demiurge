@@ -10,6 +10,7 @@ struct Args {
     agent_type: Option<String>,
     agent_name: Option<String>,
     context_mode: Option<String>,
+    max_total_tokens: Option<usize>,
 }
 
 pub async fn run(state: &crate::AppState, args: Value) -> Result<String, String> {
@@ -22,6 +23,7 @@ pub async fn run(state: &crate::AppState, args: Value) -> Result<String, String>
             agent_type: args.agent_type,
             agent_name: args.agent_name,
             context_mode: SubagentContextMode::parse(args.context_mode.as_deref()),
+            max_total_tokens: args.max_total_tokens,
         },
     )
     .await

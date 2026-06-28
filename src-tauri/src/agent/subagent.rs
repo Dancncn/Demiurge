@@ -5,7 +5,7 @@ use serde_json::{json, Value};
 
 use super::conversation::Message;
 use super::custom;
-use super::prompt;
+use super::{budget, prompt};
 use crate::{llm, pack, store, tools};
 
 const MAX_SUBAGENT_STEPS: usize = 6;
@@ -29,6 +29,7 @@ pub struct SubagentRequest {
     pub agent_type: Option<String>,
     pub agent_name: Option<String>,
     pub context_mode: SubagentContextMode,
+    pub max_total_tokens: Option<usize>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -72,6 +73,10 @@ pub async fn run(state: &crate::AppState, req: SubagentRequest) -> Result<String
         .as_deref()
         .and_then(|name| custom::load_agent(state, name).ok())
         .or_else(|| custom::load_agent(state, agent_type).ok());
+    let mut token_budget = req
+        .max_total_tokens
+        .or_else(|| template.as_ref().and_then(|agent| agent.budget.as_ref()?.max_total_tokens))
+        .map(|total| budget::TokenBudgetState::new(Some(total)));
     let template_block = template
         .as_ref()
         .map(|agent| {
@@ -165,6 +170,10 @@ pub async fn run(state: &crate::AppState, req: SubagentRequest) -> Result<String
             return Ok("[子 Agent 已被用户中断]".to_string());
         }
 
+        if token_budget.as_ref().is_some_and(|budget| budget.is_exhausted()) {
+            return Ok("[子 Agent 已达到 token 硬预算，停止继续调用模型]".to_string());
+        }
+
         let turn = llm::stream_completion(
             &state.http,
             &settings,
@@ -174,6 +183,12 @@ pub async fn run(state: &crate::AppState, req: SubagentRequest) -> Result<String
             &state.cancel,
         )
         .await?;
+
+        if let Some(budget_state) = &mut token_budget {
+            let estimated = budget::estimate_messages_tokens(&msgs)
+                .saturating_add(budget::estimate_text_tokens(&turn.content));
+            budget_state.record_usage_or_estimate(turn.usage, estimated);
+        }
 
         if turn.finish_reason == "interrupted" {
             return Ok(if turn.content.trim().is_empty() {
@@ -209,6 +224,12 @@ pub async fn run(state: &crate::AppState, req: SubagentRequest) -> Result<String
             } else {
                 format!("错误：子 Agent 不允许使用工具 {name}")
             };
+            if let Some(budget_state) = &mut token_budget {
+                budget_state.record_estimated(
+                    budget::estimate_text_tokens(&tc.function.arguments)
+                        .saturating_add(budget::estimate_text_tokens(&result)),
+                );
+            }
             msgs.push(Message::tool_result(tc.id, name, result));
         }
     }

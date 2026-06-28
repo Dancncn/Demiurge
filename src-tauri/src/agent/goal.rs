@@ -198,6 +198,7 @@ pub async fn drive_after_turn(
                         stored_user_text: Some(stored_user_text),
                         workflow_run_id: None,
                         agent_names: Vec::new(),
+                        token_budget: None,
                     },
                 )
                 .await?;
@@ -228,6 +229,7 @@ pub async fn drive_after_turn(
                         stored_user_text: Some("[Goal budget limit]".to_string()),
                         workflow_run_id: None,
                         agent_names: Vec::new(),
+                        token_budget: None,
                     },
                 )
                 .await?;

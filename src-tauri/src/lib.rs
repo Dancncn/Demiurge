@@ -149,6 +149,7 @@ async fn send(app: AppHandle, state: State<'_, AppState>, text: String) -> Resul
                         stored_user_text: Some(stored_user_text),
                         workflow_run_id: None,
                         agent_names: Vec::new(),
+                        token_budget: None,
                     },
                 )
                 .await
@@ -188,6 +189,7 @@ async fn send(app: AppHandle, state: State<'_, AppState>, text: String) -> Resul
                 stored_user_text: None,
                 workflow_run_id: Some(run_id),
                 agent_names: Vec::new(),
+                token_budget: None,
             },
         )
         .await
@@ -209,6 +211,7 @@ async fn send(app: AppHandle, state: State<'_, AppState>, text: String) -> Resul
                 stored_user_text: None,
                 workflow_run_id: Some(run_id),
                 agent_names: Vec::new(),
+                token_budget: None,
             },
         )
         .await
