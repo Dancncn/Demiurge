@@ -30,6 +30,8 @@ keyring = "4.1.2"
 xcap = "0.9"
 image = { version = "0.25", default-features = false, features = ["png"] }
 oar-ocr = "=0.7.0"
+base64 = "0.22"
+zip = { version = "2", default-features = false, features = ["deflate"] }
 
 [profile.release]
 opt-level = "s"

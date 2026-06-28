@@ -68,6 +68,8 @@ export const mcpRefresh = () => invoke<McpPanelState>("mcp_refresh");
 export const mcpSetServerEnabled = (name: string, enabled: boolean) =>
   invoke<McpPanelState>("mcp_set_server_enabled", { name, enabled });
 export const listPacks = () => invoke<PackManifest[]>("list_packs");
+export const importPackZip = (fileName: string, bytes: number[]) =>
+  invoke<PackManifest>("import_pack_zip", { fileName, bytes });
 export const agentPanelState = () => invoke<AgentPanelState>("agent_panel_state");
 export const agentTemplateJson = () => invoke<string>("agent_template_json");
 export const agentValidateJson = (rawJson: string) => invoke<AgentValidationResult>("agent_validate_json", { rawJson });

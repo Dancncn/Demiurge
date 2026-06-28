@@ -387,6 +387,7 @@ export interface PackManifest {
   name: string;
   persona: string;
   avatar?: string;
+  avatarDataUrl?: string;
 }
 
 export type AgentKind = "template" | "team";

@@ -676,6 +676,16 @@ fn list_packs(state: State<'_, AppState>) -> Vec<pack::PackManifest> {
 }
 
 #[tauri::command]
+fn import_pack_zip(
+    state: State<'_, AppState>,
+    file_name: String,
+    bytes: Vec<u8>,
+) -> Result<pack::PackManifest, String> {
+    let dir = state.packs_dir.lock().unwrap().clone();
+    pack::import_zip(&dir, &file_name, bytes)
+}
+
+#[tauri::command]
 fn agent_panel_state(state: State<'_, AppState>) -> agent::custom::AgentPanelState {
     agent::custom::panel_state(state.inner())
 }
@@ -1489,6 +1499,7 @@ pub fn run() {
             mcp_refresh,
             mcp_set_server_enabled,
             list_packs,
+            import_pack_zip,
             agent_panel_state,
             agent_template_json,
             agent_validate_json,
