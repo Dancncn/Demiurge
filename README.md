@@ -1,20 +1,21 @@
 <div align="center">
 
-<img src="docs/assets/logo.png" width="128" alt="Demiurge" />
+<img src="docs/assets/logo.png" width="132" alt="Demiurge" />
 
 # Demiurge
 
-**轻量、开源的桌面伴侣 Agent 引擎**
+**轻量、开源、可扩展的桌面 Agent 引擎**
 
-加载你自己的「角色包」，用一个会自主调用工具的 agent 循环驱动它——
-既能入戏陪你聊天，也能在你的电脑上动手帮你做事。
+加载你自己的角色包，把本地桌面、项目上下文、工具系统和大模型端点接成一个可控的 Agent。<br/>
+它既能像角色一样陪你聊天，也能在权限确认后读项目、搜索、编辑、执行命令、整理记忆和持续推进目标。
 
-[![License](https://img.shields.io/badge/License-MIT-black.svg)](LICENSE)
-[![Rust](https://img.shields.io/badge/Rust-000000?logo=rust&logoColor=white)](https://www.rust-lang.org/)
-[![Tauri](https://img.shields.io/badge/Tauri-2.x-24C8DB?logo=tauri&logoColor=white)](https://tauri.app/)
-[![React](https://img.shields.io/badge/React-18-20232A?logo=react&logoColor=61DAFB)](https://react.dev/)
-[![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
-[![Tailwind CSS](https://img.shields.io/badge/Tailwind_CSS-4-38BDF8?logo=tailwindcss&logoColor=white)](https://tailwindcss.com/)
+[![License](https://img.shields.io/badge/License-MIT-111827?style=for-the-badge)](LICENSE)
+[![Rust](https://img.shields.io/badge/Rust-Core-000000?style=for-the-badge&logo=rust&logoColor=white)](https://www.rust-lang.org/)
+[![Tauri](https://img.shields.io/badge/Tauri-2.x-24C8DB?style=for-the-badge&logo=tauri&logoColor=white)](https://tauri.app/)
+[![React](https://img.shields.io/badge/React-18-20232A?style=for-the-badge&logo=react&logoColor=61DAFB)](https://react.dev/)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6?style=for-the-badge&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
+[![Vite](https://img.shields.io/badge/Vite-6-646CFF?style=for-the-badge&logo=vite&logoColor=white)](https://vite.dev/)
+[![Tailwind CSS](https://img.shields.io/badge/Tailwind-4-38BDF8?style=for-the-badge&logo=tailwindcss&logoColor=white)](https://tailwindcss.com/)
 
 </div>
 
@@ -22,68 +23,213 @@
 
 ## 这是什么
 
-Demiurge 是一个**桌面伴侣的「空引擎」**。它本身不内置任何角色——你给它一个**角色包**
-（人格，未来还有头像 / 语音 / Live2D），它就化身为那个角色。底层是一个真正的 agent 循环：
-角色不只是回话，还能调用工具读写文件、打开网页、联网搜索、查看系统状态，重要操作前会先征求你同意。
+Demiurge 是一个桌面伴侣 Agent 的“空引擎”。它不绑定具体角色，也不托管你的数据；你提供角色包和 LLM 端点，它负责把对话、工具、记忆、安全边界和本地桌面能力串起来。
 
-- **轻量**：Tauri + Rust 内核，小巧省内存，不打包 JS 运行时——能安心和游戏一起跑在轻薄本上。
-- **自带大脑**：没有托管后端、不收集数据。把引擎指向你自己的 LLM 端点即可（默认 DeepSeek，或任意 OpenAI 兼容端点如 LM Studio）。
-- **角色与引擎分离**：引擎通用、纯净，可加载任意角色；具体角色以单独的角色包形式由你导入。
-- **会动手，且安全**：文件操作被物理限制在沙盒目录；删除 / 覆盖 / 打开应用等有副作用的操作会先弹窗确认。
+- **本地优先**：Tauri + Rust 后端，设置、会话、角色包、记忆都保存在本机。
+- **角色与引擎分离**：角色包只描述 persona、memory、未来的头像/语音/Live2D 等素材；引擎保持通用。
+- **会动手**：可读写沙盒文件、编辑代码、跑 shell、联网搜索、截图/OCR、派生子 Agent、运行 workflow。
+- **可控安全**：写文件、shell、打开路径、截图/OCR 等敏感操作走确认门；文件工具被限制在沙盒目录。
+- **可持续推进**：`/goal` 可以设置长期目标，普通回合结束后继续自动驱动，直到完成、暂停、阻塞或预算耗尽。
 
-## 功能
+## 功能概览
 
-- 流式对话（逐字输出，可随时中断）
-- Markdown / 代码块（带复制）/ 数学公式渲染
-- 工具调用：`open_path`（打开文件 / 应用 / 网址）、`read_file` / `write_file`（沙盒内）、`web_search`、`system_info`
-- 权限确认弹窗（不可逆操作执行前征求同意）
-- 多会话管理（新建 / 切换 / 删除）、角色包切换、会话本地持久化（重启恢复）
-- 简洁的浅色聊天界面
+### Agent Core
+
+- 流式对话、随时中断、多轮 tool call loop。
+- OpenAI-compatible、local、Anthropic、Gemini provider adapters。
+- 统一工具 schema，按 provider 方言输出。
+- 多会话持久化、角色包切换、设置持久化。
+- LLM API Key 使用系统凭据管理器保存。
+
+### Context Engineering
+
+- system prompt 分区：引擎规则、角色设定、项目指令、运行环境、当前目标、会话摘要、长期记忆。
+- token-aware history budget。
+- rolling summary。
+- `/compact`、`context_inspect`、`context_collapse`。
+- `/dream` 记忆整理。
+- 自动长期记忆提取，写入沙盒 `.demiurge/memory.md`。
+
+### Tools
+
+- 文件与编辑：`read_file`、`write_file`、`edit_file`、`multi_edit`、`apply_patch`、`undo_edit`。
+- 搜索导航：`glob`、`grep`、`git_status`。
+- 执行：`shell`，带确认、沙盒 cwd、超时和输出截断。
+- Web Search：Bing、DuckDuckGo fallback、Tavily、Brave、Exa adapter。
+- Computer Use 首层能力：窗口列表、屏幕截图、区域/窗口 OCR、OCR 模型下载入口。
+- Deferred tools：`tool_search` / `execute_tool` 按需发现低频工具，减少固定上下文成本。
+
+### Agent Orchestration
+
+- `/ultracode` 多 Agent 编排提示。
+- `agent_spawn` 只读子 Agent。
+- fork context，修复未配对 tool call。
+- workflow JSON DSL：`agent`、`parallel`、`pipeline`、`phase`、`budget`、`log` step。
+- workflow journal/resume。
+- Workflows live panel。
+- `worktree_create` 隔离工作区。
+
+### Reserved Interfaces
+
+- Voice adapter：TTS/ASR 接口已预留，后续可接 GPT-SoVITS、CosyVoice 或其他服务。
+- 角色包素材字段：avatar、voice、Live2D 等已留出扩展空间。
 
 ## 快速开始
 
-**前置**：[Node.js](https://nodejs.org/) ≥ 18、[Rust](https://www.rust-lang.org/tools/install) 稳定版、Windows 自带的 WebView2（macOS / Linux 用系统 WebView）。
+前置依赖：
+
+- Node.js 18+
+- Rust stable
+- Windows WebView2，macOS/Linux 使用系统 WebView
 
 ```bash
 git clone <your-repo-url> demiurge
 cd demiurge
 npm install
-npm run tauri dev      # 开发运行
-npm run tauri build    # 打包安装器
+npm run tauri dev
 ```
 
-首次启动后，点左下角设置，填入你的 **API Key**：
+打包：
 
-- 默认走 **DeepSeek**：`base_url = https://api.deepseek.com/v1`，`model = deepseek-chat`
-- 想用别的？把 `base_url` + `model` 改成任意 OpenAI 兼容端点即可（例如本地的 LM Studio），无需改代码。
+```bash
+npm run tauri build
+```
 
-然后就能开始聊天了。试试「现在几点了」「帮我在沙盒里建个 notes.txt」「搜一下今天的新闻」来体验工具调用。
+首次启动后，在设置里选择 provider，填写 `base_url`、`model` 和 API Key：
+
+- DeepSeek 等在线兼容端点：选择 OpenAI-compatible。
+- LM Studio、Ollama OpenAI-compatible、vLLM：选择 local，API Key 可为空。
+- Anthropic / Gemini：选择对应 provider，并使用各自默认或自定义 endpoint。
+
+## 常用命令
+
+```text
+/compact [keep=N]              折叠较早上下文
+/dream                         整理长期记忆
+/goal <objective> [+500k]      设置持续目标和可选 token budget
+/goal status                   查看目标状态
+/goal pause|resume|continue    控制目标续跑
+/ultracode <task>              开启多 Agent 编排提示
+/workflows                     查看 workflow runs
+/workflow resume <run_id>      从 journal 恢复 workflow 上下文
+```
 
 ## 角色包
 
-引擎不内置角色——角色以角色包形式存在。最小格式：
+角色包放在应用数据目录的 `packs/<id>/` 下。最小结构：
 
-```
+```text
 packs/<id>/
-├─ manifest.json   { "id": "...", "name": "...", "persona": "persona.md" }
-└─ persona.md      角色人格正文（会拼进系统提示词）
+├─ manifest.json
+└─ persona.md
 ```
 
-把你的角色包放进**应用数据目录**的 `packs/<id>/` 下，在界面里选择即可。仓库只附带一个通用的
-`default` 包作为格式参考。`avatar` / Live2D / 语音等字段已为后续预留。
+`manifest.json` 示例：
 
-## 安全说明
+```json
+{
+  "id": "default",
+  "name": "Default",
+  "persona": "persona.md"
+}
+```
 
-- 文件工具（读 / 写）被**物理限制**在应用数据目录下的 `sandbox/`，越界路径（含符号链接 / junction）一律拒绝。
-- `open_path`、`write_file` 等有副作用的操作会**先弹确认框**，你不点同意就不执行。
-- API Key 目前以明文存于本机配置文件（仅本机使用）；后续计划改用系统凭据管理器。
+可选文件：
 
-## 文档
+```text
+memory.md        # 角色长期记忆，只读注入 prompt
+assets/          # 头像、语音、Live2D 等本地素材
+```
 
-- [设计与技术路线](docs/demiurge-mvp-design.md)
-- [实现说明（架构 / 事件协议 / 如何扩展）](docs/IMPLEMENTATION.md)
+## System Architecture
+
+```text
+React UI
+  ├─ invoke: send / settings / sessions / workflow commands
+  └─ listen: assistant/tool/confirm/workflow events
+        │
+        ▼
+Rust AppState
+  ├─ agent runner
+  ├─ prompt/context/memory/goal
+  ├─ tool registry + permission gate
+  ├─ provider adapters
+  └─ session/settings/keyring persistence
+        │
+        ▼
+LLM endpoint / local tools / OS integrations
+```
+
+## Project Structure
+
+```text
+Demiurge/
+├─ src/                         # React front-end
+│  ├─ components/                # Sidebar, Composer, ToolCard, Settings, Workflows
+│  ├─ lib/                       # Tauri API wrapper and shared types
+│  ├─ App.tsx                    # Front-end orchestration and event binding
+│  └─ style.css                  # Global UI styling
+├─ src-tauri/                    # Rust/Tauri back-end
+│  ├─ src/agent/                 # Agent loop, context, memory, goal, workflow
+│  ├─ src/llm/                   # Provider adapters
+│  ├─ src/tools/                 # Built-in tools and registry
+│  ├─ src/permission/            # Confirmation and permission gate
+│  ├─ src/store/                 # Settings/session persistence
+│  ├─ src/pack/                  # Character pack loading
+│  ├─ src/credentials.rs         # Keyring integration
+│  ├─ src/ocr.rs                 # OCR model and inference entry
+│  └─ src/voice.rs               # Voice adapter placeholder
+├─ docs/                         # Design, implementation notes, roadmap
+├─ packs/                        # Example character pack
+├─ public/                       # Static assets
+└─ package.json                  # Front-end and Tauri scripts
+```
+
+## Security Model
+
+- 文件工具只能访问应用数据目录下的 `sandbox/`。
+- 路径先做词法校验，再做 canonicalize 校验，防止 `..`、符号链接和 junction 逃逸。
+- 写文件、shell、open_path、截图/OCR 等操作会先请求确认。
+- shell 限制 cwd、timeout 和 output cap。
+- 子 Agent 默认只读，不允许写文件、跑 shell 或递归派生。
+- LLM API Key 存在系统凭据管理器中，不写入 `settings.json`。
+- Web Search 外部 adapter key 当前通过环境变量读取，后续可接入设置 UI 和 keyring。
+
+## Development
+
+开发运行：
+
+```bash
+npm run tauri dev
+```
+
+前端构建：
+
+```bash
+npm run build
+```
+
+Rust 测试：
+
+```bash
+cargo test --manifest-path src-tauri/Cargo.toml
+```
+
+Tauri 打包：
+
+```bash
+npm run tauri build
+```
+
+## Documentation
+
+- [实现说明](docs/IMPLEMENTATION.md)
 - [TODO / 路线图](docs/TODO.md)
+- [Goal 持续驱动](docs/goal-continuous-driving.md)
+- [Ultracode 多 Agent 编排](docs/ultracode-agent-orchestration.md)
+- [Workflow JSON DSL](docs/workflow-json-dsl.md)
+- [MVP 设计背景](docs/demiurge-mvp-design.md)
 
-## 许可
+## License
 
-引擎代码采用 [MIT](LICENSE)。具体角色的素材（美术、语音、基于特定作品的人格）由用户自备，不随本仓库分发。
+Demiurge is released under the [MIT License](LICENSE). Character assets, voice assets, artwork, and persona packs based on specific works are user-managed local content and are not distributed with this repository.

@@ -15,7 +15,7 @@ Demiurge 的待办与方向，欢迎认领。✅ 已完成 · ⬜ 待做 · 💡
 - [x] ChatGPT 风浅色 UI（侧栏 + 居中栏 + 悬浮输入框 + Markdown/代码/数学）+ 莲花品牌 + 浅紫渐变
 
 ## 近期打磨 ⬜
-- [x] **Claude Code-like Agent Core 地基首阶段**：工具 metadata、权限决策骨架、`tool_call_id` 事件关联、ProviderProfile 骨架
+- [x] **编码 Agent Core 地基首阶段**：工具 metadata、权限决策骨架、`tool_call_id` 事件关联、ProviderProfile 骨架
 - [x] **Phase 1 只读编程工具**：`glob`、`grep`、`git_status`
 - [x] **Phase 1 编辑工具**：`edit_file`（精确替换 / diff preview / apply-reject）
 - [x] **Phase 1 执行工具地基**：`shell`（confirm / sandbox cwd / timeout / output cap）+ 轻量工具入参校验辅助

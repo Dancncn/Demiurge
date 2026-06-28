@@ -22,7 +22,7 @@ Demiurge 的 Ultracode 集成采用渐进式落地：先提供可运行的只读
 
 ## 上下文工程优化
 
-参考 claude-code-main 中 Ultracode 与 fork-subagent 的设计，本次落地了三条低风险优化：
+参考 Ultracode 与 fork-subagent 的设计，本次落地了三条低风险优化：
 
 1. 编排提示临时注入：`/ultracode` 的规则不进入长期会话历史，避免后续普通对话被大型 workflow 提示污染。
 2. 子 Agent 继承摘要而非全量历史：默认 `brief` 模式只传会话摘要和少量最近消息，必要时可用 `recent` 传更多近期上下文。

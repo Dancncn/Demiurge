@@ -1,6 +1,6 @@
 //! Manual `/dream` memory consolidation.
 //!
-//! This is intentionally smaller than Claude Code's background Auto Dream:
+//! This is intentionally smaller than a full background Auto Dream system:
 //! a user-triggered command reads the current local memory, asks the model to
 //! consolidate it, then confirms before overwriting `.demiurge/memory.md`.
 use std::fs;
