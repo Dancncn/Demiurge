@@ -32,10 +32,11 @@ Demiurge 当前已经从 MVP 进入 Agent 能力打磨阶段。下面把现有 T
 - [x] **项目记忆审计 UI**：长期记忆可查看、编辑、删除，对应条目自动去重。
 - [x] **自定义 Agent 模板**：`.demiurge/agents/*.json` 支持 prompt、allowed tools、budget、handoff format 和评审定义；前端对话可多选 Agent。
 - [x] **多 Agent 证据包与 reviewer**：`agent_spawn` 支持 `output_format=evidence_packet`、`reviewer_count` 和 `max_total_tokens` 硬预算。
+- [x] **MCP 集成第一阶段**：Rust 原生 stdio MCP Manager，支持 server 配置、启动/停止/刷新、tool discovery、resource list/read、secret env keyring、水合/脱敏、动态 `mcp__server__tool` 工具注册、权限风险分级和 Settings/ToolCard UI。
 
 ## P0 / 核心架构与安全边界
 
-- [ ] **MCP 集成第一阶段**：实现完整 MCP Manager，优先 stdio server 配置、启动/停止/健康检查、tool discovery、resource 读取、凭据/env/token 管理、工具调用 UI 渲染，并把 MCP 工具接入权限模型与风险分级；后续再扩展 HTTP/SSE、OAuth、MCP-backed skills。
+- [x] **MCP 集成第一阶段**：实现完整 MCP Manager，优先 stdio server 配置、启动/停止/健康检查、tool discovery、resource 读取、凭据/env/token 管理、工具调用 UI 渲染，并把 MCP 工具接入权限模型与风险分级；后续再扩展 HTTP/SSE、OAuth、MCP-backed skills。
 - [x] **真实 Plan Mode**：实现用户主导的“先计划、后执行”模式；生成计划文件，在用户批准边界之后才允许写入、shell、外部发布等动作，并支持 plan/default/auto/bypass 等权限模式的清晰切换。
 - [x] **Provider Capability Profile 2.0**：在 first slice 基础上完成 prompt caching、thinking、parallel tool calls、max token 差异、structured output/schema dialect、provider-specific token budgets 的统一建模，并把 runner/budget 层切到 profile helper。
 - [ ] **Workflow durable run**：把 live run 从进程内状态升级为跨进程 durable background execution，能够在应用重启后恢复真实 run 状态、取消状态、预算状态和进度，而不只是生成 resume overlay。
