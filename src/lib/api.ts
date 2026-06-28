@@ -6,6 +6,7 @@ import type {
   AgentEditorFile,
   AgentValidationResult,
   AssistantErrorEvent,
+  ConnectionTestResult,
   ConfirmRequestEvent,
   ContextPanelState,
   GoalPanelState,
@@ -48,6 +49,10 @@ export const respondConfirm = (id: string, allow: boolean, scope: PermissionScop
   invoke<void>("respond_confirm", { id, allow, scope });
 export const getSettings = () => invoke<Settings>("get_settings");
 export const saveSettings = (settings: Settings) => invoke<void>("save_settings", { settings });
+export const providerCheckConnection = (settings: Settings) =>
+  invoke<ConnectionTestResult>("provider_check_connection", { settings });
+export const webSearchCheckConnection = (settings: Settings, provider?: string) =>
+  invoke<ConnectionTestResult>("web_search_check_connection", { settings, provider });
 export const setPermissionMode = (mode: PermissionMode) => invoke<Settings>("set_permission_mode", { mode });
 export const planState = () => invoke<PlanState>("plan_state");
 export const approvePlan = () => invoke<PlanState>("approve_plan");

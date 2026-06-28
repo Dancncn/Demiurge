@@ -32,6 +32,13 @@ export type ProviderKind =
 export type PermissionMode = "plan" | "default" | "auto" | "bypass";
 export type WebSearchProvider = "auto" | "bing" | "duckduckgo" | "tavily" | "brave" | "exa";
 
+export interface ConnectionTestResult {
+  ok: boolean;
+  target: string;
+  detail: string;
+  latency_ms: number;
+}
+
 export interface Settings {
   provider: ProviderKind;
   permission_mode: PermissionMode;

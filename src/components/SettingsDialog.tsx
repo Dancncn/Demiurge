@@ -4,6 +4,7 @@ import type {
   AgentEditorFile,
   AgentPanelState,
   AgentValidationResult,
+  ConnectionTestResult,
   ContextPanelState,
   MemoryPanelState,
   McpPanelState,
@@ -166,6 +167,11 @@ function formatBytes(n: number) {
     idx += 1;
   }
   return `${value.toFixed(idx === 0 ? 0 : 1)} ${units[idx]}`;
+}
+
+function formatConnectionTestResult(result: ConnectionTestResult) {
+  const latency = Number.isFinite(result.latency_ms) ? ` (${result.latency_ms} ms)` : "";
+  return `${result.detail}${latency}\n${result.target}`;
 }
 
 function normalizeWebSearchProvider(value: string): WebSearchProvider {
@@ -415,6 +421,10 @@ export default function SettingsDialog({
   const [agentBusy, setAgentBusy] = useState(false);
   const [agentStatus, setAgentStatus] = useState("");
   const [activeTab, setActiveTab] = useState<SettingsTab>("provider");
+  const [providerTestBusy, setProviderTestBusy] = useState(false);
+  const [providerTestStatus, setProviderTestStatus] = useState("");
+  const [webSearchTestBusy, setWebSearchTestBusy] = useState(false);
+  const [webSearchTestStatus, setWebSearchTestStatus] = useState("");
   const [ocrStatus, setOcrStatus] = useState<OcrModelStatus | null>(null);
   const [ocrProgress, setOcrProgress] = useState<OcrDownloadProgress | null>(null);
   const [ocrBusy, setOcrBusy] = useState(false);
@@ -444,6 +454,8 @@ export default function SettingsDialog({
     if (open) {
       setForm(settings);
       setAgentState(agentPanel);
+      setProviderTestStatus("");
+      setWebSearchTestStatus("");
       setWebdavStatus("");
       setWebdavFiles([]);
       setMcpError("");
@@ -557,7 +569,16 @@ export default function SettingsDialog({
 
   if (!open) return null;
 
-  const set = <K extends keyof Settings>(k: K, v: Settings[K]) => setForm((f) => ({ ...f, [k]: v }));
+  const set = <K extends keyof Settings>(k: K, v: Settings[K]) => {
+    const key = String(k);
+    setForm((f) => ({ ...f, [k]: v }));
+    if (["provider", "base_url", "api_key", "model"].includes(key)) {
+      setProviderTestStatus("");
+    }
+    if (["web_search_provider", "tavily_api_key", "brave_search_api_key", "exa_api_key"].includes(key)) {
+      setWebSearchTestStatus("");
+    }
+  };
   const runMemoryAction = async (action: () => Promise<MemoryPanelState>) => {
     setMemoryBusy(true);
     setMemoryError("");
@@ -833,6 +854,32 @@ export default function SettingsDialog({
       setOcrError(String(err));
     } finally {
       setOcrBusy(false);
+    }
+  }
+
+  async function checkProviderConnection() {
+    setProviderTestBusy(true);
+    setProviderTestStatus("");
+    try {
+      const result = await api.providerCheckConnection(form);
+      setProviderTestStatus(formatConnectionTestResult(result));
+    } catch (err) {
+      setProviderTestStatus(String(err));
+    } finally {
+      setProviderTestBusy(false);
+    }
+  }
+
+  async function checkWebSearchConnection() {
+    setWebSearchTestBusy(true);
+    setWebSearchTestStatus("");
+    try {
+      const result = await api.webSearchCheckConnection(form, form.web_search_provider);
+      setWebSearchTestStatus(formatConnectionTestResult(result));
+    } catch (err) {
+      setWebSearchTestStatus(String(err));
+    } finally {
+      setWebSearchTestBusy(false);
     }
   }
 
@@ -1121,7 +1168,20 @@ export default function SettingsDialog({
                             >
                               Use defaults
                             </button>
+                            <button
+                              type="button"
+                              className={secondaryButtonCls}
+                              disabled={providerTestBusy}
+                              onClick={checkProviderConnection}
+                            >
+                              {providerTestBusy ? "Testing..." : "Test connection"}
+                            </button>
                           </div>
+                          {providerTestStatus && (
+                            <div className="rounded-lg border border-[#e2e5ea] bg-[#fbfcfd] p-3 text-[12px] leading-5 text-[#6f7782] whitespace-pre-wrap">
+                              {providerTestStatus}
+                            </div>
+                          )}
                         </div>
                       </div>
                     </div>
@@ -1269,6 +1329,21 @@ export default function SettingsDialog({
                         />
                       </Field>
                     </div>
+                    <div className="mt-4 flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        className={secondaryButtonCls}
+                        disabled={webSearchTestBusy}
+                        onClick={checkWebSearchConnection}
+                      >
+                        {webSearchTestBusy ? "Testing..." : "Test connection"}
+                      </button>
+                    </div>
+                    {webSearchTestStatus && (
+                      <div className="mt-3 rounded-lg border border-[#e2e5ea] bg-[#fbfcfd] p-3 text-[12px] leading-5 text-[#6f7782] whitespace-pre-wrap">
+                        {webSearchTestStatus}
+                      </div>
+                    )}
                   </Section>
                 </>
               )}
