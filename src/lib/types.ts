@@ -18,6 +18,7 @@ export interface Message {
 }
 
 export type ProviderKind = "open_ai_compatible" | "local" | "anthropic" | "gemini";
+export type WebSearchProvider = "auto" | "bing" | "duckduckgo" | "tavily" | "brave" | "exa";
 
 export interface Settings {
   provider: ProviderKind;
@@ -35,6 +36,10 @@ export interface Settings {
   voice_id: string;
   computer_use_enabled: boolean;
   ocr_model_source: OcrModelSource;
+  web_search_provider: WebSearchProvider;
+  tavily_api_key: string;
+  brave_search_api_key: string;
+  exa_api_key: string;
 }
 
 export type OcrModelSource = "modelscope" | "huggingface";

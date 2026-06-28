@@ -242,6 +242,7 @@ fn get_settings(state: State<'_, AppState>) -> Settings {
 #[tauri::command]
 fn save_settings(state: State<'_, AppState>, settings: Settings) -> Result<(), String> {
     credentials::save_api_key(&settings.api_key)?;
+    credentials::save_web_search_api_keys(&settings)?;
     *state.settings.lock().unwrap() = settings.clone();
     let dir = state.data_dir.lock().unwrap().clone();
     store::save_settings(&dir, &settings)

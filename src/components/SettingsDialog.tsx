@@ -1,6 +1,14 @@
 import { useEffect, useState } from "react";
 import * as api from "../lib/api";
-import type { OcrDownloadProgress, OcrModelSource, OcrModelStatus, PackManifest, ProviderKind, Settings } from "../lib/types";
+import type {
+  OcrDownloadProgress,
+  OcrModelSource,
+  OcrModelStatus,
+  PackManifest,
+  ProviderKind,
+  Settings,
+  WebSearchProvider,
+} from "../lib/types";
 import { CloseIcon } from "./Icons";
 
 interface Props {
@@ -46,6 +54,19 @@ const ocrSources: { value: OcrModelSource; label: string }[] = [
   { value: "modelscope", label: "ModelScope 国内源" },
   { value: "huggingface", label: "Hugging Face 国际源" },
 ];
+
+const webSearchProviders: { value: WebSearchProvider; label: string; help: string }[] = [
+  { value: "auto", label: "Auto (Bing → DuckDuckGo)", help: "默认：先尝试 Bing HTML，失败后回退 DuckDuckGo。" },
+  { value: "bing", label: "Bing", help: "使用公开 Bing 搜索结果页，不需要 API Key。" },
+  { value: "duckduckgo", label: "DuckDuckGo", help: "使用 DuckDuckGo Instant Answer API，不需要 API Key。" },
+  { value: "tavily", label: "Tavily", help: "需要 Tavily API Key；也兼容 TAVILY_API_KEY 环境变量。" },
+  { value: "brave", label: "Brave Search", help: "需要 Brave Search API Key；也兼容 BRAVE_SEARCH_API_KEY 环境变量。" },
+  { value: "exa", label: "Exa", help: "需要 Exa API Key；也兼容 EXA_API_KEY 环境变量。" },
+];
+
+function normalizeWebSearchProvider(value: string): WebSearchProvider {
+  return webSearchProviders.some((p) => p.value === value) ? (value as WebSearchProvider) : "auto";
+}
 
 function formatBytes(n: number) {
   if (!Number.isFinite(n) || n <= 0) return "0 B";
@@ -106,6 +127,8 @@ export default function SettingsDialog({ open, settings, packs, onClose, onSave 
 
   const set = <K extends keyof Settings>(k: K, v: Settings[K]) => setForm((f) => ({ ...f, [k]: v }));
   const selectedProvider = providerOptions.find((p) => p.value === form.provider) ?? providerOptions[0];
+  const selectedWebSearchProvider =
+    webSearchProviders.find((p) => p.value === form.web_search_provider) ?? webSearchProviders[0];
   const downloadOcrModels = async () => {
     setOcrBusy(true);
     setOcrError("");
@@ -236,6 +259,58 @@ export default function SettingsDialog({ open, settings, packs, onClose, onSave 
               <span className="mt-1 block text-xs text-[#9a9a9a]">保守提取用户偏好和项目长期约束，写入沙盒 .demiurge/memory.md。</span>
             </span>
           </label>
+
+          <div className="rounded-2xl border border-[#eeeeee] bg-[#fafafa] p-3">
+            <div className="text-sm font-medium text-[#3f3f3f]">Web Search</div>
+            <div className="mt-1 text-xs text-[#9a9a9a]">配置联网搜索 provider；密钥保存到系统凭据管理器，不写入 settings.json。</div>
+            <label className="mt-3 block">
+              <span className={labelCls}>搜索 Provider</span>
+              <select
+                className={inputCls}
+                value={form.web_search_provider}
+                onChange={(e) => set("web_search_provider", normalizeWebSearchProvider(e.target.value))}
+              >
+                {webSearchProviders.map((p) => (
+                  <option key={p.value} value={p.value}>
+                    {p.label}
+                  </option>
+                ))}
+              </select>
+              <span className="mt-1.5 block text-xs text-[#9a9a9a]">{selectedWebSearchProvider.help}</span>
+            </label>
+            <div className="mt-3 grid grid-cols-1 gap-3">
+              <label className="block">
+                <span className={labelCls}>Tavily API Key</span>
+                <input
+                  className={inputCls}
+                  type="password"
+                  value={form.tavily_api_key}
+                  placeholder="tvly-..."
+                  onChange={(e) => set("tavily_api_key", e.target.value)}
+                />
+              </label>
+              <label className="block">
+                <span className={labelCls}>Brave Search API Key</span>
+                <input
+                  className={inputCls}
+                  type="password"
+                  value={form.brave_search_api_key}
+                  placeholder="BSA..."
+                  onChange={(e) => set("brave_search_api_key", e.target.value)}
+                />
+              </label>
+              <label className="block">
+                <span className={labelCls}>Exa API Key</span>
+                <input
+                  className={inputCls}
+                  type="password"
+                  value={form.exa_api_key}
+                  placeholder="exa-..."
+                  onChange={(e) => set("exa_api_key", e.target.value)}
+                />
+              </label>
+            </div>
+          </div>
 
           <div className="rounded-2xl border border-[#eeeeee] bg-[#fafafa] p-3">
             <label className="flex items-start gap-3">
@@ -369,6 +444,10 @@ export default function SettingsDialog({ open, settings, packs, onClose, onSave 
                 voice_tts_backend: form.voice_tts_backend.trim() || "none",
                 voice_id: form.voice_id.trim(),
                 ocr_model_source: form.ocr_model_source || "modelscope",
+                web_search_provider: normalizeWebSearchProvider(form.web_search_provider),
+                tavily_api_key: form.tavily_api_key.trim(),
+                brave_search_api_key: form.brave_search_api_key.trim(),
+                exa_api_key: form.exa_api_key.trim(),
               });
             }}
           >

@@ -72,7 +72,19 @@ pub async fn run(state: &crate::AppState, args: Value) -> Result<String, String>
         .unwrap_or(DEFAULT_CONTEXT_MAX_CHARS)
         .clamp(1_000, MAX_CONTEXT_MAX_CHARS);
     let env_adapter = std::env::var("WEB_SEARCH_ADAPTER").ok();
-    let adapter = Adapter::parse(args.source.as_deref().or(env_adapter.as_deref()));
+    let settings_provider = state
+        .settings
+        .lock()
+        .unwrap()
+        .web_search_provider
+        .trim()
+        .to_string();
+    let adapter = Adapter::parse(
+        args.source
+            .as_deref()
+            .or_else(|| non_empty(settings_provider.as_str()))
+            .or(env_adapter.as_deref()),
+    );
     let allowed = args.allowed_domains.as_deref().unwrap_or(&[]);
     let blocked = args.blocked_domains.as_deref().unwrap_or(&[]);
 
@@ -188,7 +200,7 @@ async fn search_tavily(
         .post(endpoint)
         .header("User-Agent", "Demiurge WebSearch")
         .json(&body);
-    if let Some(key) = env_first(&["TAVILY_API_KEY"]) {
+    if let Some(key) = tavily_api_key(state) {
         req = req.bearer_auth(key.clone()).header("x-api-key", key);
     }
 
@@ -213,8 +225,10 @@ async fn search_tavily(
 }
 
 async fn search_brave(state: &crate::AppState, query: &str) -> Result<Vec<SearchResult>, String> {
-    let key = env_first(&["BRAVE_SEARCH_API_KEY", "BRAVE_API_KEY"])
-        .ok_or_else(|| "Brave 搜索需要设置 BRAVE_SEARCH_API_KEY 或 BRAVE_API_KEY".to_string())?;
+    let key = brave_search_api_key(state).ok_or_else(|| {
+        "Brave 搜索需要在设置中保存 Brave API Key，或设置 BRAVE_SEARCH_API_KEY / BRAVE_API_KEY"
+            .to_string()
+    })?;
     let resp = state
         .http
         .get("https://api.search.brave.com/res/v1/llm/context")
@@ -271,7 +285,7 @@ async fn search_exa(
         .post(endpoint)
         .header("Accept", "application/json, text/event-stream")
         .json(&body);
-    if let Some(key) = env_first(&["EXA_API_KEY"]) {
+    if let Some(key) = exa_api_key(state) {
         req = req.bearer_auth(key);
     }
 
@@ -665,6 +679,41 @@ fn strip_label<'a>(line: &'a str, labels: &[&str]) -> Option<&'a str> {
     } else {
         None
     }
+}
+
+fn non_empty(value: &str) -> Option<&str> {
+    let value = value.trim();
+    if value.is_empty() || value.eq_ignore_ascii_case("auto") {
+        None
+    } else {
+        Some(value)
+    }
+}
+
+fn settings_secret(
+    state: &crate::AppState,
+    key: fn(&crate::store::Settings) -> &String,
+) -> Option<String> {
+    let settings = state.settings.lock().unwrap();
+    let value = key(&settings).trim().to_string();
+    if value.is_empty() {
+        None
+    } else {
+        Some(value)
+    }
+}
+
+fn tavily_api_key(state: &crate::AppState) -> Option<String> {
+    settings_secret(state, |s| &s.tavily_api_key).or_else(|| env_first(&["TAVILY_API_KEY"]))
+}
+
+fn brave_search_api_key(state: &crate::AppState) -> Option<String> {
+    settings_secret(state, |s| &s.brave_search_api_key)
+        .or_else(|| env_first(&["BRAVE_SEARCH_API_KEY", "BRAVE_API_KEY"]))
+}
+
+fn exa_api_key(state: &crate::AppState) -> Option<String> {
+    settings_secret(state, |s| &s.exa_api_key).or_else(|| env_first(&["EXA_API_KEY"]))
 }
 
 fn env_first(keys: &[&str]) -> Option<String> {

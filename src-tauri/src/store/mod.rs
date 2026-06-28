@@ -16,6 +16,10 @@ pub const DEFAULT_AUTO_MEMORY_ENABLED: bool = true;
 pub const DEFAULT_VOICE_ENABLED: bool = false;
 pub const DEFAULT_COMPUTER_USE_ENABLED: bool = false;
 
+fn default_web_search_provider() -> String {
+    "auto".to_string()
+}
+
 fn default_provider() -> ProviderKind {
     ProviderKind::OpenAiCompatible
 }
@@ -95,6 +99,14 @@ pub struct Settings {
     pub computer_use_enabled: bool,
     #[serde(default = "default_ocr_model_source")]
     pub ocr_model_source: String,
+    #[serde(default = "default_web_search_provider")]
+    pub web_search_provider: String,
+    #[serde(default)]
+    pub tavily_api_key: String,
+    #[serde(default)]
+    pub brave_search_api_key: String,
+    #[serde(default)]
+    pub exa_api_key: String,
 }
 
 impl Default for Settings {
@@ -116,6 +128,10 @@ impl Default for Settings {
             voice_id: String::new(),
             computer_use_enabled: DEFAULT_COMPUTER_USE_ENABLED,
             ocr_model_source: default_ocr_model_source(),
+            web_search_provider: default_web_search_provider(),
+            tavily_api_key: String::new(),
+            brave_search_api_key: String::new(),
+            exa_api_key: String::new(),
         }
     }
 }
@@ -209,6 +225,9 @@ pub fn save_settings(dir: &Path, s: &Settings) -> Result<(), String> {
     let p = dir.join("settings.json");
     let mut safe = s.clone();
     safe.api_key.clear();
+    safe.tavily_api_key.clear();
+    safe.brave_search_api_key.clear();
+    safe.exa_api_key.clear();
     let json = serde_json::to_string_pretty(&safe).map_err(|e| e.to_string())?;
     fs::write(&p, json).map_err(|e| e.to_string())
 }
@@ -274,6 +293,10 @@ mod tests {
         assert_eq!(settings.voice_tts_backend, "none");
         assert!(!settings.computer_use_enabled);
         assert_eq!(settings.ocr_model_source, "modelscope");
+        assert_eq!(settings.web_search_provider, "auto");
+        assert!(settings.tavily_api_key.is_empty());
+        assert!(settings.brave_search_api_key.is_empty());
+        assert!(settings.exa_api_key.is_empty());
     }
 
     #[test]
@@ -283,14 +306,23 @@ mod tests {
 
         let settings = Settings {
             api_key: "sk-secret".to_string(),
+            tavily_api_key: "tvly-secret".to_string(),
+            brave_search_api_key: "brave-secret".to_string(),
+            exa_api_key: "exa-secret".to_string(),
             ..Settings::default()
         };
         save_settings(&dir, &settings).unwrap();
 
         let raw = std::fs::read_to_string(dir.join("settings.json")).unwrap();
         assert!(!raw.contains("sk-secret"));
+        assert!(!raw.contains("tvly-secret"));
+        assert!(!raw.contains("brave-secret"));
+        assert!(!raw.contains("exa-secret"));
         let saved = serde_json::from_str::<Settings>(&raw).unwrap();
         assert!(saved.api_key.is_empty());
+        assert!(saved.tavily_api_key.is_empty());
+        assert!(saved.brave_search_api_key.is_empty());
+        assert!(saved.exa_api_key.is_empty());
 
         let _ = std::fs::remove_dir_all(&dir);
     }
