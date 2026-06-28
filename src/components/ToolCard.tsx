@@ -38,6 +38,16 @@ function riskLabel(risk?: ToolRisk) {
 }
 
 function progressSummary(name: string, status: Props["status"], args: unknown, result?: string) {
+  if (name === "mcp_read_resource") {
+    const obj = typeof args === "object" && args ? (args as { server_name?: unknown; uri?: unknown }) : {};
+    const server = obj.server_name ? String(obj.server_name) : "server";
+    const uri = obj.uri ? String(obj.uri) : "resource";
+    if (status === "running") return `正在读取 MCP ${server} / ${uri}`;
+    if (status === "done") {
+      const chars = result?.length ?? 0;
+      return chars > 0 ? `MCP resource 完成，返回 ${chars} 字符` : "MCP resource 完成";
+    }
+  }
   if (name.startsWith("mcp__")) {
     const parts = name.split("__");
     const server = parts[1] || "server";

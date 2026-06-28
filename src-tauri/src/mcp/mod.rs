@@ -671,7 +671,7 @@ pub async fn read_resource(
         REQUEST_TIMEOUT,
     )
     .await?;
-    Ok(format_mcp_tool_result(&result))
+    Ok(format_mcp_resource_result(&result))
 }
 
 fn spawn_stdout_reader(
@@ -1032,6 +1032,44 @@ fn format_jsonrpc_error(error: &Value) -> String {
     }
 }
 
+fn format_mcp_resource_result(result: &Value) -> String {
+    let Some(contents) = result.get("contents").and_then(Value::as_array) else {
+        return format_mcp_tool_result(result);
+    };
+    let mut out = String::new();
+    for item in contents {
+        if !out.is_empty() {
+            out.push_str("\n\n");
+        }
+        let uri = item.get("uri").and_then(Value::as_str).unwrap_or("");
+        let mime = item.get("mimeType").and_then(Value::as_str).unwrap_or("");
+        if !uri.is_empty() || !mime.is_empty() {
+            out.push_str("Resource");
+            if !uri.is_empty() {
+                out.push_str(": ");
+                out.push_str(uri);
+            }
+            if !mime.is_empty() {
+                out.push_str(" (");
+                out.push_str(mime);
+                out.push(')');
+            }
+            out.push_str("\n\n");
+        }
+        if let Some(text) = item.get("text").and_then(Value::as_str) {
+            out.push_str(text);
+        } else if let Some(blob) = item.get("blob").and_then(Value::as_str) {
+            out.push_str(&format!("[base64 blob omitted; {} chars]", blob.len()));
+        } else {
+            out.push_str(&serde_json::to_string_pretty(item).unwrap_or_else(|_| item.to_string()));
+        }
+    }
+    if out.trim().is_empty() {
+        out = serde_json::to_string_pretty(result).unwrap_or_else(|_| result.to_string());
+    }
+    cap_chars(&out, RESULT_CAP_CHARS)
+}
+
 fn format_mcp_tool_result(result: &Value) -> String {
     let mut out = String::new();
     if let Some(content) = result.get("content") {
@@ -1141,5 +1179,19 @@ mod tests {
             }),
             ToolRisk::Mutating
         );
+    }
+
+    #[test]
+    fn formats_resource_text_contents() {
+        let out = format_mcp_resource_result(&json!({
+            "contents": [{
+                "uri": "file:///demo.txt",
+                "mimeType": "text/plain",
+                "text": "hello"
+            }]
+        }));
+        assert!(out.contains("file:///demo.txt"));
+        assert!(out.contains("hello"));
+        assert!(!out.contains("\"contents\""));
     }
 }

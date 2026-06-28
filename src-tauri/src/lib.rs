@@ -336,6 +336,7 @@ fn save_settings(state: State<'_, AppState>, settings: Settings) -> Result<(), S
     credentials::save_web_search_api_keys(&settings)?;
     credentials::save_webdav_password(&settings.webdav_password)?;
     credentials::save_media_api_key(&settings.media_api_key)?;
+    credentials::save_mcp_env_secrets(&settings)?;
     *state.settings.lock().unwrap() = settings.clone();
     let dir = state.data_dir.lock().unwrap().clone();
     store::save_settings(&dir, &settings)
@@ -358,12 +359,7 @@ async fn webdav_backup_now(
     let client = state.http.clone();
     webdav_ensure_collection(&client, &config).await?;
 
-    let mut settings = state.settings.lock().unwrap().clone();
-    settings.api_key.clear();
-    settings.tavily_api_key.clear();
-    settings.brave_search_api_key.clear();
-    settings.exa_api_key.clear();
-    settings.webdav_password.clear();
+    let settings = store::redacted_settings(&state.settings.lock().unwrap().clone());
     let sessions = state.sessions.lock().unwrap().clone();
     let payload = json!({
         "app": "Demiurge",

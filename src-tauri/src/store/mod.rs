@@ -322,8 +322,7 @@ pub fn load_settings(dir: &Path) -> Settings {
         .unwrap_or_default()
 }
 
-pub fn save_settings(dir: &Path, s: &Settings) -> Result<(), String> {
-    let p = dir.join("settings.json");
+pub fn redacted_settings(s: &Settings) -> Settings {
     let mut safe = s.clone();
     safe.api_key.clear();
     safe.tavily_api_key.clear();
@@ -338,6 +337,12 @@ pub fn save_settings(dir: &Path, s: &Settings) -> Result<(), String> {
             }
         }
     }
+    safe
+}
+
+pub fn save_settings(dir: &Path, s: &Settings) -> Result<(), String> {
+    let p = dir.join("settings.json");
+    let safe = redacted_settings(s);
     let json = serde_json::to_string_pretty(&safe).map_err(|e| e.to_string())?;
     fs::write(&p, json).map_err(|e| e.to_string())
 }

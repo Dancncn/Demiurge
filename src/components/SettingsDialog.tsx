@@ -212,16 +212,23 @@ function splitLines(value: string) {
     .filter(Boolean);
 }
 
+function looksSecretEnvKey(key: string) {
+  const normalized = key.toLowerCase().replace(/[^a-z0-9]+/g, "_");
+  return /(api_?key|token|secret|password|passwd|credential|authorization|bearer)/.test(normalized);
+}
+
 function parseEnvLines(value: string) {
   return splitLines(value).map((line) => {
     const idx = line.indexOf("=");
     if (idx === -1) {
-      return { key: line.trim(), value: "", secret: false };
+      const key = line.trim();
+      return { key, value: "", secret: looksSecretEnvKey(key) };
     }
+    const key = line.slice(0, idx).trim();
     return {
-      key: line.slice(0, idx).trim(),
+      key,
       value: line.slice(idx + 1),
-      secret: false,
+      secret: looksSecretEnvKey(key),
     };
   });
 }
@@ -1382,7 +1389,7 @@ export default function SettingsDialog({ open, settings, packs, agentPanel, onCl
                                     onChange={(e) => updateMcpServer(index, { args: splitLines(e.target.value) })}
                                   />
                                 </Field>
-                                <Field label="Environment" help="KEY=value, one per line. Secret storage is handled in the next pass.">
+                                <Field label="Environment" help="KEY=value, one per line. Secret-like keys are stored in the system credential manager.">
                                   <textarea
                                     className="min-h-24 w-full resize-y rounded-md border border-[#d9d9d9] bg-white px-3 py-2 text-[12px] text-[#202124] outline-none transition focus:border-[#7a7f87] focus:ring-2 focus:ring-[#202124]/5"
                                     value={formatEnvLines(server)}
