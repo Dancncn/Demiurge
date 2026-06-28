@@ -7,7 +7,9 @@ use std::path::{Component, Path, PathBuf};
 
 mod agent_spawn;
 mod args;
+mod context_tools;
 mod edit_file;
+mod execute_tool;
 mod git_status;
 mod glob;
 mod grep;
@@ -16,7 +18,9 @@ mod read_file;
 mod screen;
 mod shell;
 mod system_info;
+mod tool_search;
 mod web_search;
+mod worktree;
 mod write_file;
 
 pub use edit_file::EditUndoEntry;
@@ -96,6 +100,40 @@ pub struct ToolDefinition {
     pub permission: PermissionPolicy,
     pub output_policy: ToolOutputPolicy,
     pub parameters: Value,
+}
+
+pub const CORE_TOOL_NAMES: &[&str] = &[
+    "read_file",
+    "glob",
+    "grep",
+    "git_status",
+    "shell",
+    "write_file",
+    "edit_file",
+    "multi_edit",
+    "apply_patch",
+    "undo_edit",
+    "web_search",
+    "agent_spawn",
+    "context_inspect",
+    "context_collapse",
+    "tool_search",
+    "execute_tool",
+    "worktree_create",
+    "system_info",
+];
+
+pub const DEFERRED_TOOL_NAMES: &[&str] = &[
+    "open_path",
+    "screen_list_windows",
+    "screen_capture_region",
+    "screen_capture_window",
+    "screen_ocr_region",
+    "screen_ocr_window",
+];
+
+pub fn is_deferred_tool(name: &str) -> bool {
+    DEFERRED_TOOL_NAMES.contains(&name)
 }
 
 /// 工具注册表。新增工具只需在这里加一项 + 在 execute 里加一条分支。
@@ -294,7 +332,7 @@ pub fn registry() -> Vec<ToolDefinition> {
         },
         ToolDefinition {
             name: "web_search",
-            description: "联网搜索，返回若干结果摘要（基于 DuckDuckGo，无需密钥）。适合查事实、找资料。",
+            description: "联网搜索，返回带来源链接的结果摘要。适合查事实、找资料、获取近期信息；回答中使用搜索信息时必须附 markdown Sources。",
             risk: ToolRisk::External,
             concurrency: ToolConcurrency::ParallelSafe,
             permission: PermissionPolicy::allow("只向搜索服务发送查询并读取公开结果。"),
@@ -302,7 +340,22 @@ pub fn registry() -> Vec<ToolDefinition> {
             parameters: json!({
                 "type": "object",
                 "properties": {
-                    "query": { "type": "string", "description": "搜索关键词" }
+                    "query": { "type": "string", "description": "搜索关键词。查询近期信息时应包含当前年份。" },
+                    "allowed_domains": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "可选：只保留这些域名的结果，如 [\"docs.rs\", \"github.com\"]。不能与 blocked_domains 同时使用。"
+                    },
+                    "blocked_domains": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "可选：排除这些域名的结果。不能与 allowed_domains 同时使用。"
+                    },
+                    "num_results": { "type": "integer", "description": "可选：最多返回多少条结果，默认 8，最大 20。" },
+                    "context_max_characters": { "type": "integer", "description": "可选：搜索结果输出的最大字符数，默认 10000，最大 50000。" },
+                    "source": { "type": "string", "description": "可选：搜索后端，auto、bing 或 duckduckgo。默认 auto。" },
+                    "livecrawl": { "type": "string", "description": "兼容字段，当前保留给后续深度抓取实现。" },
+                    "search_type": { "type": "string", "description": "兼容字段，可传 auto、fast、deep；当前实现按结果页搜索处理。" }
                 },
                 "required": ["query"]
             }),
@@ -320,9 +373,80 @@ pub fn registry() -> Vec<ToolDefinition> {
                     "prompt": { "type": "string", "description": "给子 Agent 的明确任务指令。必须包含范围、目标和期望输出。" },
                     "label": { "type": "string", "description": "可选：3-6 个词的短标签，用于区分多个子 Agent。" },
                     "agent_type": { "type": "string", "description": "可选：探索类型，如 Explore、Reviewer、Verifier、Critic、Planner。" },
-                    "context_mode": { "type": "string", "description": "可选：brief 或 recent。brief 只给摘要和少量最近消息；recent 给更多最近消息。默认 brief。" }
+                    "context_mode": { "type": "string", "description": "可选：brief、recent 或 fork。brief 只给摘要和少量最近消息；recent 给更多最近消息；fork 继承父消息并用 placeholder 修复未配对 tool_call。默认 brief。" }
                 },
                 "required": ["prompt"]
+            }),
+        },
+        ToolDefinition {
+            name: "context_inspect",
+            description: "检查当前会话上下文使用情况，包括消息数、摘要大小、估算历史 token 和可折叠消息数。",
+            risk: ToolRisk::ReadOnly,
+            concurrency: ToolConcurrency::ParallelSafe,
+            permission: PermissionPolicy::allow("只读取当前会话上下文统计。"),
+            output_policy: ToolOutputPolicy::Inline,
+            parameters: json!({ "type": "object", "properties": {} }),
+        },
+        ToolDefinition {
+            name: "context_collapse",
+            description: "把当前会话的旧消息压缩进 rolling summary，并保留最近若干条消息。适合上下文接近上限时释放空间。",
+            risk: ToolRisk::External,
+            concurrency: ToolConcurrency::SerialOnly,
+            permission: PermissionPolicy::ask("会调用摘要模型并修改当前会话历史与摘要。"),
+            output_policy: ToolOutputPolicy::Inline,
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "keep_recent": { "type": "integer", "description": "可选：保留最近多少条消息，默认 12，最小 2。" }
+                }
+            }),
+        },
+        ToolDefinition {
+            name: "tool_search",
+            description: "搜索未直接加载进主 tools schema 的 deferred tools。用于发现截图、OCR、打开路径等低频工具。",
+            risk: ToolRisk::ReadOnly,
+            concurrency: ToolConcurrency::ParallelSafe,
+            permission: PermissionPolicy::allow("只搜索本地工具注册表元数据。"),
+            output_policy: ToolOutputPolicy::TruncateForUi,
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "query": { "type": "string", "description": "要搜索的工具能力，如 screenshot、ocr、open file。" },
+                    "limit": { "type": "integer", "description": "可选：最多返回多少个工具，默认 8，最大 20。" }
+                },
+                "required": ["query"]
+            }),
+        },
+        ToolDefinition {
+            name: "execute_tool",
+            description: "代理执行 tool_search 发现的 deferred tool。core tool 必须直接调用，不要通过本工具执行。",
+            risk: ToolRisk::Privileged,
+            concurrency: ToolConcurrency::SerialOnly,
+            permission: PermissionPolicy::ask("会执行一个被延迟加载的真实工具，可能读取屏幕、打开路径或触发系统能力。"),
+            output_policy: ToolOutputPolicy::TruncateForUi,
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "tool_name": { "type": "string", "description": "tool_search 返回的 deferred tool 名称。" },
+                    "args": { "type": "object", "description": "传给目标工具的参数对象。" }
+                },
+                "required": ["tool_name", "args"]
+            }),
+        },
+        ToolDefinition {
+            name: "worktree_create",
+            description: "在沙盒 Git 仓库中创建一个独立 git worktree，用于隔离较大的并行实现或实验分支。",
+            risk: ToolRisk::Mutating,
+            concurrency: ToolConcurrency::SerialOnly,
+            permission: PermissionPolicy::ask("会调用 git worktree add 并在沙盒 .demiurge/worktrees 下创建新工作区。"),
+            output_policy: ToolOutputPolicy::Inline,
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "label": { "type": "string", "description": "worktree 短标签，会用于目录名。" },
+                    "branch": { "type": "string", "description": "可选：新分支名，默认 demiurge/<label>。" }
+                },
+                "required": ["label"]
             }),
         },
         ToolDefinition {
@@ -426,6 +550,13 @@ pub fn definition_for(name: &str) -> Option<ToolDefinition> {
     registry().into_iter().find(|t| t.name == name)
 }
 
+pub fn deferred_definitions() -> Vec<ToolDefinition> {
+    registry()
+        .into_iter()
+        .filter(|t| is_deferred_tool(t.name))
+        .collect()
+}
+
 /// 转成 OpenAI tools 数组，发给 LLM。
 #[allow(dead_code)]
 pub fn schemas_json() -> Value {
@@ -434,6 +565,10 @@ pub fn schemas_json() -> Value {
 
 pub fn schemas_json_for(dialect: crate::llm::ToolSchemaDialect) -> Value {
     schemas_json_for_defs(dialect, &registry())
+}
+
+pub fn main_schemas_json_for(dialect: crate::llm::ToolSchemaDialect) -> Value {
+    schemas_json_for_names(dialect, CORE_TOOL_NAMES)
 }
 
 pub fn schemas_json_for_names(dialect: crate::llm::ToolSchemaDialect, names: &[&str]) -> Value {
@@ -525,6 +660,11 @@ pub async fn execute(state: &crate::AppState, name: &str, args: Value) -> Result
         "undo_edit" => edit_file::undo(state, args),
         "web_search" => web_search::run(state, args).await,
         "agent_spawn" => agent_spawn::run(state, args).await,
+        "context_inspect" => context_tools::inspect(state),
+        "context_collapse" => context_tools::collapse(state, args).await,
+        "tool_search" => tool_search::run(args),
+        "execute_tool" => execute_tool::run(state, args).await,
+        "worktree_create" => worktree::create(state, args),
         "screen_list_windows" => screen::list_windows(state),
         "screen_capture_region" => screen::capture_region(state, args),
         "screen_capture_window" => screen::capture_window(state, args),
@@ -547,6 +687,7 @@ pub async fn execute_subagent_readonly(
         "git_status" => git_status::run(state, args),
         "system_info" => system_info::run(),
         "web_search" => web_search::run(state, args).await,
+        "context_inspect" => context_tools::inspect(state),
         other => Err(format!("子 Agent 不允许使用工具：{other}")),
     }
 }
@@ -571,6 +712,13 @@ pub fn confirmation_preview(state: &crate::AppState, name: &str, args: Value) ->
         ),
         "shell" => Some(
             shell::preview(state, args).unwrap_or_else(|e| format!("无法生成 shell preview：{e}")),
+        ),
+        "execute_tool" => Some(
+            execute_tool::preview(args)
+                .unwrap_or_else(|e| format!("无法生成 execute_tool preview：{e}")),
+        ),
+        "worktree_create" => Some(
+            worktree::preview(args).unwrap_or_else(|e| format!("无法生成 worktree preview：{e}")),
         ),
         "screen_list_windows" => Some("将读取当前桌面可见窗口标题、应用名与屏幕位置。".to_string()),
         "screen_capture_region" => Some(

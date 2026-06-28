@@ -16,7 +16,7 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use serde::Serialize;
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::sync::oneshot;
 
 use agent::conversation::Message;
@@ -107,12 +107,48 @@ async fn send(app: AppHandle, state: State<'_, AppState>, text: String) -> Resul
     let trimmed = text.trim();
     let res = if trimmed == "/dream" || trimmed.starts_with("/dream ") {
         agent::dream::run_manual_dream(&app, st, text).await
+    } else if trimmed == "/compact" || trimmed.starts_with("/compact ") {
+        agent::collapse::run_manual_compact(&app, st, text).await
+    } else if trimmed == "/workflows" {
+        let runs = agent::workflow_journal::list(st);
+        let body = if runs.is_empty() {
+            "暂无 workflow journal。使用 /ultracode <任务> 会自动创建 run。".to_string()
+        } else {
+            let mut out = String::from("Workflow runs:\n");
+            for run in runs.iter().take(20) {
+                out.push_str(&format!(
+                    "- `{}` updated_at={} journal={}\n",
+                    run.run_id, run.updated_at, run.journal_path
+                ));
+            }
+            out
+        };
+        let _ = app.emit("assistant-done", body);
+        Ok(())
+    } else if trimmed.starts_with("/workflow resume ") {
+        let run_id = trimmed
+            .trim_start_matches("/workflow resume ")
+            .trim()
+            .to_string();
+        let overlay = agent::workflow_journal::resume_overlay(st, &run_id)?;
+        agent::run_turn_with_options(
+            &app,
+            st,
+            text,
+            agent::TurnOptions {
+                system_overlay: Some(overlay),
+                stored_user_text: None,
+                workflow_run_id: Some(run_id),
+            },
+        )
+        .await
     } else if trimmed == "/ultracode" || trimmed.starts_with("/ultracode ") {
         let task = trimmed
             .strip_prefix("/ultracode")
             .unwrap_or("")
             .trim()
             .to_string();
+        let run_id = agent::workflow_journal::new_run_id();
         let overlay = agent::ultracode::overlay(&task);
         agent::run_turn_with_options(
             &app,
@@ -121,6 +157,7 @@ async fn send(app: AppHandle, state: State<'_, AppState>, text: String) -> Resul
             agent::TurnOptions {
                 system_overlay: Some(overlay),
                 stored_user_text: None,
+                workflow_run_id: Some(run_id),
             },
         )
         .await

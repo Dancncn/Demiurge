@@ -58,7 +58,7 @@ Owner 标记：**[R]** Rust 内核 · **[F]** 前端。
 | `open_path` | 用系统默认处理器打开文件 / 应用 / URL | **confirm**¹ |
 | `read_file` | 读取沙盒目录内的文件 | auto |
 | `write_file` | 在沙盒目录内创建 / 覆盖文件 | **confirm** |
-| `web_search` | 联网搜索，返回摘要（DuckDuckGo，免密钥） | auto |
+| `web_search` | 联网搜索，返回带来源链接的结果摘要（Bing + DuckDuckGo fallback，支持域名过滤与 context cap） | auto |
 | `system_info` | 读取时间 / 系统 / 架构等基础状态 | auto |
 
 作用域是结构性强制的（如文件工具被物理限制在沙盒目录），不靠提示词。
@@ -92,7 +92,7 @@ Owner 标记：**[R]** Rust 内核 · **[F]** 前端。
 
 不需要——**不要**搭：
 - 向量 / 长期记忆 RAG（持久化已覆盖 MVP）
-- 多 Agent / 工作流编排（单循环对一个伴侣足够）
+- 完整工作流运行时（多 Agent 只读编排已有第一版；完整 journal / worktree / panel 仍不进 MVP）
 
 ## 仓库结构（现状）
 ```

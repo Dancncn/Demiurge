@@ -28,7 +28,14 @@ Demiurge 的待办与方向，欢迎认领。✅ 已完成 · ⬜ 待做 · 💡
 - [x] **跨文件批量编辑**：`multi_edit` 批量精确替换 + 聚合 preview + undo 记录
 - [x] **结构化 patch 引擎**：`apply_patch` 按行 hunk 预检匹配后应用，支持聚合 preview + undo 记录
 - [x] **Provider Adapter 拆分**：完整 provider 选择 + OpenAI-compatible / local / Anthropic / Gemini 流式文本与工具调用适配
-- [ ] **API Key 安全存储**：从明文 `settings.json` 改为系统凭据管理器（Windows keyring）
+- [x] **API Key 安全存储**：从明文 `settings.json` 改为系统凭据管理器（keyring）
+- [x] **Web Search adapter 深化**：参考 Claude Code WebSearch，支持 Bing + DuckDuckGo fallback、域名过滤、结果数量、context cap 与强制来源提醒
+- [x] **Ultracode 只读多 Agent 编排首版**：`/ultracode` 临时编排 overlay + `agent_spawn` 子 Agent 工具
+- [x] **Fork-style Subagent Context**：`context_mode=fork` 继承父消息并用固定 placeholder 修复未配对 tool call
+- [x] **Context Collapse 首版**：`/compact` + `context_inspect` / `context_collapse`，旧消息压入 rolling summary
+- [x] **Deferred Tool Search 首版**：core tools 稳定加载，低频工具经 `tool_search` / `execute_tool` 发现和代理执行
+- [x] **Workflow Journal / Resume 首版**：`/ultracode` 写 JSONL journal，`/workflows` 列 run，`/workflow resume <run_id>` 恢复
+- [x] **Worktree Isolation 骨架**：`worktree_create` 在沙盒 Git 仓库下创建隔离 worktree
 - [ ] **会话重命名**：手动改会话标题
 - [ ] **角色包头像**：读取 `manifest.avatar`，替换 UI 里的默认莲花头像
 - [ ] **设置里一键测试连接**：填完 Key 后点一下验证 base_url/model 可用
@@ -45,9 +52,10 @@ Demiurge 的待办与方向，欢迎认领。✅ 已完成 · ⬜ 待做 · 💡
   - 角色包新增字段：`live2d.model` / `expressions` / 情绪映射 / 问候·待机台词
 - [ ] **角色包导入器**：UI 内导入/管理角色包（拖入 zip 解压到 `packs/`）
 
-## 明确不做（避免范围蔓延）🚫
+## 暂不做（避免范围蔓延）🚫
 - 向量 / 长期记忆 RAG —— 持久化已覆盖 MVP 记忆
-- 多 Agent / 工作流编排 —— 单循环对一个伴侣足够
+- 完整工作流运行时 —— 只读多 Agent 编排、journal/resume、worktree 骨架已落地；DSL / live panel / per-agent budget 之后再分阶段做
+- 完整 workflow DSL / 实时面板 —— 目前已有 journal/resume 和 worktree 骨架，尚未实现 JS workflow engine 与 live panel
 
 ## 想法 💡
 - 工具调用的「计划预览」——执行前让模型先列出将做的事
