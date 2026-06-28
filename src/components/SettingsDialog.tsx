@@ -5,6 +5,8 @@ import type {
   OcrModelSource,
   OcrModelStatus,
   PackManifest,
+  PermissionPanelState,
+  PermissionScope,
   ProviderKind,
   Settings,
   WebSearchProvider,
@@ -80,12 +82,31 @@ function formatBytes(n: number) {
   return `${value.toFixed(idx === 0 ? 0 : 1)} ${units[idx]}`;
 }
 
+function permissionEffectLabel(effect: string) {
+  if (effect === "allow") return "允许";
+  if (effect === "deny") return "拒绝";
+  return "询问";
+}
+
+function permissionScopeLabel(scope: string) {
+  if (scope === "session") return "本会话";
+  if (scope === "project") return "本项目";
+  return "仅本次";
+}
+
+function formatTime(ms: number) {
+  if (!ms) return "-";
+  return new Date(ms).toLocaleString();
+}
+
 export default function SettingsDialog({ open, settings, packs, onClose, onSave }: Props) {
   const [form, setForm] = useState<Settings>(settings);
   const [ocrStatus, setOcrStatus] = useState<OcrModelStatus | null>(null);
   const [ocrProgress, setOcrProgress] = useState<OcrDownloadProgress | null>(null);
   const [ocrBusy, setOcrBusy] = useState(false);
   const [ocrError, setOcrError] = useState("");
+  const [permissionState, setPermissionState] = useState<PermissionPanelState | null>(null);
+  const [permissionBusy, setPermissionBusy] = useState(false);
 
   useEffect(() => {
     if (open) setForm(settings);
@@ -101,6 +122,22 @@ export default function SettingsDialog({ open, settings, packs, onClose, onSave 
       })
       .catch((err) => {
         if (!cancelled) setOcrError(String(err));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    api
+      .permissionPanelState()
+      .then((state) => {
+        if (!cancelled) setPermissionState(state);
+      })
+      .catch((err) => {
+        if (!cancelled) console.error("读取权限规则失败", err);
       });
     return () => {
       cancelled = true;
@@ -129,6 +166,14 @@ export default function SettingsDialog({ open, settings, packs, onClose, onSave 
   const selectedProvider = providerOptions.find((p) => p.value === form.provider) ?? providerOptions[0];
   const selectedWebSearchProvider =
     webSearchProviders.find((p) => p.value === form.web_search_provider) ?? webSearchProviders[0];
+  const resetPermissionRule = async (scope: PermissionScope, tool: string) => {
+    setPermissionBusy(true);
+    try {
+      setPermissionState(await api.permissionResetRule(scope, tool));
+    } finally {
+      setPermissionBusy(false);
+    }
+  };
   const downloadOcrModels = async () => {
     setOcrBusy(true);
     setOcrError("");
@@ -309,6 +354,63 @@ export default function SettingsDialog({ open, settings, packs, onClose, onSave 
                   onChange={(e) => set("exa_api_key", e.target.value)}
                 />
               </label>
+            </div>
+          </div>
+
+          <div className="rounded-2xl border border-[#eeeeee] bg-[#fafafa] p-3">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <div className="text-sm font-medium text-[#3f3f3f]">权限规则</div>
+                <div className="mt-1 text-xs text-[#9a9a9a]">查看已记住的会话/项目规则和最近审计记录，可清除单条规则。</div>
+              </div>
+              <button
+                className="rounded-full border border-[#e5e5e5] px-3 py-1.5 text-xs text-[#3f3f3f] transition hover:bg-white disabled:opacity-50"
+                type="button"
+                disabled={permissionBusy}
+                onClick={async () => setPermissionState(await api.permissionPanelState())}
+              >
+                刷新
+              </button>
+            </div>
+            <div className="mt-3 space-y-2">
+              {permissionState?.rules.length ? (
+                permissionState.rules.map((rule) => (
+                  <div key={`${rule.scope}:${rule.tool}`} className="rounded-xl border border-[#ececec] bg-white p-3 text-xs text-[#5f5f5f]">
+                    <div className="flex items-start gap-2">
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate font-medium text-[#333]">{rule.tool}</div>
+                        <div className="mt-1">
+                          {permissionEffectLabel(rule.effect)} · {permissionScopeLabel(rule.scope)} · {formatTime(rule.updated_at)}
+                        </div>
+                        <div className="mt-1 text-[#8a8a8a]">{rule.reason}</div>
+                      </div>
+                      <button
+                        className="rounded-full border border-[#e5e5e5] px-2.5 py-1 text-[#6f6f6f] transition hover:bg-[#f7f7f7] disabled:opacity-50"
+                        type="button"
+                        disabled={permissionBusy}
+                        onClick={() => resetPermissionRule(rule.scope, rule.tool)}
+                      >
+                        清除
+                      </button>
+                    </div>
+                  </div>
+                ))
+              ) : (
+                <div className="rounded-xl border border-dashed border-[#e0e0e0] bg-white p-3 text-xs text-[#8a8a8a]">暂无已记住的权限规则。</div>
+              )}
+            </div>
+            <div className="mt-3 max-h-40 overflow-auto rounded-xl border border-[#ececec] bg-white p-3 text-xs text-[#6f6f6f]">
+              <div className="mb-2 font-medium text-[#3f3f3f]">最近审计</div>
+              {permissionState?.audit.length ? (
+                permissionState.audit.slice(0, 8).map((entry) => (
+                  <div key={`${entry.timestamp}:${entry.tool}:${entry.reason}`} className="border-t border-[#f1f1f1] py-1.5 first:border-t-0">
+                    <span className="font-medium text-[#333]">{entry.tool}</span> · {permissionEffectLabel(entry.effect)} · {permissionScopeLabel(entry.scope)} · {formatTime(entry.timestamp)}
+                    <div className="text-[#9a9a9a]">{entry.reason}</div>
+                  </div>
+                ))
+              ) : (
+                <div className="text-[#9a9a9a]">暂无审计记录。</div>
+              )}
             </div>
           </div>
 

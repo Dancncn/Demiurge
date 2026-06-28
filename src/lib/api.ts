@@ -8,6 +8,7 @@ import type {
   OcrModelStatus,
   PackManifest,
   PermissionScope,
+  PermissionPanelState,
   SessionList,
   Settings,
   ToolEndEvent,
@@ -23,6 +24,9 @@ export const respondConfirm = (id: string, allow: boolean, scope: PermissionScop
   invoke<void>("respond_confirm", { id, allow, scope });
 export const getSettings = () => invoke<Settings>("get_settings");
 export const saveSettings = (settings: Settings) => invoke<void>("save_settings", { settings });
+export const permissionPanelState = () => invoke<PermissionPanelState>("permission_panel_state");
+export const permissionResetRule = (scope: PermissionScope, tool: string) =>
+  invoke<PermissionPanelState>("permission_reset_rule", { scope, tool });
 export const listPacks = () => invoke<PackManifest[]>("list_packs");
 export const getHistory = () => invoke<Message[]>("get_history");
 export const openSandbox = () => invoke<void>("open_sandbox");

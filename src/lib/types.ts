@@ -132,8 +132,31 @@ export interface SessionList {
 
 export type PermissionEffect = "allow" | "deny" | "ask";
 export type PermissionScope = "once" | "session" | "project";
+export type PermissionDecisionSource = "tool_default" | "user_override" | "unknown_tool";
 export type ToolRisk = "read_only" | "mutating" | "external" | "privileged";
 export type ToolConcurrency = "parallel_safe" | "serial_only";
+
+export interface PermissionRuleView {
+  tool: string;
+  effect: PermissionEffect;
+  scope: PermissionScope;
+  reason: string;
+  updated_at: number;
+}
+
+export interface PermissionAuditEntry {
+  timestamp: number;
+  tool: string;
+  effect: PermissionEffect;
+  scope: PermissionScope;
+  source: PermissionDecisionSource;
+  reason: string;
+}
+
+export interface PermissionPanelState {
+  rules: PermissionRuleView[];
+  audit: PermissionAuditEntry[];
+}
 
 // ---- 后端 emit 的事件载荷 ----
 export interface ToolStartEvent {

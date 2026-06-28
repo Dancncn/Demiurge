@@ -249,6 +249,20 @@ fn save_settings(state: State<'_, AppState>, settings: Settings) -> Result<(), S
 }
 
 #[tauri::command]
+fn permission_panel_state(state: State<'_, AppState>) -> permission::PermissionPanelState {
+    permission::panel_state(state.inner())
+}
+
+#[tauri::command]
+fn permission_reset_rule(
+    state: State<'_, AppState>,
+    scope: tools::PermissionScope,
+    tool: String,
+) -> Result<permission::PermissionPanelState, String> {
+    permission::reset_rule(state.inner(), scope, &tool)
+}
+
+#[tauri::command]
 fn list_packs(state: State<'_, AppState>) -> Vec<pack::PackManifest> {
     let dir = state.packs_dir.lock().unwrap().clone();
     pack::list_packs(&dir)
@@ -427,6 +441,8 @@ pub fn run() {
             respond_confirm,
             get_settings,
             save_settings,
+            permission_panel_state,
+            permission_reset_rule,
             list_packs,
             list_sessions,
             get_history,

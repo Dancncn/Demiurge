@@ -57,7 +57,7 @@ pub struct PermissionRule {
     pub updated_at: u64,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PermissionAuditEntry {
     pub timestamp: u64,
     pub tool: String,
@@ -65,6 +65,21 @@ pub struct PermissionAuditEntry {
     pub scope: PermissionScope,
     pub source: PermissionDecisionSource,
     pub reason: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct PermissionRuleView {
+    pub tool: String,
+    pub effect: PermissionEffect,
+    pub scope: PermissionScope,
+    pub reason: String,
+    pub updated_at: u64,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct PermissionPanelState {
+    pub rules: Vec<PermissionRuleView>,
+    pub audit: Vec<PermissionAuditEntry>,
 }
 
 #[derive(Clone, Debug)]
@@ -224,6 +239,52 @@ pub async fn confirm(
     }
 }
 
+pub fn panel_state(state: &crate::AppState) -> PermissionPanelState {
+    let data_dir = state.data_dir.lock().unwrap().clone();
+    let mut rules = Vec::new();
+    for rule in state.session_permission_rules.lock().unwrap().values() {
+        rules.push(rule_view(rule));
+    }
+    for rule in load_project_rules(&data_dir).values() {
+        rules.push(rule_view(rule));
+    }
+    rules.sort_by(|a, b| b.updated_at.cmp(&a.updated_at).then_with(|| a.tool.cmp(&b.tool)));
+    PermissionPanelState {
+        rules,
+        audit: load_recent_audit(&data_dir, 80),
+    }
+}
+
+pub fn reset_rule(
+    state: &crate::AppState,
+    scope: PermissionScope,
+    tool: &str,
+) -> Result<PermissionPanelState, String> {
+    match scope {
+        PermissionScope::Once => {}
+        PermissionScope::Session => {
+            state.session_permission_rules.lock().unwrap().remove(tool);
+        }
+        PermissionScope::Project => {
+            let data_dir = state.data_dir.lock().unwrap().clone();
+            let mut rules = load_project_rules(&data_dir);
+            rules.remove(tool);
+            save_project_rules(&data_dir, &rules)?;
+        }
+    }
+    Ok(panel_state(state))
+}
+
+fn rule_view(rule: &PermissionRule) -> PermissionRuleView {
+    PermissionRuleView {
+        tool: rule.tool.clone(),
+        effect: rule.effect,
+        scope: rule.scope,
+        reason: rule.reason.clone(),
+        updated_at: rule.updated_at,
+    }
+}
+
 fn decision_from_rule(rule: PermissionRule) -> PermissionDecision {
     PermissionDecision {
         effect: rule.effect,
@@ -245,6 +306,21 @@ fn save_project_rules(dir: &Path, rules: &HashMap<String, PermissionRule>) -> Re
     let p = dir.join("permissions.json");
     let json = serde_json::to_string_pretty(rules).map_err(|e| e.to_string())?;
     std::fs::write(&p, json).map_err(|e| e.to_string())
+}
+
+fn load_recent_audit(dir: &Path, limit: usize) -> Vec<PermissionAuditEntry> {
+    let p = dir.join("permission_audit.jsonl");
+    let mut entries = std::fs::read_to_string(&p)
+        .ok()
+        .map(|text| {
+            text.lines()
+                .filter_map(|line| serde_json::from_str::<PermissionAuditEntry>(line).ok())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    entries.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+    entries.truncate(limit);
+    entries
 }
 
 fn append_audit(dir: &Path, entry: &PermissionAuditEntry) -> Result<(), String> {
