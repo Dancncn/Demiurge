@@ -399,7 +399,9 @@ pub fn registry() -> Vec<ToolDefinition> {
                     "agent_type": { "type": "string", "description": "可选：探索类型，如 Explore、Reviewer、Verifier、Critic、Planner。也会尝试匹配 .demiurge/agents/*.json。" },
                     "agent_name": { "type": "string", "description": "可选：.demiurge/agents/*.json 中的自定义 Agent 名称，优先于 agent_type。" },
                     "context_mode": { "type": "string", "description": "可选：brief、recent 或 fork。brief 只给摘要和少量最近消息；recent 给更多最近消息；fork 继承父消息并用 placeholder 修复未配对 tool_call。默认 brief。" },
-                    "max_total_tokens": { "type": "integer", "description": "可选：该子 Agent 的硬 token 预算。provider 返回 usage 时使用精确统计，否则回退本地估算。" }
+                    "max_total_tokens": { "type": "integer", "description": "可选：该子 Agent 的硬 token 预算。provider 返回 usage 时使用精确统计，否则回退本地估算。多 reviewer 时会均分到每个 reviewer，保证总预算硬上限。" },
+                    "output_format": { "type": "string", "enum": ["plain", "evidence_packet"], "description": "可选：plain 普通结论；evidence_packet 要求输出 verdict、confidence_score、findings/evidence、uncertainties、next_actions 结构化证据包。" },
+                    "reviewer_count": { "type": "integer", "description": "可选：1-5。大于 1 时启动多个独立 reviewer，分别按不同视角输出 evidence packet，并返回合成包。默认 1。" }
                 },
                 "required": ["prompt"]
             }),

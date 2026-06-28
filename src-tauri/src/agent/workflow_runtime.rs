@@ -399,6 +399,8 @@ async fn run_agent_step(
             agent_name,
             context_mode: mode,
             max_total_tokens: workflow_budget(state, run_id).and_then(|budget| budget.remaining()),
+            output_format: subagent::SubagentOutputFormat::Plain,
+            reviewer_count: 1,
         },
     )
     .await;
