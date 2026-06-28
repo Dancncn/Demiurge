@@ -84,6 +84,14 @@ function qualityClass(level: ToolSourceQuality["level"]) {
   }
 }
 
+const editTools = new Set(["edit_file", "multi_edit", "apply_patch"]);
+
+function rollbackHint(name: string, status: Props["status"], result?: string) {
+  if (status !== "done" || !editTools.has(name) || !result) return null;
+  if (!/\bundo_records?:\s*edit_/i.test(result)) return null;
+  return "Rollback available: run undo_edit to restore the most recent edit record.";
+}
+
 export default function ToolCard({
   name,
   args,
@@ -101,6 +109,7 @@ export default function ToolCard({
   const riskText = riskLabel(risk);
   const progressText = progressSummary(name, status, args, result);
   const durationText = formatDuration(duration_ms);
+  const undoHint = rollbackHint(name, status, result);
   let argsText = "";
   try {
     argsText = JSON.stringify(args, null, 2);
@@ -184,6 +193,11 @@ export default function ToolCard({
           {result && (
             <div>
               <div className="mb-1 text-xs font-medium text-[#7a8088]">Result</div>
+              {undoHint && (
+                <div className="mb-2 rounded-md border border-[#d9e7ff] bg-[#f4f8ff] px-2.5 py-2 text-xs text-[#2559a8]">
+                  {undoHint}
+                </div>
+              )}
               {status === "failed" ? (
                 <DiffPreview text={result} maxHeightClass="max-h-60" />
               ) : (

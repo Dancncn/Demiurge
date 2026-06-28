@@ -35,6 +35,14 @@ function sourceLabel(source?: string) {
   return "Tool default";
 }
 
+const editTools = new Set(["edit_file", "multi_edit", "apply_patch", "undo_edit"]);
+
+function approvalLabel(tool: string) {
+  if (tool === "undo_edit") return "Undo";
+  if (editTools.has(tool)) return "Apply";
+  return "Allow";
+}
+
 export default function ConfirmDialog({ req, onRespond }: Props) {
   const [scope, setScope] = useState<PermissionScope>("once");
 
@@ -43,6 +51,8 @@ export default function ConfirmDialog({ req, onRespond }: Props) {
   }, [req?.id]);
 
   if (!req) return null;
+  const isEditTool = editTools.has(req.tool);
+  const confirmLabel = approvalLabel(req.tool);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#111827]/35 p-4 backdrop-blur-[2px]">
@@ -50,7 +60,9 @@ export default function ConfirmDialog({ req, onRespond }: Props) {
         <header className="border-b border-[#eceff3] bg-[#fbfcfd] px-5 py-4">
           <div className="flex items-start justify-between gap-4">
             <div className="min-w-0">
-              <div className="text-[15px] font-semibold text-[#202124]">Approve Tool Call</div>
+              <div className="text-[15px] font-semibold text-[#202124]">
+                {isEditTool ? "Confirm File Change" : "Approve Tool Call"}
+              </div>
               <div className="mt-1 flex flex-wrap items-center gap-2 text-[12px] text-[#6f7782]">
                 <span className="rounded-md bg-white px-2 py-1 font-medium text-[#202124] shadow-sm">{req.tool}</span>
                 <span className="rounded-md bg-[#eef1f5] px-2 py-1">{riskLabel(req.risk)}</span>
@@ -144,7 +156,7 @@ export default function ConfirmDialog({ req, onRespond }: Props) {
               className="inline-flex h-9 items-center justify-center rounded-md bg-[#111827] px-4 text-[13px] font-medium text-white transition hover:bg-[#2b3442]"
               onClick={() => onRespond(true, scope)}
             >
-              Allow
+              {confirmLabel}
             </button>
           </div>
         </footer>
