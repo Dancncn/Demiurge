@@ -46,7 +46,7 @@ Demiurge 当前已经从 MVP 进入 Agent 能力打磨阶段。下面把现有 T
 
 - [x] **Goal 状态栏与控制**：显示当前 goal、状态、预算、pause/resume/continue/clear 控制，并让自动续写进度与可恢复状态更加透明。
 - [x] **进度与错误可见性**：细化 Web Search、长 workflow、Goal continuation 的 progress UI；改进 LLM、网络、工具错误展示，提供更友好的失败说明、重试按钮、错误 retry 线索和 source-quality hints。
-- [ ] **多 Agent 证据包强校验**：把 evidence packet 从提示词约束升级为 provider-level structured output / JSON Schema 校验；严格按自定义 Agent `handoff_format` 校验，并增加专门 judge/synthesizer 回合做多 reviewer 综合，而不只做确定性合并。
+- [x] **多 Agent 证据包强校验**：把 evidence packet 从提示词约束升级为 provider-level structured output / JSON Schema 校验；严格按自定义 Agent `handoff_format` 校验，并增加专门 judge/synthesizer 回合做多 reviewer 综合，而不只做确定性合并。
 - [x] **Agent JSON 编辑器**：在 UI 中创建、编辑、校验 `.demiurge/agents/*.json`，提供示例模板、schema validation、导入/导出，以及更完整的 per-agent runtime statistics。
 - [x] **Permission System 2.0 与可视化**：升级 rule-based Permission Engine，支持 allow/deny/ask effect 与 once/session/project/user scope；确认 UI 显示工具名、参数摘要、影响路径、风险、命中规则和 allow-once/session/project/deny 选项；增强 permission panel 的规则说明、增删改查和 audit 入口。
 - [ ] **Edit Tool + Diff UI**：完善精确编辑、diff preview、用户确认、apply/reject、undo 和 tool-result feedback，保持写操作可解释、可回滚。
