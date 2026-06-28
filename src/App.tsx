@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import * as api from "./lib/api";
 import type {
+  AgentPanelState,
   ConfirmRequestEvent,
   DisplayItem,
   Message,
@@ -70,11 +71,14 @@ export default function App() {
   const [busy, setBusy] = useState(false);
   const [settings, setSettings] = useState<Settings | null>(null);
   const [packs, setPacks] = useState<PackManifest[]>([]);
+  const [agentPanel, setAgentPanel] = useState<AgentPanelState>({ definitions: [], agents_dir: "" });
+  const [selectedAgentNames, setSelectedAgentNames] = useState<string[]>([]);
   const [sessions, setSessions] = useState<SessionMeta[]>([]);
   const [activeId, setActiveId] = useState("");
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [packMenuOpen, setPackMenuOpen] = useState(false);
+  const [agentMenuOpen, setAgentMenuOpen] = useState(false);
   const [workflowsOpen, setWorkflowsOpen] = useState(false);
   const [confirmReq, setConfirmReq] = useState<ConfirmRequestEvent | null>(null);
 
@@ -83,6 +87,7 @@ export default function App() {
   const curAssistantId = useRef<string | null>(null);
   const toolItemIds = useRef<Map<string, string>>(new Map());
   const packMenuRef = useRef<HTMLDivElement | null>(null);
+  const agentMenuRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 
   const activeSession = useMemo(() => sessions.find((s) => s.id === activeId) ?? null, [activeId, sessions]);
@@ -92,18 +97,26 @@ export default function App() {
     return p?.name ?? settings?.current_pack ?? "Demiurge";
   }, [packs, settings]);
 
+  const selectedAgentLabel = useMemo(() => {
+    if (selectedAgentNames.length === 0) return "Agents";
+    if (selectedAgentNames.length === 1) return selectedAgentNames[0];
+    return `${selectedAgentNames.length} Agents`;
+  }, [selectedAgentNames]);
+
   // 初次加载
   useEffect(() => {
     (async () => {
       try {
-        const [s, ps, list, hist] = await Promise.all([
+        const [s, ps, agents, list, hist] = await Promise.all([
           api.getSettings(),
           api.listPacks(),
+          api.agentPanelState(),
           api.listSessions(),
           api.getHistory(),
         ]);
         setSettings(s);
         setPacks(ps);
+        setAgentPanel(agents);
         setSessions(list.sessions);
         setActiveId(list.active);
         setItems(buildHistory(hist));
@@ -237,6 +250,16 @@ export default function App() {
     return () => document.removeEventListener("mousedown", onDown);
   }, [packMenuOpen]);
 
+  // Agent 下拉的外部点击关闭
+  useEffect(() => {
+    if (!agentMenuOpen) return;
+    const onDown = (e: MouseEvent) => {
+      if (!agentMenuRef.current?.contains(e.target as Node)) setAgentMenuOpen(false);
+    };
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [agentMenuOpen]);
+
   async function handleSend(textArg?: string) {
     const text = (textArg ?? input).trim();
     if (!text || busy) return;
@@ -245,7 +268,11 @@ export default function App() {
     setItems((p) => [...p, { id: uid, kind: "user", text }]);
     setBusy(true);
     try {
-      await api.send(text);
+      if (selectedAgentNames.length) {
+        await api.sendWithAgents(text, selectedAgentNames);
+      } else {
+        await api.send(text);
+      }
     } catch (err) {
       const id = curAssistantId.current;
       if (id) {
@@ -354,6 +381,12 @@ export default function App() {
     }
   }
 
+  function toggleAgent(name: string) {
+    setSelectedAgentNames((prev) =>
+      prev.includes(name) ? prev.filter((item) => item !== name) : [...prev, name],
+    );
+  }
+
   function onKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
     if (e.nativeEvent.isComposing) return;
     if (e.key === "Enter" && !e.shiftKey) {
@@ -428,6 +461,60 @@ export default function App() {
             )}
           </div>
 
+          <div ref={agentMenuRef} className="relative">
+            <button
+              onClick={() => setAgentMenuOpen((v) => !v)}
+              className={`flex items-center gap-1 rounded-lg px-3 py-2 text-sm font-medium transition hover:bg-[#f5f5f5] ${
+                selectedAgentNames.length ? "text-[#171717]" : "text-[#6f6f6f]"
+              }`}
+            >
+              {selectedAgentLabel}
+              <ChevronDownIcon
+                size={16}
+                className={`text-[#9a9a9a] transition-transform duration-200 ${agentMenuOpen ? "rotate-180" : ""}`}
+              />
+            </button>
+            {agentMenuOpen && (
+              <div className="cf-pop cf-pop-down absolute left-0 top-11 z-20 max-h-[70vh] w-80 overflow-y-auto rounded-2xl border border-[#ececec] bg-white p-2 shadow-[0_16px_48px_rgba(0,0,0,0.16)]">
+                <div className="px-3 py-2 text-xs text-[#8a8a8a]">.demiurge/agents/*.json · 可多选组合</div>
+                {agentPanel.definitions.length === 0 && <div className="px-3 py-2 text-sm text-[#9a9a9a]">未找到自定义 Agent</div>}
+                {agentPanel.definitions.map((agent) => {
+                  const selected = selectedAgentNames.includes(agent.name);
+                  return (
+                    <button
+                      key={agent.name}
+                      onClick={() => toggleAgent(agent.name)}
+                      className={`flex w-full items-start justify-between gap-2 rounded-xl px-3 py-3 text-left text-sm transition hover:bg-[#f7f7f7] ${
+                        selected ? "bg-[#f7f7f7]" : ""
+                      }`}
+                    >
+                      <span className="min-w-0">
+                        <span className="block truncate font-medium">{agent.name}</span>
+                        <span className="mt-0.5 block truncate text-xs text-[#8a8a8a]">
+                          {agent.kind} · {agent.description || agent.path}
+                        </span>
+                        {agent.allowed_tools.length ? (
+                          <span className="mt-1 block truncate text-xs text-[#9a9a9a]">
+                            tools: {agent.allowed_tools.join(", ")}
+                          </span>
+                        ) : null}
+                      </span>
+                      {selected && <CheckIcon size={17} className="mt-0.5 shrink-0 text-[#171717]" />}
+                    </button>
+                  );
+                })}
+                {selectedAgentNames.length > 0 && (
+                  <button
+                    onClick={() => setSelectedAgentNames([])}
+                    className="mt-1 w-full rounded-xl px-3 py-2 text-left text-xs text-[#8a8a8a] transition hover:bg-[#f7f7f7]"
+                  >
+                    清除选择
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+
           <div className="hidden min-w-0 flex-col border-l border-[#ececec] pl-3 text-xs text-[#8a8a8a] sm:flex">
             <span className="max-w-[28vw] truncate font-medium text-[#3f3f3f]" title={activeSession?.title ?? "新对话"}>
               {activeSession?.title ?? "新对话"}
@@ -485,6 +572,7 @@ export default function App() {
           open={settingsOpen}
           settings={settings}
           packs={packs}
+          agentPanel={agentPanel}
           onClose={() => setSettingsOpen(false)}
           onSave={handleSaveSettings}
         />

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import * as api from "../lib/api";
 import type {
+  AgentPanelState,
   ContextPanelState,
   OcrDownloadProgress,
   OcrModelSource,
@@ -18,6 +19,7 @@ interface Props {
   open: boolean;
   settings: Settings;
   packs: PackManifest[];
+  agentPanel: AgentPanelState;
   onClose: () => void;
   onSave: (s: Settings) => void;
 }
@@ -109,7 +111,7 @@ function ContextMetric({ label, value }: { label: string; value: number }) {
   );
 }
 
-export default function SettingsDialog({ open, settings, packs, onClose, onSave }: Props) {
+export default function SettingsDialog({ open, settings, packs, agentPanel, onClose, onSave }: Props) {
   const [form, setForm] = useState<Settings>(settings);
   const [ocrStatus, setOcrStatus] = useState<OcrModelStatus | null>(null);
   const [ocrProgress, setOcrProgress] = useState<OcrDownloadProgress | null>(null);
@@ -293,6 +295,38 @@ export default function SettingsDialog({ open, settings, packs, onClose, onSave 
               ))}
             </select>
           </label>
+
+          <div className="rounded-2xl border border-[#eeeeee] bg-[#fafafa] p-3">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <div className="text-sm font-medium text-[#3f3f3f]">自定义 Agents</div>
+                <div className="mt-1 break-all text-xs text-[#9a9a9a]">{agentPanel.agents_dir || ".demiurge/agents"}</div>
+              </div>
+              <span className="rounded-full bg-white px-2.5 py-1 text-xs text-[#6f6f6f]">{agentPanel.definitions.length}</span>
+            </div>
+            <div className="mt-3 space-y-2">
+              {agentPanel.definitions.length ? (
+                agentPanel.definitions.slice(0, 6).map((agent) => (
+                  <div key={agent.name} className="rounded-xl border border-[#ececec] bg-white p-3 text-xs text-[#6f6f6f]">
+                    <div className="font-medium text-[#333]">{agent.name}</div>
+                    <div className="mt-1 text-[#8a8a8a]">
+                      {agent.kind} · {agent.description || "无描述"}
+                    </div>
+                    <div className="mt-1 truncate text-[#9a9a9a]">
+                      tools: {agent.allowed_tools.length ? agent.allowed_tools.join(", ") : "默认主工具集"}
+                    </div>
+                    {agent.invalid_tools.length ? (
+                      <div className="mt-1 text-[#b42318]">无效工具：{agent.invalid_tools.join(", ")}</div>
+                    ) : null}
+                  </div>
+                ))
+              ) : (
+                <div className="rounded-xl border border-dashed border-[#e0e0e0] bg-white p-3 text-xs text-[#8a8a8a]">
+                  在该目录放入 JSON 文件后，会出现在顶部 Agents 多选器中。
+                </div>
+              )}
+            </div>
+          </div>
 
           <label className="block">
             <span className={labelCls}>最大输入 Token 预算</span>
