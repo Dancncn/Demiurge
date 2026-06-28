@@ -53,16 +53,41 @@ function argString(args: unknown, key: string) {
 function progressSummary(name: string, status: Props["status"], args: unknown, result?: string) {
   if (status === "failed") return result ? "Tool returned an error." : "Tool failed before returning output.";
   if (status === "denied") return "Operation was not executed.";
+
+  if (name === "mcp_read_resource") {
+    const obj = typeof args === "object" && args ? (args as { server_name?: unknown; uri?: unknown }) : {};
+    const server = obj.server_name ? String(obj.server_name) : "server";
+    const uri = obj.uri ? String(obj.uri) : "resource";
+    if (status === "running") return `Reading MCP ${server} / ${uri}`;
+    if (status === "done") {
+      const chars = result?.length ?? 0;
+      return chars > 0 ? `MCP resource finished, returned ${chars} characters` : "MCP resource finished";
+    }
+  }
+
+  if (name.startsWith("mcp__")) {
+    const parts = name.split("__");
+    const server = parts[1] || "server";
+    const tool = parts.slice(2).join("__") || name;
+    if (status === "running") return `Calling MCP ${server} / ${tool}`;
+    if (status === "done") {
+      const chars = result?.length ?? 0;
+      return chars > 0 ? `MCP tool finished, returned ${chars} characters` : "MCP tool finished";
+    }
+  }
+
   if (name === "web_search") {
     const query = argString(args, "query");
     if (status === "running") return `Searching${query ? `: ${query}` : ""}`;
     const count = result?.match(/^\d+\. \[/gm)?.length ?? 0;
     return count > 0 ? `Returned ${count} source links.` : "Search finished without extractable source links.";
   }
+
   if (name === "web_fetch") {
     const url = argString(args, "url");
     return status === "running" ? `Fetching${url ? `: ${url}` : ""}` : "Fetch finished.";
   }
+
   if (status === "running") return "Waiting for tool result.";
   return null;
 }

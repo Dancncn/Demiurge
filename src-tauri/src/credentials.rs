@@ -78,6 +78,75 @@ fn save_secret(kind: SecretKind, secret: &str) -> Result<(), String> {
         .map_err(|e| format!("保存 {} 到系统凭据管理器失败：{e}", kind.label()))
 }
 
+fn mcp_env_account(server_name: &str, env_key: &str) -> String {
+    let raw = format!("{server_name}\n{env_key}");
+    format!(
+        "mcp_env_{}_{}_{}",
+        credential_segment(server_name, 24),
+        credential_segment(env_key, 32),
+        stable_hash_hex(&raw)
+    )
+}
+
+fn credential_segment(value: &str, max_len: usize) -> String {
+    let mut out = String::new();
+    for ch in value.chars() {
+        if ch.is_ascii_alphanumeric() {
+            out.push(ch.to_ascii_lowercase());
+        } else if ch == '_' || ch == '-' {
+            out.push('_');
+        } else if ch.is_whitespace() || ch == '.' || ch == ':' || ch == '/' || ch == '\\' {
+            out.push('_');
+        }
+        if out.len() >= max_len {
+            break;
+        }
+    }
+    let out = out.trim_matches('_').to_string();
+    if out.is_empty() {
+        "unnamed".to_string()
+    } else {
+        out
+    }
+}
+
+fn stable_hash_hex(value: &str) -> String {
+    let mut hash: u64 = 0xcbf29ce484222325;
+    for byte in value.as_bytes() {
+        hash ^= *byte as u64;
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    format!("{hash:016x}")
+}
+
+fn mcp_env_entry(server_name: &str, env_key: &str) -> Result<Entry, String> {
+    Entry::new(SERVICE, &mcp_env_account(server_name, env_key))
+        .map_err(|e| format!("open MCP env credential failed: {e}"))
+}
+
+fn load_mcp_env_secret(server_name: &str, env_key: &str) -> Result<Option<String>, String> {
+    let entry = mcp_env_entry(server_name, env_key)?;
+    match entry.get_password() {
+        Ok(secret) => Ok(Some(secret)),
+        Err(Error::NoEntry) => Ok(None),
+        Err(e) => Err(format!("read MCP env `{server_name}.{env_key}` failed: {e}")),
+    }
+}
+
+fn save_mcp_env_secret(server_name: &str, env_key: &str, secret: &str) -> Result<(), String> {
+    let entry = mcp_env_entry(server_name, env_key)?;
+    let secret = secret.trim();
+    if secret.is_empty() {
+        return match entry.delete_credential() {
+            Ok(()) | Err(Error::NoEntry) => Ok(()),
+            Err(e) => Err(format!("delete MCP env `{server_name}.{env_key}` failed: {e}")),
+        };
+    }
+    entry
+        .set_password(secret)
+        .map_err(|e| format!("save MCP env `{server_name}.{env_key}` failed: {e}"))
+}
+
 pub fn load_api_key() -> Result<Option<String>, String> {
     load_secret(SecretKind::Llm)
 }
@@ -121,6 +190,17 @@ pub fn save_media_api_key(secret: &str) -> Result<(), String> {
     save_secret(SecretKind::Media, secret)
 }
 
+pub fn save_mcp_env_secrets(settings: &Settings) -> Result<(), String> {
+    for server in &settings.mcp_servers {
+        for env in &server.env {
+            if env.secret {
+                save_mcp_env_secret(&server.name, &env.key, &env.value)?;
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Load API keys from keyring, migrating legacy plaintext keys if present.
 pub fn hydrate_or_migrate_settings(dir: &Path, settings: &mut Settings) -> Result<(), String> {
     let legacy_plaintext = settings.api_key.trim().to_string();
@@ -129,6 +209,7 @@ pub fn hydrate_or_migrate_settings(dir: &Path, settings: &mut Settings) -> Resul
     let legacy_exa = settings.exa_api_key.trim().to_string();
     let legacy_webdav_password = settings.webdav_password.trim().to_string();
     let legacy_media = settings.media_api_key.trim().to_string();
+    let mut has_legacy_mcp_env = false;
     let has_legacy_plaintext = !legacy_plaintext.is_empty();
     let has_legacy_web_key =
         !legacy_tavily.is_empty() || !legacy_brave.is_empty() || !legacy_exa.is_empty();
@@ -177,8 +258,41 @@ pub fn hydrate_or_migrate_settings(dir: &Path, settings: &mut Settings) -> Resul
         settings.media_api_key = secret;
     }
 
-    if has_legacy_plaintext || has_legacy_web_key || has_legacy_webdav_password || has_legacy_media {
+    for server in &mut settings.mcp_servers {
+        for env in &mut server.env {
+            if !env.secret {
+                continue;
+            }
+            let legacy_secret = env.value.trim().to_string();
+            if !legacy_secret.is_empty() {
+                save_mcp_env_secret(&server.name, &env.key, &legacy_secret)?;
+                env.value = legacy_secret;
+                has_legacy_mcp_env = true;
+            } else if let Some(secret) = load_mcp_env_secret(&server.name, &env.key)? {
+                env.value = secret;
+            }
+        }
+    }
+
+    if has_legacy_plaintext
+        || has_legacy_web_key
+        || has_legacy_webdav_password
+        || has_legacy_media
+        || has_legacy_mcp_env
+    {
         store::save_settings(dir, settings)?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mcp_env_account_is_stable_and_sanitized() {
+        let account = mcp_env_account("My Server", "OPENAI_API_KEY");
+        assert!(account.starts_with("mcp_env_my_server_openai_api_key_"));
+        assert_eq!(account, mcp_env_account("My Server", "OPENAI_API_KEY"));
+    }
 }

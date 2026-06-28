@@ -120,6 +120,7 @@ pub const CORE_TOOL_NAMES: &[&str] = &[
     "undo_edit",
     "web_fetch",
     "web_search",
+    "mcp_read_resource",
     "agent_spawn",
     "context_inspect",
     "context_collapse",
@@ -400,6 +401,22 @@ pub fn registry() -> Vec<ToolDefinition> {
                     "search_type": { "type": "string", "enum": ["auto", "fast", "deep"], "description": "可选：Exa 搜索类型，auto 自动、fast 快速、deep 深度。" }
                 },
                 "required": ["query"]
+            }),
+        },
+        ToolDefinition {
+            name: "mcp_read_resource",
+            description: "Read a resource exposed by a connected MCP server. Use the server_name and uri shown in the MCP resources panel/state.",
+            risk: ToolRisk::External,
+            concurrency: ToolConcurrency::ParallelSafe,
+            permission: PermissionPolicy::ask("Reads data from an external MCP server resource."),
+            output_policy: ToolOutputPolicy::TruncateForUi,
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "server_name": { "type": "string", "description": "Configured MCP server name." },
+                    "uri": { "type": "string", "description": "Resource URI from resources/list." }
+                },
+                "required": ["server_name", "uri"]
             }),
         },
         ToolDefinition {
@@ -753,6 +770,13 @@ pub fn permission_policy_for_state(state: &crate::AppState, name: &str) -> Permi
         .unwrap_or_else(|| PermissionPolicy::ask("未知工具默认按最高安全级别询问。"))
 }
 
+async fn read_mcp_resource_tool(state: &crate::AppState, args: Value) -> Result<String, String> {
+    let server_name = args::required_non_empty_str(&args, "server_name")?.to_string();
+    let uri = args::required_non_empty_str(&args, "uri")?.to_string();
+    crate::mcp::ensure_initialized(state).await;
+    crate::mcp::read_resource(state, &server_name, &uri).await
+}
+
 /// 分发执行。MVP 用 async 函数 + match 充当统一执行入口
 /// （避免为了少数异步工具引入 async-trait 依赖）。
 pub async fn execute(state: &crate::AppState, name: &str, args: Value) -> Result<String, String> {
@@ -774,6 +798,7 @@ pub async fn execute(state: &crate::AppState, name: &str, args: Value) -> Result
         "undo_edit" => edit_file::undo(state, args),
         "web_fetch" => web_fetch::run(state, args).await,
         "web_search" => web_search::run(state, args).await,
+        "mcp_read_resource" => read_mcp_resource_tool(state, args).await,
         "agent_spawn" => agent_spawn::run(state, args).await,
         "context_inspect" => context_tools::inspect(state),
         "context_collapse" => context_tools::collapse(state, args).await,
@@ -879,6 +904,11 @@ pub fn permission_summary(name: &str, args: &Value) -> String {
         "undo_edit" => "将撤销本进程最近一次成功编辑，并先确认目标文件未被外部修改。".to_string(),
         "context_collapse" => {
             "将调用模型把旧会话压缩进 rolling summary，并修改当前会话历史。".to_string()
+        }
+        "mcp_read_resource" => {
+            let server = str_arg("server_name");
+            let uri = str_arg("uri");
+            format!("Will read MCP resource `{uri}` from server `{server}`.")
         }
         "agent_spawn" => {
             let label = str_arg("label");

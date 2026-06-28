@@ -341,6 +341,7 @@ fn save_settings(state: State<'_, AppState>, settings: Settings) -> Result<(), S
     credentials::save_web_search_api_keys(&settings)?;
     credentials::save_webdav_password(&settings.webdav_password)?;
     credentials::save_media_api_key(&settings.media_api_key)?;
+    credentials::save_mcp_env_secrets(&settings)?;
     *state.settings.lock().unwrap() = settings.clone();
     let dir = state.data_dir.lock().unwrap().clone();
     store::save_settings(&dir, &settings)
@@ -363,12 +364,7 @@ async fn webdav_backup_now(
     let client = state.http.clone();
     webdav_ensure_collection(&client, &config).await?;
 
-    let mut settings = state.settings.lock().unwrap().clone();
-    settings.api_key.clear();
-    settings.tavily_api_key.clear();
-    settings.brave_search_api_key.clear();
-    settings.exa_api_key.clear();
-    settings.webdav_password.clear();
+    let settings = store::redacted_settings(&state.settings.lock().unwrap().clone());
     let sessions = state.sessions.lock().unwrap().clone();
     let payload = json!({
         "app": "Demiurge",
@@ -503,6 +499,45 @@ fn permission_upsert_rule(
     input: permission::PermissionRuleInput,
 ) -> Result<permission::PermissionPanelState, String> {
     permission::upsert_rule(state.inner(), input)
+}
+
+#[tauri::command]
+async fn mcp_panel_state(state: State<'_, AppState>) -> Result<mcp::McpPanelState, String> {
+    mcp::ensure_initialized(state.inner()).await;
+    Ok(mcp::panel_state(state.inner()))
+}
+
+#[tauri::command]
+async fn mcp_refresh(app: AppHandle, state: State<'_, AppState>) -> Result<mcp::McpPanelState, String> {
+    mcp::refresh_all(state.inner()).await;
+    let panel = mcp::panel_state(state.inner());
+    let _ = app.emit("mcp-updated", panel.clone());
+    Ok(panel)
+}
+
+#[tauri::command]
+async fn mcp_set_server_enabled(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    name: String,
+    enabled: bool,
+) -> Result<mcp::McpPanelState, String> {
+    {
+        let mut settings = state.settings.lock().unwrap();
+        let server = settings
+            .mcp_servers
+            .iter_mut()
+            .find(|server| server.name == name)
+            .ok_or_else(|| format!("MCP server `{name}` 不存在。"))?;
+        server.enabled = enabled;
+        let dir = state.data_dir.lock().unwrap().clone();
+        store::save_settings(&dir, &settings)?;
+    }
+    mcp::disconnect_server(state.inner(), &name).await;
+    mcp::ensure_initialized(state.inner()).await;
+    let panel = mcp::panel_state(state.inner());
+    let _ = app.emit("mcp-updated", panel.clone());
+    Ok(panel)
 }
 
 #[tauri::command]
@@ -1103,6 +1138,9 @@ pub fn run() {
             permission_panel_state,
             permission_reset_rule,
             permission_upsert_rule,
+            mcp_panel_state,
+            mcp_refresh,
+            mcp_set_server_enabled,
             list_packs,
             agent_panel_state,
             agent_template_json,

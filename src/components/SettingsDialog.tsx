@@ -6,6 +6,8 @@ import type {
   AgentValidationResult,
   ContextPanelState,
   MemoryPanelState,
+  McpPanelState,
+  McpServerConfig,
   OcrDownloadProgress,
   OcrModelSource,
   OcrModelStatus,
@@ -211,6 +213,63 @@ function downloadTextFile(fileName: string, text: string, type = "application/js
   window.setTimeout(() => URL.revokeObjectURL(url), 0);
 }
 
+function nextMcpServerName(servers: McpServerConfig[]) {
+  let idx = servers.length + 1;
+  while (servers.some((server) => server.name === `mcp-server-${idx}`)) idx += 1;
+  return `mcp-server-${idx}`;
+}
+
+function createMcpServer(servers: McpServerConfig[]): McpServerConfig {
+  return {
+    name: nextMcpServerName(servers),
+    enabled: true,
+    transport: "stdio",
+    command: "",
+    args: [],
+    env: [],
+  };
+}
+
+function splitLines(value: string) {
+  return value
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
+function looksSecretEnvKey(key: string) {
+  const normalized = key.toLowerCase().replace(/[^a-z0-9]+/g, "_");
+  return /(api_?key|token|secret|password|passwd|credential|authorization|bearer)/.test(normalized);
+}
+
+function parseEnvLines(value: string) {
+  return splitLines(value).map((line) => {
+    const idx = line.indexOf("=");
+    if (idx === -1) {
+      const key = line.trim();
+      return { key, value: "", secret: looksSecretEnvKey(key) };
+    }
+    const key = line.slice(0, idx).trim();
+    return {
+      key,
+      value: line.slice(idx + 1),
+      secret: looksSecretEnvKey(key),
+    };
+  });
+}
+
+function formatEnvLines(server: McpServerConfig) {
+  return server.env.map((env) => `${env.key}=${env.value}`).join("\n");
+}
+
+function mcpStatusLabel(status?: string) {
+  if (status === "connected") return "Connected";
+  if (status === "failed") return "Failed";
+  if (status === "pending") return "Pending";
+  if (status === "disabled") return "Disabled";
+  return "Not started";
+}
+
 function ProviderMark({ short, selected }: { short: string; selected?: boolean }) {
   return (
     <span
@@ -363,6 +422,9 @@ export default function SettingsDialog({
     scope: Exclude<PermissionScope, "once">;
     reason: string;
   }>({ tool: "shell", effect: "ask", scope: "session", reason: "" });
+  const [mcpState, setMcpState] = useState<McpPanelState | null>(null);
+  const [mcpBusy, setMcpBusy] = useState(false);
+  const [mcpError, setMcpError] = useState("");
   const [contextState, setContextState] = useState<ContextPanelState | null>(null);
   const [memoryState, setMemoryState] = useState<MemoryPanelState | null>(null);
   const [memoryBusy, setMemoryBusy] = useState(false);
@@ -378,6 +440,7 @@ export default function SettingsDialog({
       setAgentState(agentPanel);
       setWebdavStatus("");
       setWebdavFiles([]);
+      setMcpError("");
     }
   }, [open, settings, agentPanel]);
 
@@ -416,6 +479,14 @@ export default function SettingsDialog({
         if (!cancelled) console.error("Failed to read permission state", err);
       },
     );
+    void api.mcpPanelState().then(
+      (state) => {
+        if (!cancelled) setMcpState(state);
+      },
+      (err) => {
+        if (!cancelled) setMcpError(String(err));
+      },
+    );
     return () => {
       cancelled = true;
     };
@@ -427,6 +498,22 @@ export default function SettingsDialog({
     let unlisten: (() => void) | undefined;
     void api.listenOcrDownloadProgress((event) => {
       if (!disposed) setOcrProgress(event);
+    }).then((fn) => {
+      if (disposed) fn();
+      else unlisten = fn;
+    });
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    void api.listenMcpUpdated((event) => {
+      if (!disposed) setMcpState(event);
     }).then((fn) => {
       if (disposed) fn();
       else unlisten = fn;
@@ -667,6 +754,55 @@ export default function SettingsDialog({
     }
   }
 
+  function updateMcpServer(index: number, patch: Partial<McpServerConfig>) {
+    setForm((current) => ({
+      ...current,
+      mcp_servers: current.mcp_servers.map((server, i) => (i === index ? { ...server, ...patch } : server)),
+    }));
+  }
+
+  function addMcpServer() {
+    setForm((current) => ({
+      ...current,
+      mcp_servers: [...current.mcp_servers, createMcpServer(current.mcp_servers)],
+    }));
+  }
+
+  function removeMcpServer(index: number) {
+    setForm((current) => ({
+      ...current,
+      mcp_servers: current.mcp_servers.filter((_, i) => i !== index),
+    }));
+  }
+
+  async function refreshMcp() {
+    setMcpBusy(true);
+    setMcpError("");
+    try {
+      setMcpState(await api.mcpRefresh());
+    } catch (err) {
+      setMcpError(String(err));
+    } finally {
+      setMcpBusy(false);
+    }
+  }
+
+  async function setSavedMcpServerEnabled(name: string, enabled: boolean) {
+    setMcpBusy(true);
+    setMcpError("");
+    try {
+      setMcpState(await api.mcpSetServerEnabled(name, enabled));
+      setForm((current) => ({
+        ...current,
+        mcp_servers: current.mcp_servers.map((server) => (server.name === name ? { ...server, enabled } : server)),
+      }));
+    } catch (err) {
+      setMcpError(String(err));
+    } finally {
+      setMcpBusy(false);
+    }
+  }
+
   async function downloadOcrModels() {
     setOcrBusy(true);
     setOcrError("");
@@ -751,7 +887,7 @@ export default function SettingsDialog({
     { id: "web", label: "Web Search", detail: selectedWebSearchProvider.label },
     { id: "files", label: "Files", detail: form.webdav_enabled ? "WebDAV enabled" : "Docs and backup" },
     { id: "context", label: "Context", detail: `${form.max_input_tokens} tokens` },
-    { id: "tools", label: "Tools", detail: ocrStatus?.installed ? "OCR ready" : "OCR models" },
+    { id: "tools", label: "Tools", detail: `${form.mcp_servers.length} MCP / ${ocrStatus?.installed ? "OCR ready" : "OCR"}` },
     { id: "voice", label: "Voice", detail: form.voice_enabled ? "Enabled" : "Disabled" },
     { id: "advanced", label: "Advanced", detail: "Storage and limits" },
   ];
@@ -786,6 +922,18 @@ export default function SettingsDialog({
       image_size: form.image_size.trim() || "1024*1024",
       tts_model: form.tts_model.trim() || "qwen3-tts-flash",
       tts_voice: form.tts_voice.trim() || "Cherry",
+      mcp_servers: form.mcp_servers
+        .map((server) => ({
+          ...server,
+          name: server.name.trim(),
+          transport: "stdio" as const,
+          command: server.command.trim(),
+          args: server.args.map((arg) => arg.trim()).filter(Boolean),
+          env: server.env
+            .map((env) => ({ ...env, key: env.key.trim() }))
+            .filter((env) => env.key.length > 0),
+        }))
+        .filter((server) => server.name.length > 0 && server.command.length > 0),
     });
   }
 
@@ -1630,6 +1778,158 @@ export default function SettingsDialog({
 
               {activeTab === "tools" && (
                 <>
+                  <Section title="MCP Servers">
+                    <div className="mb-3 flex items-center justify-between gap-3">
+                      <div className="text-[12px] text-[#7a8088]">
+                        stdio servers are started locally and exposed as `mcp__server__tool` tools.
+                      </div>
+                      <div className="flex shrink-0 gap-2">
+                        <button className={secondaryButtonCls} type="button" disabled={mcpBusy} onClick={refreshMcp}>
+                          Refresh
+                        </button>
+                        <button className={secondaryButtonCls} type="button" onClick={addMcpServer}>
+                          Add server
+                        </button>
+                      </div>
+                    </div>
+                    {mcpError && (
+                      <div className="mb-3 rounded-lg border border-[#ffd7d7] bg-[#fff7f7] p-3 text-[12px] text-[#b42318]">
+                        {mcpError}
+                      </div>
+                    )}
+                    <div className="space-y-3">
+                      {form.mcp_servers.length ? (
+                        form.mcp_servers.map((server, index) => {
+                          const runtime = mcpState?.servers.find((item) => item.name === server.name);
+                          const saved = settings.mcp_servers.some((item) => item.name === server.name);
+                          const status = runtime?.status;
+                          return (
+                            <div key={`${server.name}:${index}`} className="rounded-lg border border-[#e2e5ea] bg-[#fbfcfd] p-3">
+                              <div className="mb-3 flex flex-wrap items-center gap-2">
+                                <input
+                                  className={`${inputCls} max-w-[220px]`}
+                                  value={server.name}
+                                  placeholder="server-name"
+                                  onChange={(e) => updateMcpServer(index, { name: e.target.value })}
+                                />
+                                <span className="rounded-md bg-white px-2 py-1 text-[11px] text-[#5f6368]">
+                                  {mcpStatusLabel(status)}
+                                </span>
+                                {runtime?.tool_count ? (
+                                  <span className="rounded-md bg-white px-2 py-1 text-[11px] text-[#5f6368]">
+                                    {runtime.tool_count} tools
+                                  </span>
+                                ) : null}
+                                <label className="ml-auto flex items-center gap-2 text-[12px] text-[#5f6368]">
+                                  <input
+                                    type="checkbox"
+                                    className="h-4 w-4 accent-[#111827]"
+                                    checked={server.enabled}
+                                    onChange={(e) => updateMcpServer(index, { enabled: e.target.checked })}
+                                  />
+                                  Enabled
+                                </label>
+                                {saved && (
+                                  <button
+                                    className={secondaryButtonCls}
+                                    type="button"
+                                    disabled={mcpBusy}
+                                    onClick={() => setSavedMcpServerEnabled(server.name, !server.enabled)}
+                                  >
+                                    {server.enabled ? "Stop" : "Start"}
+                                  </button>
+                                )}
+                                <button className={secondaryButtonCls} type="button" onClick={() => removeMcpServer(index)}>
+                                  Remove
+                                </button>
+                              </div>
+                              <div className="grid gap-3 sm:grid-cols-[1fr_1fr]">
+                                <Field label="Command">
+                                  <input
+                                    className={inputCls}
+                                    value={server.command}
+                                    placeholder={navigator.userAgent.includes("Windows") ? "cmd" : "npx"}
+                                    onChange={(e) => updateMcpServer(index, { command: e.target.value })}
+                                  />
+                                </Field>
+                                <Field label="Transport">
+                                  <input className={inputCls} value="stdio" disabled />
+                                </Field>
+                              </div>
+                              <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                                <Field label="Arguments" help="One argument per line. On Windows, use cmd with /c and npx on following lines.">
+                                  <textarea
+                                    className="min-h-24 w-full resize-y rounded-md border border-[#d9d9d9] bg-white px-3 py-2 text-[12px] text-[#202124] outline-none transition focus:border-[#7a7f87] focus:ring-2 focus:ring-[#202124]/5"
+                                    value={server.args.join("\n")}
+                                    placeholder={"/c\nnpx\n-y\n@modelcontextprotocol/server-filesystem"}
+                                    onChange={(e) => updateMcpServer(index, { args: splitLines(e.target.value) })}
+                                  />
+                                </Field>
+                                <Field label="Environment" help="KEY=value, one per line. Secret-like keys are stored in the system credential manager.">
+                                  <textarea
+                                    className="min-h-24 w-full resize-y rounded-md border border-[#d9d9d9] bg-white px-3 py-2 text-[12px] text-[#202124] outline-none transition focus:border-[#7a7f87] focus:ring-2 focus:ring-[#202124]/5"
+                                    value={formatEnvLines(server)}
+                                    placeholder={"API_KEY=...\nBASE_URL=https://..."}
+                                    onChange={(e) => updateMcpServer(index, { env: parseEnvLines(e.target.value) })}
+                                  />
+                                </Field>
+                              </div>
+                              {runtime?.error && (
+                                <div className="mt-3 rounded-md border border-[#ffd7d7] bg-white px-3 py-2 text-[12px] text-[#b42318]">
+                                  {runtime.error}
+                                </div>
+                              )}
+                              {runtime?.stderr_tail && (
+                                <pre className="mt-3 max-h-28 overflow-auto whitespace-pre-wrap rounded-md border border-[#e2e5ea] bg-white p-2 text-[11px] text-[#6f7782]">
+                                  {runtime.stderr_tail}
+                                </pre>
+                              )}
+                            </div>
+                          );
+                        })
+                      ) : (
+                        <div className="rounded-lg border border-dashed border-[#d8dde5] bg-[#fbfcfd] p-4 text-[12px] text-[#7a8088]">
+                          No MCP servers configured.
+                        </div>
+                      )}
+                    </div>
+                    <div className="mt-4 rounded-lg border border-[#e2e5ea] bg-[#fbfcfd] p-3">
+                      <div className="mb-2 text-[13px] font-medium text-[#202124]">Discovered tools</div>
+                      <div className="max-h-48 overflow-auto">
+                        {mcpState?.tools.length ? (
+                          <div className="grid gap-2">
+                            {mcpState.tools.map((tool) => (
+                              <div key={tool.name} className="rounded-md border border-[#e2e5ea] bg-white p-2">
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <span className="font-mono text-[12px] text-[#202124]">{tool.name}</span>
+                                  <span className="rounded-md bg-[#eef1f5] px-1.5 py-0.5 text-[11px] text-[#5f6368]">
+                                    {tool.risk}
+                                  </span>
+                                </div>
+                                <div className="mt-1 line-clamp-2 text-[12px] text-[#7a8088]">
+                                  {tool.description || tool.original_name}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <div className="text-[12px] text-[#7a8088]">No MCP tools discovered.</div>
+                        )}
+                      </div>
+                      {mcpState?.resources && Object.keys(mcpState.resources).length > 0 && (
+                        <div className="mt-3 border-t border-[#e2e5ea] pt-3">
+                          <div className="mb-2 text-[13px] font-medium text-[#202124]">Resources</div>
+                          <div className="space-y-1 text-[12px] text-[#6f7782]">
+                            {Object.entries(mcpState.resources).map(([serverName, resources]) => (
+                              <div key={serverName}>
+                                <span className="font-medium text-[#202124]">{serverName}</span>: {resources.length} resources
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </Section>
                   <Section title="Computer Use / OCR">
                     <ToggleRow
                       checked={form.computer_use_enabled}

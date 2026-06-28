@@ -13,6 +13,7 @@ import type {
   ImageGenerationResult,
   Message,
   MemoryPanelState,
+  McpPanelState,
   OcrDownloadProgress,
   OcrModelSource,
   OcrModelStatus,
@@ -52,6 +53,10 @@ export const permissionResetRule = (scope: PermissionScope, tool: string) =>
   invoke<PermissionPanelState>("permission_reset_rule", { scope, tool });
 export const permissionUpsertRule = (input: PermissionRuleInput) =>
   invoke<PermissionPanelState>("permission_upsert_rule", { input });
+export const mcpPanelState = () => invoke<McpPanelState>("mcp_panel_state");
+export const mcpRefresh = () => invoke<McpPanelState>("mcp_refresh");
+export const mcpSetServerEnabled = (name: string, enabled: boolean) =>
+  invoke<McpPanelState>("mcp_set_server_enabled", { name, enabled });
 export const listPacks = () => invoke<PackManifest[]>("list_packs");
 export const agentPanelState = () => invoke<AgentPanelState>("agent_panel_state");
 export const agentTemplateJson = () => invoke<string>("agent_template_json");
@@ -116,6 +121,8 @@ export const listenPlanUpdated = (handler: (e: PlanState) => void) =>
   listen<PlanState>("plan-updated", (e) => handler(e.payload));
 export const listenPermissionModeUpdated = (handler: (e: PermissionMode) => void) =>
   listen<PermissionMode>("permission-mode-updated", (e) => handler(e.payload));
+export const listenMcpUpdated = (handler: (e: McpPanelState) => void) =>
+  listen<McpPanelState>("mcp-updated", (e) => handler(e.payload));
 
 // ---- 事件订阅 ----
 export interface AgentEventHandlers {
