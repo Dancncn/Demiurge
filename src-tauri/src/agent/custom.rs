@@ -103,7 +103,7 @@ pub fn list_definitions(state: &crate::AppState) -> Vec<AgentDefinitionInfo> {
     let Ok(entries) = fs::read_dir(&dir) else {
         return Vec::new();
     };
-    let valid_tools = valid_tool_names();
+    let valid_tools = valid_tool_names(state);
     let mut out = entries
         .filter_map(Result::ok)
         .filter_map(|entry| definition_from_path(&entry.path(), &valid_tools).ok())
@@ -115,7 +115,7 @@ pub fn list_definitions(state: &crate::AppState) -> Vec<AgentDefinitionInfo> {
 pub fn load_agent(state: &crate::AppState, name: &str) -> Result<AgentDefinitionInfo, String> {
     let dir = ensure_dir(state)?;
     let path = find_agent_path(&dir, name).ok_or_else(|| format!("未找到 Agent `{name}`。"))?;
-    definition_from_path(&path, &valid_tool_names())
+    definition_from_path(&path, &valid_tool_names(state))
 }
 
 pub fn resolve_selected(
@@ -263,8 +263,8 @@ fn sanitize_name(name: &str) -> String {
         .to_string()
 }
 
-fn valid_tool_names() -> HashSet<String> {
-    crate::tools::registry()
+fn valid_tool_names(state: &crate::AppState) -> HashSet<String> {
+    crate::tools::registry_for_state(state)
         .into_iter()
         .map(|tool| tool.name.to_string())
         .collect()

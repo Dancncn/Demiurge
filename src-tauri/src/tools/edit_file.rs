@@ -588,6 +588,7 @@ mod tests {
             edit_undo_stack: Mutex::new(Vec::new()),
             workflow_runs: Mutex::new(Vec::new()),
             workflow_cancels: Mutex::new(HashMap::new()),
+            mcp: crate::mcp::McpManager::default(),
             cancel: AtomicBool::new(false),
             busy: AtomicBool::new(false),
             data_dir: Mutex::new(sandbox.clone()),

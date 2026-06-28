@@ -50,6 +50,7 @@ pub async fn run_turn_with_options(
     state.cancel.store(false, Ordering::Relaxed);
 
     let mut settings = state.settings.lock().unwrap().clone();
+    crate::mcp::ensure_initialized(state).await;
     let selected_agents = custom::resolve_selected(state, &options.agent_names)?;
     if let Some(max_input_tokens) = selected_agents.max_input_tokens {
         settings.max_input_tokens = settings.max_input_tokens.min(max_input_tokens);
@@ -87,9 +88,9 @@ pub async fn run_turn_with_options(
     let tools_schema = if !profile.supports_tools {
         profile.empty_tool_schema()
     } else if allowed_tool_names.is_empty() {
-        tools::main_schemas_json_for(profile.tool_schema_dialect)
+        tools::main_schemas_json_for_state(state, profile.tool_schema_dialect)
     } else {
-        tools::schemas_json_for_names(profile.tool_schema_dialect, &allowed_tool_names)
+        tools::schemas_json_for_names_state(state, profile.tool_schema_dialect, &allowed_tool_names)
     };
     let stored_user_text = options
         .stored_user_text
@@ -190,8 +191,13 @@ pub async fn run_turn_with_options(
                 }
                 apply_system_overlay(&mut system, Some(&selected_agents.prompt_overlay));
                 apply_system_overlay(&mut system, options.system_overlay.as_deref());
-                current_budget =
-                    budget::history_budget_for_profile(&settings, profile, &system, &tools_schema, &msgs);
+                current_budget = budget::history_budget_for_profile(
+                    &settings,
+                    profile,
+                    &system,
+                    &tools_schema,
+                    &msgs,
+                );
                 removed_messages = context::trim_collect_removed_by_tokens(
                     &mut msgs,
                     current_budget.history_budget_tokens,
@@ -359,7 +365,7 @@ pub async fn run_turn_with_options(
 
             let args: serde_json::Value =
                 serde_json::from_str(&tc.function.arguments).unwrap_or_else(|_| json!({}));
-            let tool_def = tools::definition_for(&name);
+            let tool_def = tools::definition_for_state(state, &name);
 
             let _ = app.emit(
                 "tool-start",
@@ -384,7 +390,7 @@ pub async fn run_turn_with_options(
             }
 
             // 权限门（confirm 等待期间若用户点「停止」，interrupt 会立即唤醒并返回 deny-once）
-            let default_policy = tools::permission_policy_for(&name);
+            let default_policy = tools::permission_policy_for_state(state, &name);
             let risk = tool_def
                 .as_ref()
                 .map(|t| t.risk)
@@ -405,7 +411,7 @@ pub async fn run_turn_with_options(
                         .map(|t| t.risk)
                         .unwrap_or(tools::ToolRisk::Privileged);
                     let preview = tools::confirmation_preview(state, &name, args.clone());
-                    let summary = tools::permission_summary(&name, &args);
+                    let summary = tools::permission_summary_for_state(state, &name, &args);
                     let response = permission::confirm(
                         app,
                         state,
@@ -447,7 +453,8 @@ pub async fn run_turn_with_options(
                 match tools::execute(state, &name, args.clone()).await {
                     Ok(s) => {
                         if name == "write_plan" {
-                            let _ = app.emit("plan-updated", state.plan_state.lock().unwrap().clone());
+                            let _ =
+                                app.emit("plan-updated", state.plan_state.lock().unwrap().clone());
                         }
                         s
                     }

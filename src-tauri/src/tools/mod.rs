@@ -618,8 +618,20 @@ pub fn registry() -> Vec<ToolDefinition> {
     ]
 }
 
+pub fn registry_for_state(state: &crate::AppState) -> Vec<ToolDefinition> {
+    let mut defs = registry();
+    defs.extend(crate::mcp::tool_definitions(state));
+    defs
+}
+
 pub fn definition_for(name: &str) -> Option<ToolDefinition> {
     registry().into_iter().find(|t| t.name == name)
+}
+
+pub fn definition_for_state(state: &crate::AppState, name: &str) -> Option<ToolDefinition> {
+    registry_for_state(state)
+        .into_iter()
+        .find(|t| t.name == name)
 }
 
 pub fn deferred_definitions() -> Vec<ToolDefinition> {
@@ -643,8 +655,27 @@ pub fn main_schemas_json_for(dialect: crate::llm::ToolSchemaDialect) -> Value {
     schemas_json_for_names(dialect, CORE_TOOL_NAMES)
 }
 
+pub fn main_schemas_json_for_state(
+    state: &crate::AppState,
+    dialect: crate::llm::ToolSchemaDialect,
+) -> Value {
+    schemas_json_for_defs(dialect, &registry_for_state(state))
+}
+
 pub fn schemas_json_for_names(dialect: crate::llm::ToolSchemaDialect, names: &[&str]) -> Value {
     let defs = registry()
+        .into_iter()
+        .filter(|t| names.contains(&t.name))
+        .collect::<Vec<_>>();
+    schemas_json_for_defs(dialect, &defs)
+}
+
+pub fn schemas_json_for_names_state(
+    state: &crate::AppState,
+    dialect: crate::llm::ToolSchemaDialect,
+    names: &[&str],
+) -> Value {
+    let defs = registry_for_state(state)
         .into_iter()
         .filter(|t| names.contains(&t.name))
         .collect::<Vec<_>>();
@@ -715,9 +746,18 @@ pub fn permission_policy_for(name: &str) -> PermissionPolicy {
         .unwrap_or_else(|| PermissionPolicy::ask("未知工具默认按最高安全级别询问。"))
 }
 
+pub fn permission_policy_for_state(state: &crate::AppState, name: &str) -> PermissionPolicy {
+    definition_for_state(state, name)
+        .map(|t| t.permission)
+        .unwrap_or_else(|| PermissionPolicy::ask("未知工具默认按最高安全级别询问。"))
+}
+
 /// 分发执行。MVP 用 async 函数 + match 充当统一执行入口
 /// （避免为了少数异步工具引入 async-trait 依赖）。
 pub async fn execute(state: &crate::AppState, name: &str, args: Value) -> Result<String, String> {
+    if crate::mcp::is_mcp_tool_name(name) {
+        return crate::mcp::call_tool(state, name, args).await;
+    }
     match name {
         "open_path" => open_path::run(args),
         "read_file" => read_file::run(state, args),
@@ -897,6 +937,13 @@ pub fn permission_summary(name: &str, args: &Value) -> String {
             .map(|t| format!("{}：{}", t.name, t.permission.reason))
             .unwrap_or_else(|| format!("未知工具 `{name}` 将按最高安全级别处理。")),
     }
+}
+
+pub fn permission_summary_for_state(state: &crate::AppState, name: &str, args: &Value) -> String {
+    if let Some(summary) = crate::mcp::permission_summary(state, name) {
+        return summary;
+    }
+    permission_summary(name, args)
 }
 
 pub fn confirmation_preview(state: &crate::AppState, name: &str, args: Value) -> Option<String> {

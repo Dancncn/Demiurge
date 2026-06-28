@@ -2,6 +2,7 @@
 mod agent;
 mod credentials;
 mod llm;
+pub mod mcp;
 mod media;
 mod ocr;
 mod pack;
@@ -46,6 +47,7 @@ pub struct AppState {
     pub edit_undo_stack: Mutex<Vec<tools::EditUndoEntry>>,
     pub workflow_runs: Mutex<Vec<agent::workflow_runtime::WorkflowRunProgress>>,
     pub workflow_cancels: Mutex<HashMap<String, Arc<AtomicBool>>>,
+    pub mcp: mcp::McpManager,
     /// 用户中断标志
     pub cancel: AtomicBool,
     /// 是否正在处理一轮对话（防止并发 send）
@@ -84,6 +86,7 @@ impl AppState {
             edit_undo_stack: Mutex::new(Vec::new()),
             workflow_runs: Mutex::new(Vec::new()),
             workflow_cancels: Mutex::new(HashMap::new()),
+            mcp: mcp::McpManager::default(),
             cancel: AtomicBool::new(false),
             busy: AtomicBool::new(false),
             data_dir: Mutex::new(PathBuf::new()),
