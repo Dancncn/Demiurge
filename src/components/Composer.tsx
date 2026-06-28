@@ -1,4 +1,5 @@
 import { RefObject, useEffect, useRef, useState } from "react";
+import * as api from "../lib/api";
 import {
   attachmentAccept,
   attachmentKindLabel,
@@ -52,7 +53,7 @@ export function Composer({
     if (!files?.length) return;
     setProcessingFiles(true);
     try {
-      const next = await processFiles(Array.from(files));
+      const next = await processFiles(Array.from(files), { extractImageText: api.ocrImageBytes });
       setAttachments((prev) => [...prev, ...next]);
     } finally {
       setProcessingFiles(false);
