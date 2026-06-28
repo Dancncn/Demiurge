@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
   ConfirmRequestEvent,
+  GoalProgressEvent,
   Message,
   OcrDownloadProgress,
   OcrModelSource,
@@ -66,6 +67,7 @@ export interface AgentEventHandlers {
   onToolStart: (e: ToolStartEvent) => void;
   onToolEnd: (e: ToolEndEvent) => void;
   onConfirmRequest: (e: ConfirmRequestEvent) => void;
+  onGoalProgress: (e: GoalProgressEvent) => void;
 }
 
 /// 注册所有 agent 事件监听，返回一个反注册函数。
@@ -78,6 +80,7 @@ export async function listenAgentEvents(h: AgentEventHandlers): Promise<Unlisten
     listen<ToolStartEvent>("tool-start", (e) => h.onToolStart(e.payload)),
     listen<ToolEndEvent>("tool-end", (e) => h.onToolEnd(e.payload)),
     listen<ConfirmRequestEvent>("tool-confirm-request", (e) => h.onConfirmRequest(e.payload)),
+    listen<GoalProgressEvent>("goal-progress", (e) => h.onGoalProgress(e.payload)),
   ]);
   return () => uns.forEach((u) => u());
 }

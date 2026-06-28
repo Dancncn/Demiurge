@@ -210,6 +210,9 @@ function RunDetail({
   onClose: () => void;
 }) {
   const doneAgents = run.agents.filter((agent) => agent.status === "done").length;
+  const runningAgents = run.agents.filter((agent) => agent.status === "running").length;
+  const failedAgents = run.agents.filter((agent) => agent.status === "failed").length;
+  const progressPct = run.agents.length ? Math.round((doneAgents / run.agents.length) * 100) : 0;
   return (
     <div className="space-y-5">
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -249,6 +252,17 @@ function RunDetail({
         <Metric label="Phase" value={run.current_phase || "-"} />
         <Metric label="Agents" value={`${doneAgents}/${run.agents.length}`} />
         <Metric label="Updated" value={String(run.updated_at)} />
+      </div>
+
+      <div className="rounded-lg border border-[#ece7ef] bg-white p-3">
+        <div className="mb-2 flex items-center justify-between text-xs text-[#777]">
+          <span>Workflow progress</span>
+          <span>{progressPct}% · running {runningAgents} · failed {failedAgents}</span>
+        </div>
+        <div className="h-2 overflow-hidden rounded-full bg-[#f0edf2]">
+          <div className="h-full rounded-full bg-[#2f9e44] transition-all" style={{ width: `${progressPct}%` }} />
+        </div>
+        {run.logs[0] && <div className="mt-2 truncate text-xs text-[#777]">Latest: {run.logs[run.logs.length - 1]}</div>}
       </div>
 
       <div>

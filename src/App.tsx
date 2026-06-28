@@ -201,6 +201,20 @@ export default function App() {
           );
         },
         onConfirmRequest: (e) => setConfirmReq(e),
+        onGoalProgress: (e) => {
+          setItems((p) => [
+            ...p,
+            {
+              id: genId(),
+              kind: "tool",
+              name: "goal",
+              args: { turns_executed: e.turns_executed, tokens_used: e.tokens_used, token_budget: e.token_budget },
+              status: e.status === "active" ? "running" : "done",
+              result: e.message,
+              description: "Goal 续跑进度",
+            },
+          ]);
+        },
       })
       .then((u) => {
         if (disposed) u();

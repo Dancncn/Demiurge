@@ -187,6 +187,14 @@ export interface ConfirmRequestEvent {
   preview?: string;
 }
 
+export interface GoalProgressEvent {
+  status: string;
+  message: string;
+  turns_executed: number;
+  tokens_used: number;
+  token_budget?: number;
+}
+
 // ---- 前端聊天展示项 ----
 export type DisplayItem =
   | { id: string; kind: "user"; text: string }

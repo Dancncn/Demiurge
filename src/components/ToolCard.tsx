@@ -37,10 +37,24 @@ function riskLabel(risk?: ToolRisk) {
   }
 }
 
+function progressSummary(name: string, status: Props["status"], args: unknown, result?: string) {
+  if (name === "web_search") {
+    const query = typeof args === "object" && args && "query" in args ? String((args as { query?: unknown }).query ?? "") : "";
+    if (status === "running") return `正在搜索${query ? `：${query}` : ""}`;
+    if (status === "done") {
+      const count = result?.match(/^\d+\. \[/gm)?.length ?? 0;
+      return count > 0 ? `已返回 ${count} 条来源链接` : "搜索完成，未提取到来源链接";
+    }
+  }
+  if (status === "running") return "等待工具返回结果";
+  return null;
+}
+
 export default function ToolCard({ name, args, status, result, description, risk }: Props) {
   const [open, setOpen] = useState(false);
   const b = badge(status);
   const riskText = riskLabel(risk);
+  const progressText = progressSummary(name, status, args, result);
   let argsText = "";
   try {
     argsText = JSON.stringify(args, null, 2);
@@ -68,6 +82,14 @@ export default function ToolCard({ name, args, status, result, description, risk
         )}
         <span className="ml-auto text-xs text-[#9a9a9a]">{open ? "收起" : "详情"}</span>
       </button>
+      {progressText && (
+        <div className="border-t border-[#ececec] px-4 py-2 text-xs text-[#6f6f6f]">
+          <div className="h-1.5 overflow-hidden rounded-full bg-white">
+            <div className={`h-full rounded-full ${status === "running" ? "w-1/2 animate-pulse bg-[#0b57d0]" : "w-full bg-[#10a37f]"}`} />
+          </div>
+          <div className="mt-1.5">{progressText}</div>
+        </div>
+      )}
       {open && (
         <div className="space-y-2 border-t border-[#ececec] px-4 py-3">
           {description && <div className="text-xs leading-relaxed text-[#6f6f6f]">{description}</div>}

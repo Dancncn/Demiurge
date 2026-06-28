@@ -1,5 +1,6 @@
 use regex::Regex;
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use tauri::Emitter;
 
 use super::budget;
@@ -177,6 +178,16 @@ pub async fn drive_after_turn(
                     return Ok(());
                 };
                 let overlay = build_continuation_prompt(&next_goal);
+                let _ = app.emit(
+                    "goal-progress",
+                    json!({
+                        "status": status_value(&next_goal.status),
+                        "message": format!("Goal continuation #{turns} started."),
+                        "turns_executed": next_goal.turns_executed,
+                        "tokens_used": next_goal.tokens_used,
+                        "token_budget": next_goal.token_budget,
+                    }),
+                );
                 let stored_user_text = format!("[Goal continuation #{turns}]");
                 super::run_turn_with_options(
                     app,
@@ -197,6 +208,16 @@ pub async fn drive_after_turn(
                 mark_budget_notified(state);
                 state.persist_sessions();
                 let overlay = build_budget_limit_prompt(&goal);
+                let _ = app.emit(
+                    "goal-progress",
+                    json!({
+                        "status": status_value(&goal.status),
+                        "message": "Goal token budget reached; preparing budget summary.",
+                        "turns_executed": goal.turns_executed,
+                        "tokens_used": goal.tokens_used,
+                        "token_budget": goal.token_budget,
+                    }),
+                );
                 super::run_turn_with_options(
                     app,
                     state,
