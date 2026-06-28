@@ -1,5 +1,5 @@
 use regex::Regex;
-use serde_json::Value;
+use serde_json::{json, Value};
 
 pub(super) const SOURCE_REMINDER_EN: &str =
     "REMINDER: You MUST include relevant sources above in your response using markdown hyperlinks.";
@@ -310,6 +310,71 @@ pub(super) fn env_first(keys: &[&str]) -> Option<String> {
         .filter_map(|key| std::env::var(key).ok())
         .map(|value| value.trim().to_string())
         .find(|value| !value.is_empty())
+}
+
+pub(super) fn settings_secret(
+    state: &crate::AppState,
+    key: fn(&crate::store::Settings) -> &String,
+) -> Option<String> {
+    let settings = state.settings.lock().unwrap();
+    let value = key(&settings).trim().to_string();
+    if value.is_empty() {
+        None
+    } else {
+        Some(value)
+    }
+}
+
+fn exa_api_key(state: &crate::AppState) -> Option<String> {
+    settings_secret(state, |s| &s.exa_api_key).or_else(|| env_first(&["EXA_API_KEY"]))
+}
+
+pub(super) async fn call_exa_mcp(
+    state: &crate::AppState,
+    request_id: &str,
+    tool_name: &str,
+    arguments: Value,
+    label: &str,
+    result_label: &str,
+    truncate_marker: &str,
+) -> Result<String, String> {
+    let endpoint =
+        env_first(&["EXA_MCP_URL"]).unwrap_or_else(|| "https://mcp.exa.ai/mcp".to_string());
+    let body = json!({
+        "jsonrpc": "2.0",
+        "id": request_id,
+        "method": "tools/call",
+        "params": {
+            "name": tool_name,
+            "arguments": arguments,
+        }
+    });
+
+    let mut req = state
+        .http
+        .post(endpoint)
+        .header("Accept", "application/json, text/event-stream")
+        .json(&body);
+    if let Some(key) = exa_api_key(state) {
+        req = req.bearer_auth(key);
+    }
+
+    let resp = req
+        .send()
+        .await
+        .map_err(|e| format!("{label}请求失败：{e}"))?;
+    let status = resp.status();
+    let text = resp
+        .text()
+        .await
+        .map_err(|e| format!("读取 {result_label}失败：{e}"))?;
+    if !status.is_success() {
+        return Err(format!(
+            "{label}返回 HTTP {status}: {}",
+            cap_chars_with_marker(text, 500, truncate_marker)
+        ));
+    }
+    Ok(text)
 }
 
 pub(super) fn cap_chars_with_marker(s: String, max: usize, marker: &str) -> String {

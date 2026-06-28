@@ -3,10 +3,10 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use super::web_common::{
-    append_source_lines, cap_chars_with_flag as cap_chars_with_flag_common, cap_chars_with_marker,
-    clean_plain_text, clean_plain_text_preserve_lines, env_first, extract_title, html_to_text,
-    looks_like_html, parse_choice, parse_json_payloads, parse_optional_choice, title_from_url,
-    WebSource, SOURCE_REMINDER_EN,
+    append_source_lines, call_exa_mcp, cap_chars_with_flag as cap_chars_with_flag_common,
+    cap_chars_with_marker, clean_plain_text, clean_plain_text_preserve_lines, extract_title,
+    html_to_text, looks_like_html, parse_choice, parse_json_payloads, parse_optional_choice,
+    title_from_url, WebSource, SOURCE_REMINDER_EN,
 };
 
 const DEFAULT_CONTEXT_MAX_CHARS: usize = 20_000;
@@ -115,44 +115,20 @@ async fn fetch_exa(
     livecrawl: Option<&str>,
     context_max: usize,
 ) -> Result<FetchDocument, String> {
-    let endpoint =
-        env_first(&["EXA_MCP_URL"]).unwrap_or_else(|| "https://mcp.exa.ai/mcp".to_string());
-    let body = json!({
-        "jsonrpc": "2.0",
-        "id": "demiurge-web-fetch",
-        "method": "tools/call",
-        "params": {
-            "name": "get_contents",
-            "arguments": {
-                "ids": [url],
-                "livecrawl": livecrawl.unwrap_or("fallback"),
-                "contextMaxCharacters": context_max
-            }
-        }
-    });
-    let mut req = state
-        .http
-        .post(endpoint)
-        .header("Accept", "application/json, text/event-stream")
-        .json(&body);
-    if let Some(key) = exa_api_key(state) {
-        req = req.bearer_auth(key);
-    }
-    let resp = req
-        .send()
-        .await
-        .map_err(|e| format!("Exa WebFetch 请求失败：{e}"))?;
-    let status = resp.status();
-    let text = resp
-        .text()
-        .await
-        .map_err(|e| format!("读取 Exa WebFetch 结果失败：{e}"))?;
-    if !status.is_success() {
-        return Err(format!(
-            "Exa WebFetch 返回 HTTP {status}: {}",
-            cap_chars(text, 500)
-        ));
-    }
+    let text = call_exa_mcp(
+        state,
+        "demiurge-web-fetch",
+        "get_contents",
+        json!({
+            "ids": [url],
+            "livecrawl": livecrawl.unwrap_or("fallback"),
+            "contextMaxCharacters": context_max
+        }),
+        "Exa WebFetch ",
+        "Exa WebFetch 结果",
+        "…[web_fetch 输出已截断]",
+    )
+    .await?;
     let (title, content) = extract_exa_document(&text, url);
     let (content, truncated) = cap_chars_with_flag(content, context_max);
     Ok(FetchDocument {
@@ -260,23 +236,6 @@ fn normalize_url(url: &str) -> Result<String, String> {
         "http" | "https" => Ok(parsed.to_string()),
         _ => Err("WebFetch 只支持 http/https URL；需要登录或本地文件的地址不会抓取".to_string()),
     }
-}
-
-fn settings_secret(
-    state: &crate::AppState,
-    key: fn(&crate::store::Settings) -> &String,
-) -> Option<String> {
-    let settings = state.settings.lock().unwrap();
-    let value = key(&settings).trim().to_string();
-    if value.is_empty() {
-        None
-    } else {
-        Some(value)
-    }
-}
-
-fn exa_api_key(state: &crate::AppState) -> Option<String> {
-    settings_secret(state, |s| &s.exa_api_key).or_else(|| env_first(&["EXA_API_KEY"]))
 }
 
 fn cap_chars_with_flag(s: String, max: usize) -> (String, bool) {

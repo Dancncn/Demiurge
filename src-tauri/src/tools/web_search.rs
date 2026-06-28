@@ -5,10 +5,10 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use super::web_common::{
-    append_source_lines, cap_chars_with_marker, clean_html_inline, collect_text_segments,
-    decode_html_entities, dedupe_sources_by_url, domain_matches, env_first, normalize_domain_list,
-    parse_json_payloads, parse_optional_choice, push_web_source, WebSource, SOURCE_REMINDER_EN,
-    SOURCE_REMINDER_ZH,
+    append_source_lines, call_exa_mcp, cap_chars_with_marker, clean_html_inline,
+    collect_text_segments, decode_html_entities, dedupe_sources_by_url, domain_matches, env_first,
+    normalize_domain_list, parse_json_payloads, parse_optional_choice, push_web_source,
+    settings_secret, WebSource, SOURCE_REMINDER_EN, SOURCE_REMINDER_ZH,
 };
 
 const DEFAULT_NUM_RESULTS: usize = 8;
@@ -265,48 +265,22 @@ async fn search_exa(
     search_type: Option<&str>,
     context_max: usize,
 ) -> Result<Vec<SearchResult>, String> {
-    let endpoint =
-        env_first(&["EXA_MCP_URL"]).unwrap_or_else(|| "https://mcp.exa.ai/mcp".to_string());
-    let body = json!({
-        "jsonrpc": "2.0",
-        "id": "demiurge-web-search",
-        "method": "tools/call",
-        "params": {
-            "name": "web_search_exa",
-            "arguments": {
-                "query": query,
-                "type": search_type.unwrap_or("auto"),
-                "numResults": limit,
-                "livecrawl": livecrawl.unwrap_or("fallback"),
-                "contextMaxCharacters": context_max,
-            }
-        }
-    });
-
-    let mut req = state
-        .http
-        .post(endpoint)
-        .header("Accept", "application/json, text/event-stream")
-        .json(&body);
-    if let Some(key) = exa_api_key(state) {
-        req = req.bearer_auth(key);
-    }
-
-    let resp = req
-        .send()
-        .await
-        .map_err(|e| format!("Exa 搜索请求失败：{e}"))?;
-    let status = resp.status();
-    let text = resp
-        .text()
-        .await
-        .map_err(|e| format!("读取 Exa 搜索结果失败：{e}"))?;
-    if !status.is_success() {
-        return Err(format!(
-            "Exa 搜索返回 HTTP {status}: {}",
-            cap_chars(text, 500)
-        ));
-    }
+    let text = call_exa_mcp(
+        state,
+        "demiurge-web-search",
+        "web_search_exa",
+        json!({
+            "query": query,
+            "type": search_type.unwrap_or("auto"),
+            "numResults": limit,
+            "livecrawl": livecrawl.unwrap_or("fallback"),
+            "contextMaxCharacters": context_max,
+        }),
+        "Exa 搜索",
+        "Exa 搜索结果",
+        "…[web_search 输出已按 context_max_characters 截断]",
+    )
+    .await?;
     Ok(extract_exa_results(&text)?)
 }
 
@@ -605,19 +579,6 @@ fn non_empty(value: &str) -> Option<&str> {
     }
 }
 
-fn settings_secret(
-    state: &crate::AppState,
-    key: fn(&crate::store::Settings) -> &String,
-) -> Option<String> {
-    let settings = state.settings.lock().unwrap();
-    let value = key(&settings).trim().to_string();
-    if value.is_empty() {
-        None
-    } else {
-        Some(value)
-    }
-}
-
 fn tavily_api_key(state: &crate::AppState) -> Option<String> {
     settings_secret(state, |s| &s.tavily_api_key).or_else(|| env_first(&["TAVILY_API_KEY"]))
 }
@@ -625,10 +586,6 @@ fn tavily_api_key(state: &crate::AppState) -> Option<String> {
 fn brave_search_api_key(state: &crate::AppState) -> Option<String> {
     settings_secret(state, |s| &s.brave_search_api_key)
         .or_else(|| env_first(&["BRAVE_SEARCH_API_KEY", "BRAVE_API_KEY"]))
-}
-
-fn exa_api_key(state: &crate::AppState) -> Option<String> {
-    settings_secret(state, |s| &s.exa_api_key).or_else(|| env_first(&["EXA_API_KEY"]))
 }
 
 fn filter_domains(
