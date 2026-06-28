@@ -102,10 +102,7 @@ fn source_quality_hint(name: &str, result: &str, ok: bool) -> Option<serde_json:
     if !ok || !matches!(name, "web_search" | "web_fetch") {
         return None;
     }
-    let source_count = result
-        .lines()
-        .filter(|line| line.contains("](") && line.contains("http"))
-        .count();
+    let source_count = crate::tools::source_link_count(result);
     let (level, hint) = if source_count >= 3 {
         (
             "strong",
@@ -619,4 +616,44 @@ fn apply_system_overlay(system: &mut String, overlay: Option<&str>) {
     }
     system.push_str("\n\n---\n临时任务指令：\n");
     system.push_str(overlay.trim());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn source_quality_counts_shared_source_blocks() {
+        let strong = source_quality_hint(
+            "web_search",
+            "Web search results\n\nLinks:\n1. [A](https://a.example)\n2. [B](https://b.example)\n3. [C](https://c.example)\n",
+            true,
+        )
+        .unwrap();
+        assert_eq!(strong["level"], "strong");
+        assert_eq!(strong["source_count"].as_u64(), Some(3));
+
+        let limited = source_quality_hint(
+            "web_fetch",
+            "Content:\n[Inline](https://inline.example)\n\nSources:\n- [A](https://a.example)\n\nREMINDER: cite sources",
+            true,
+        )
+        .unwrap();
+        assert_eq!(limited["level"], "limited");
+        assert_eq!(limited["source_count"].as_u64(), Some(1));
+
+        let none = source_quality_hint("web_fetch", "Content only", true).unwrap();
+        assert_eq!(none["level"], "none");
+        assert_eq!(none["source_count"].as_u64(), Some(0));
+    }
+
+    #[test]
+    fn source_quality_ignores_failed_or_non_web_tools() {
+        assert!(
+            source_quality_hint("web_search", "Links:\n1. [A](https://a.example)", false).is_none()
+        );
+        assert!(
+            source_quality_hint("read_file", "Sources:\n- [A](https://a.example)", true).is_none()
+        );
+    }
 }

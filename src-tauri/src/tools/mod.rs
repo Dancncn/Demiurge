@@ -29,6 +29,7 @@ mod write_plan;
 
 pub use edit_file::EditUndoEntry;
 pub use shell::ShellPolicyState;
+pub(crate) use web_common::source_link_count;
 
 #[allow(dead_code)]
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]

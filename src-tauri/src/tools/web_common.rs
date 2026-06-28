@@ -70,6 +70,35 @@ pub(super) fn append_source_lines(
     }
 }
 
+pub(crate) fn source_link_count(output: &str) -> usize {
+    let mut in_source_block = false;
+    let mut count = 0;
+    for line in output.lines() {
+        let trimmed = line.trim();
+        if matches!(trimmed.to_ascii_lowercase().as_str(), "links:" | "sources:") {
+            in_source_block = true;
+            continue;
+        }
+        if !in_source_block {
+            continue;
+        }
+        if trimmed.starts_with("REMINDER:") {
+            break;
+        }
+        if trimmed.is_empty() {
+            continue;
+        }
+        if is_markdown_http_link_line(trimmed) {
+            count += 1;
+        }
+    }
+    count
+}
+
+fn is_markdown_http_link_line(line: &str) -> bool {
+    line.contains("](") && (line.contains("](http://") || line.contains("](https://"))
+}
+
 pub(super) fn parse_choice<'a>(
     value: Option<&str>,
     field: &str,
@@ -351,5 +380,32 @@ data: [DONE]
         let mut bullets = String::new();
         append_source_lines(&mut bullets, &sources, false, None);
         assert_eq!(bullets, "- [Example](https://example.com): Snippet\n");
+    }
+
+    #[test]
+    fn counts_only_links_from_source_blocks() {
+        let output = "\
+Web fetch result
+
+Content:
+[Inline](https://inline.example) should not count.
+
+Sources:
+- [A](https://a.example)
+- [B](http://b.example): snippet
+
+REMINDER: cite sources";
+        assert_eq!(source_link_count(output), 2);
+
+        let search_output = "\
+Web search results
+
+Links:
+1. [A](https://a.example)
+2. [B](https://b.example)
+3. [C](https://c.example)
+";
+        assert_eq!(source_link_count(search_output), 3);
+        assert_eq!(source_link_count("No search results found."), 0);
     }
 }
