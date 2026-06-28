@@ -170,10 +170,12 @@ export default function App() {
         : "Processing current turn"
       : "Ready";
 
-  const packName = useMemo(() => {
-    const p = packs.find((x) => x.id === settings?.current_pack);
-    return p?.name ?? settings?.current_pack ?? "Demiurge";
-  }, [packs, settings]);
+  const currentPack = useMemo(
+    () => packs.find((x) => x.id === settings?.current_pack) ?? null,
+    [packs, settings?.current_pack],
+  );
+  const packName = currentPack?.name ?? settings?.current_pack ?? "Demiurge";
+  const packAvatar = currentPack?.avatarDataUrl;
 
   const selectedAgentLabel = useMemo(() => {
     if (selectedAgentNames.length === 0) return "Agents";
@@ -640,6 +642,7 @@ export default function App() {
         open={sidebarOpen}
         activeView={activeView}
         packName={packName}
+        packAvatar={packAvatar}
         sessions={sessions}
         activeId={activeId}
         busy={appBusy}
@@ -669,12 +672,17 @@ export default function App() {
                 <div ref={packMenuRef} className="relative">
                   <button
                     onClick={() => setPackMenuOpen((v) => !v)}
-                    className="flex h-8 items-center gap-1 rounded-md px-2 text-[14px] font-semibold text-[#202124] transition hover:bg-[#eef1f5]"
+                    className="flex h-8 max-w-[240px] items-center gap-2 rounded-md px-2 text-[14px] font-semibold text-[#202124] transition hover:bg-[#eef1f5]"
                   >
-                    {packName}
+                    <img
+                      src={packAvatar || "/demiurge.png"}
+                      alt=""
+                      className="size-6 shrink-0 rounded-md border border-[#dfe3e8] bg-white object-cover"
+                    />
+                    <span className="min-w-0 truncate">{packName}</span>
                     <ChevronDownIcon
                       size={18}
-                      className={`text-[#9a9a9a] transition-transform duration-200 ${packMenuOpen ? "rotate-180" : ""}`}
+                      className={`shrink-0 text-[#9a9a9a] transition-transform duration-200 ${packMenuOpen ? "rotate-180" : ""}`}
                     />
                   </button>
                   {packMenuOpen && (
@@ -688,9 +696,16 @@ export default function App() {
                             settings?.current_pack === p.id ? "bg-[#eef1f5]" : ""
                           }`}
                         >
-                          <span>
-                            <span className="block font-medium">{p.name}</span>
-                            <span className="block text-xs text-[#8a8a8a]">Pack / {p.id}</span>
+                          <span className="flex min-w-0 items-center gap-2">
+                            <img
+                              src={p.avatarDataUrl || "/demiurge.png"}
+                              alt=""
+                              className="size-8 shrink-0 rounded-md border border-[#dfe3e8] bg-white object-cover"
+                            />
+                            <span className="min-w-0">
+                              <span className="block truncate font-medium">{p.name}</span>
+                              <span className="block truncate text-xs text-[#8a8a8a]">Pack / {p.id}</span>
+                            </span>
                           </span>
                           {settings?.current_pack === p.id && <CheckIcon size={17} className="shrink-0 text-[#171717]" />}
                         </button>
@@ -862,6 +877,7 @@ export default function App() {
           agentPanel={agentPanel}
           onClose={() => setSettingsOpen(false)}
           onSave={handleSaveSettings}
+          onPacksChange={setPacks}
           onAgentPanelChange={setAgentPanel}
         />
       )}

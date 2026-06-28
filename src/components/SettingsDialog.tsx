@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import * as api from "../lib/api";
 import type {
   AgentEditorFile,
@@ -23,7 +23,7 @@ import type {
   WebDavConfig,
   WebSearchProvider,
 } from "../lib/types";
-import { CheckIcon, CloseIcon } from "./Icons";
+import { CheckIcon, CloseIcon, DownloadIcon } from "./Icons";
 
 interface Props {
   open: boolean;
@@ -32,6 +32,7 @@ interface Props {
   agentPanel: AgentPanelState;
   onClose: () => void;
   onSave: (s: Settings) => void;
+  onPacksChange: (packs: PackManifest[]) => void;
   onAgentPanelChange: (state: AgentPanelState) => void;
 }
 
@@ -538,6 +539,7 @@ export default function SettingsDialog({
   agentPanel,
   onClose,
   onSave,
+  onPacksChange,
   onAgentPanelChange,
 }: Props) {
   const [form, setForm] = useState<Settings>(settings);
@@ -576,7 +578,10 @@ export default function SettingsDialog({
   const [webdavBusy, setWebdavBusy] = useState(false);
   const [webdavStatus, setWebdavStatus] = useState("");
   const [webdavFiles, setWebdavFiles] = useState<WebDavBackupFile[]>([]);
+  const [packImportBusy, setPackImportBusy] = useState(false);
+  const [packImportStatus, setPackImportStatus] = useState("");
   const agentImportInputRef = useRef<HTMLInputElement>(null);
+  const packImportInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (open) {
@@ -587,6 +592,7 @@ export default function SettingsDialog({
       setWebdavStatus("");
       setWebdavFiles([]);
       setMcpError("");
+      setPackImportStatus("");
     }
   }, [open, settings, agentPanel]);
 
@@ -722,6 +728,31 @@ export default function SettingsDialog({
       setMemoryBusy(false);
     }
   };
+
+  async function importPackZip(file?: File | null) {
+    if (!file) return;
+    setPackImportBusy(true);
+    setPackImportStatus("");
+    try {
+      const bytes = Array.from(new Uint8Array(await file.arrayBuffer()));
+      const imported = await api.importPackZip(file.name, bytes);
+      const nextPacks = await api.listPacks();
+      onPacksChange(nextPacks);
+      set("current_pack", imported.id);
+      setPackImportStatus(`Imported ${imported.name} (${imported.id}). Save settings to use it.`);
+    } catch (err) {
+      setPackImportStatus(`Import failed: ${String(err)}`);
+    } finally {
+      setPackImportBusy(false);
+      if (packImportInputRef.current) packImportInputRef.current.value = "";
+    }
+  }
+
+  function handlePackDrop(event: DragEvent<HTMLDivElement>) {
+    event.preventDefault();
+    if (packImportBusy) return;
+    void importPackZip(event.dataTransfer.files.item(0));
+  }
 
   const webdavConfig: WebDavConfig = {
     url: form.webdav_url,
@@ -1310,6 +1341,52 @@ export default function SettingsDialog({
                               ))}
                             </select>
                           </Field>
+                          <div
+                            className="rounded-lg border border-dashed border-[#cfd5dd] bg-[#fbfcfd] p-3"
+                            onDragOver={(event) => {
+                              event.preventDefault();
+                              event.dataTransfer.dropEffect = "copy";
+                            }}
+                            onDrop={handlePackDrop}
+                          >
+                            <input
+                              ref={packImportInputRef}
+                              className="hidden"
+                              type="file"
+                              accept=".zip,application/zip,application/x-zip-compressed"
+                              onChange={(event) => void importPackZip(event.target.files?.[0])}
+                            />
+                            <div className="flex flex-wrap items-center gap-3">
+                              <div className="grid size-10 shrink-0 place-items-center rounded-lg border border-[#dfe3e8] bg-white text-[#59616d]">
+                                <DownloadIcon size={18} />
+                              </div>
+                              <div className="min-w-[180px] flex-1">
+                                <div className="text-[13px] font-medium text-[#202124]">Import persona pack</div>
+                                <div className="mt-0.5 text-[12px] leading-5 text-[#7a8088]">
+                                  Drop a zip here, or choose a file. The manifest is validated before extraction.
+                                </div>
+                              </div>
+                              <button
+                                type="button"
+                                className={secondaryButtonCls}
+                                disabled={packImportBusy}
+                                onClick={() => packImportInputRef.current?.click()}
+                              >
+                                {packImportBusy ? "Importing..." : "Choose zip"}
+                              </button>
+                            </div>
+                            {packImportStatus && (
+                              <div
+                                className={`mt-3 rounded-md border px-3 py-2 text-[12px] leading-5 ${
+                                  packImportStatus.startsWith("Import failed:")
+                                    ? "border-[#f3c3c3] bg-[#fff7f7] text-[#b42318]"
+                                    : "border-[#dce6d8] bg-[#f8fbf6] text-[#3f6212]"
+                                }`}
+                              >
+                                {packImportStatus}
+                              </div>
+                            )}
+                          </div>
                           <div className="flex flex-wrap gap-2">
                             <button
                               type="button"

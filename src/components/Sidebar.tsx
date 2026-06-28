@@ -8,6 +8,7 @@ type Props = {
   open: boolean;
   activeView: AppView;
   packName: string;
+  packAvatar?: string;
   sessions: SessionMeta[];
   activeId: string;
   busy: boolean;
@@ -25,6 +26,7 @@ export function Sidebar({
   open,
   activeView,
   packName,
+  packAvatar,
   sessions,
   activeId,
   busy,
@@ -137,7 +139,11 @@ export function Sidebar({
             }}
             className="mb-4 flex h-9 items-center gap-2 rounded-md px-2 text-left text-[13px] text-[#202124] transition hover:bg-[#dfe4ea]"
           >
-            <img src="/demiurge.png" alt="Demiurge" className="size-7 shrink-0 rounded-md border border-[#dfe3e8] bg-white object-contain" />
+            <img
+              src={packAvatar || "/demiurge.png"}
+              alt=""
+              className="size-7 shrink-0 rounded-md border border-[#dfe3e8] bg-white object-cover"
+            />
             <span>New chat</span>
           </button>
         )}
@@ -234,7 +240,11 @@ export function Sidebar({
           >
             {open ? (
               <>
-                <img src="/demiurge.png" alt="Demiurge" className="size-7 shrink-0 rounded-md border border-[#dfe3e8] bg-white object-contain" />
+                <img
+                  src={packAvatar || "/demiurge.png"}
+                  alt=""
+                  className="size-7 shrink-0 rounded-md border border-[#dfe3e8] bg-white object-cover"
+                />
                 <span className="min-w-0 flex-1 truncate text-[#3f3f3f]">{packName}</span>
                 <SettingsIcon size={17} className="shrink-0 text-[#8a8a8a]" />
               </>
