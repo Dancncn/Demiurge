@@ -25,7 +25,7 @@ fn default_webdav_path() -> String {
 }
 
 fn default_provider() -> ProviderKind {
-    ProviderKind::OpenAiCompatible
+    ProviderKind::DeepSeek
 }
 
 fn default_max_context_chars() -> usize {
@@ -64,13 +64,51 @@ fn default_ocr_model_source() -> String {
     "modelscope".to_string()
 }
 
+fn default_media_provider() -> String {
+    "dashscope".to_string()
+}
+
+fn default_media_base_url() -> String {
+    "https://dashscope.aliyuncs.com".to_string()
+}
+
+fn default_image_model() -> String {
+    "qwen-image-2.0".to_string()
+}
+
+fn default_image_size() -> String {
+    "1024*1024".to_string()
+}
+
+fn default_tts_model() -> String {
+    "qwen3-tts-flash".to_string()
+}
+
+fn default_tts_voice() -> String {
+    "Cherry".to_string()
+}
+
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ProviderKind {
+    #[serde(rename = "deepseek")]
+    DeepSeek,
+    #[serde(rename = "dashscope")]
+    DashScope,
+    #[serde(rename = "openai")]
+    OpenAi,
+    #[serde(rename = "openrouter")]
+    OpenRouter,
     OpenAiCompatible,
     Local,
     Anthropic,
     Gemini,
+    #[serde(rename = "glm")]
+    Glm,
+    #[serde(rename = "minimax")]
+    MiniMax,
+    #[serde(rename = "custom")]
+    Custom,
 }
 
 /// 运行时设置。`api_key` 只保留在内存和前端表单里，落盘时会被清空；
@@ -121,12 +159,26 @@ pub struct Settings {
     pub webdav_password: String,
     #[serde(default = "default_webdav_path")]
     pub webdav_path: String,
+    #[serde(default = "default_media_provider")]
+    pub media_provider: String,
+    #[serde(default = "default_media_base_url")]
+    pub media_base_url: String,
+    #[serde(default)]
+    pub media_api_key: String,
+    #[serde(default = "default_image_model")]
+    pub image_model: String,
+    #[serde(default = "default_image_size")]
+    pub image_size: String,
+    #[serde(default = "default_tts_model")]
+    pub tts_model: String,
+    #[serde(default = "default_tts_voice")]
+    pub tts_voice: String,
 }
 
 impl Default for Settings {
     fn default() -> Self {
         Settings {
-            provider: ProviderKind::OpenAiCompatible,
+            provider: ProviderKind::DeepSeek,
             // 默认 DeepSeek（OpenAI 兼容）。换 LM Studio 等本地端点只改 base_url + model。
             base_url: "https://api.deepseek.com/v1".to_string(),
             api_key: String::new(),
@@ -151,6 +203,13 @@ impl Default for Settings {
             webdav_username: String::new(),
             webdav_password: String::new(),
             webdav_path: default_webdav_path(),
+            media_provider: default_media_provider(),
+            media_base_url: default_media_base_url(),
+            media_api_key: String::new(),
+            image_model: default_image_model(),
+            image_size: default_image_size(),
+            tts_model: default_tts_model(),
+            tts_voice: default_tts_voice(),
         }
     }
 }
@@ -248,6 +307,7 @@ pub fn save_settings(dir: &Path, s: &Settings) -> Result<(), String> {
     safe.brave_search_api_key.clear();
     safe.exa_api_key.clear();
     safe.webdav_password.clear();
+    safe.media_api_key.clear();
     let json = serde_json::to_string_pretty(&safe).map_err(|e| e.to_string())?;
     fs::write(&p, json).map_err(|e| e.to_string())
 }
@@ -295,7 +355,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn settings_without_provider_defaults_to_openai_compatible() {
+    fn settings_without_provider_defaults_to_deepseek() {
         let json = r#"{
             "base_url": "https://example.test/v1",
             "api_key": "sk-test",
@@ -307,7 +367,7 @@ mod tests {
             "auto_memory_enabled": true
         }"#;
         let settings = serde_json::from_str::<Settings>(json).unwrap();
-        assert_eq!(settings.provider, ProviderKind::OpenAiCompatible);
+        assert_eq!(settings.provider, ProviderKind::DeepSeek);
         assert!(!settings.voice_enabled);
         assert_eq!(settings.voice_stt_backend, "none");
         assert_eq!(settings.voice_tts_backend, "none");
@@ -317,6 +377,10 @@ mod tests {
         assert!(settings.tavily_api_key.is_empty());
         assert!(settings.brave_search_api_key.is_empty());
         assert!(settings.exa_api_key.is_empty());
+        assert_eq!(settings.media_provider, "dashscope");
+        assert_eq!(settings.media_base_url, "https://dashscope.aliyuncs.com");
+        assert_eq!(settings.image_model, "qwen-image-2.0");
+        assert_eq!(settings.tts_model, "qwen3-tts-flash");
     }
 
     #[test]
@@ -329,6 +393,7 @@ mod tests {
             tavily_api_key: "tvly-secret".to_string(),
             brave_search_api_key: "brave-secret".to_string(),
             exa_api_key: "exa-secret".to_string(),
+            media_api_key: "media-secret".to_string(),
             ..Settings::default()
         };
         save_settings(&dir, &settings).unwrap();
@@ -338,12 +403,14 @@ mod tests {
         assert!(!raw.contains("tvly-secret"));
         assert!(!raw.contains("brave-secret"));
         assert!(!raw.contains("exa-secret"));
+        assert!(!raw.contains("media-secret"));
         let saved = serde_json::from_str::<Settings>(&raw).unwrap();
         assert!(saved.api_key.is_empty());
         assert!(saved.tavily_api_key.is_empty());
         assert!(saved.brave_search_api_key.is_empty());
         assert!(saved.exa_api_key.is_empty());
         assert!(saved.webdav_password.is_empty());
+        assert!(saved.media_api_key.is_empty());
 
         let _ = std::fs::remove_dir_all(&dir);
     }

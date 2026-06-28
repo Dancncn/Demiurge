@@ -17,7 +17,18 @@ export interface Message {
   name?: string;
 }
 
-export type ProviderKind = "open_ai_compatible" | "local" | "anthropic" | "gemini";
+export type ProviderKind =
+  | "deepseek"
+  | "dashscope"
+  | "openai"
+  | "openrouter"
+  | "anthropic"
+  | "gemini"
+  | "glm"
+  | "minimax"
+  | "custom"
+  | "open_ai_compatible"
+  | "local";
 export type WebSearchProvider = "auto" | "bing" | "duckduckgo" | "tavily" | "brave" | "exa";
 
 export interface Settings {
@@ -45,6 +56,46 @@ export interface Settings {
   webdav_username: string;
   webdav_password: string;
   webdav_path: string;
+  media_provider: string;
+  media_base_url: string;
+  media_api_key: string;
+  image_model: string;
+  image_size: string;
+  tts_model: string;
+  tts_voice: string;
+}
+
+export interface ImageGenerationRequest {
+  prompt: string;
+  model?: string;
+  size?: string;
+  negative_prompt?: string;
+  seed?: number;
+  prompt_extend?: boolean;
+  watermark?: boolean;
+}
+
+export interface GeneratedImage {
+  url: string;
+}
+
+export interface ImageGenerationResult {
+  request_id: string;
+  images: GeneratedImage[];
+  usage: Record<string, unknown>;
+}
+
+export interface SpeechSynthesisRequest {
+  text: string;
+  model?: string;
+  voice?: string;
+  language_type?: string;
+}
+
+export interface SpeechSynthesisResult {
+  request_id: string;
+  url: string;
+  usage: Record<string, unknown>;
 }
 
 export interface WebDavConfig {

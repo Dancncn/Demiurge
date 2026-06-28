@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { UnlistenFn } from "@tauri-apps/api/event";
+import { getCurrentWindow, PhysicalSize } from "@tauri-apps/api/window";
 import * as api from "./lib/api";
 import type {
   AgentPanelState,
@@ -12,22 +13,24 @@ import type {
   Settings,
 } from "./lib/types";
 import { MessageList } from "./components/MessageList";
-import { Sidebar } from "./components/Sidebar";
+import { Sidebar, type AppView } from "./components/Sidebar";
 import { Composer } from "./components/Composer";
 import ConfirmDialog from "./components/ConfirmDialog";
 import SettingsDialog from "./components/SettingsDialog";
 import WorkflowsPanel from "./components/WorkflowsPanel";
+import MediaStudio from "./components/MediaStudio";
 import { CheckIcon, ChevronDownIcon, PanelLeftIcon, WrenchIcon } from "./components/Icons";
 import { attachmentKindLabel, buildAttachmentPrompt, formatAttachmentSize, type ProcessedAttachment } from "./lib/fileProcessing";
 
 const SUGGESTIONS = [
-  "现在几点了？顺便说说今天该做点什么",
-  "帮我在沙盒里建一个 notes.txt 记点东西",
-  "搜索一下最近有什么值得关注的 AI 新闻",
-  "介绍一下你自己吧",
+  "What time is it? Then suggest what I should do today.",
+  "Create a notes.txt file in the sandbox and write a few notes.",
+  "Search for recent AI news worth paying attention to.",
+  "Introduce yourself and explain what you can do.",
 ];
 
-// 把持久化的消息历史还原成展示项（恢复上次会话）
+const DEFAULT_WINDOW_SIZE = { width: 1811, height: 1213 };
+
 function buildHistory(msgs: Message[]): DisplayItem[] {
   const out: DisplayItem[] = [];
   const results = new Map<string, string>();
@@ -90,6 +93,7 @@ export default function App() {
   const [selectedAgentNames, setSelectedAgentNames] = useState<string[]>([]);
   const [sessions, setSessions] = useState<SessionMeta[]>([]);
   const [activeId, setActiveId] = useState("");
+  const [activeView, setActiveView] = useState<AppView>("chat");
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [packMenuOpen, setPackMenuOpen] = useState(false);
@@ -106,6 +110,7 @@ export default function App() {
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 
   const activeSession = useMemo(() => sessions.find((s) => s.id === activeId) ?? null, [activeId, sessions]);
+  const agentsDir = agentPanel.agents_dir || ".demiurge/agents";
 
   const packName = useMemo(() => {
     const p = packs.find((x) => x.id === settings?.current_pack);
@@ -118,7 +123,15 @@ export default function App() {
     return `${selectedAgentNames.length} Agents`;
   }, [selectedAgentNames]);
 
-  // 初次加载
+  useEffect(() => {
+    if (!("__TAURI_INTERNALS__" in window)) return;
+    const appWindow = getCurrentWindow();
+    void appWindow
+      .setSize(new PhysicalSize(DEFAULT_WINDOW_SIZE.width, DEFAULT_WINDOW_SIZE.height))
+      .then(() => appWindow.center())
+      .catch((e) => console.warn("Failed to apply default window size", e));
+  }, []);
+
   useEffect(() => {
     (async () => {
       try {
@@ -136,7 +149,7 @@ export default function App() {
         setActiveId(list.active);
         setItems(buildHistory(hist));
       } catch (e) {
-        console.error("初始化失败", e);
+        console.error("Failed to initialize Demiurge", e);
       }
     })();
   }, []);
@@ -151,7 +164,6 @@ export default function App() {
     }
   }
 
-  // 注册 agent 事件（兼容 StrictMode 双挂载）
   useEffect(() => {
     let un: UnlistenFn | undefined;
     let disposed = false;
@@ -239,7 +251,7 @@ export default function App() {
               args: { turns_executed: e.turns_executed, tokens_used: e.tokens_used, token_budget: e.token_budget },
               status: e.status === "active" ? "running" : "done",
               result: e.message,
-              description: "Goal 续跑进度",
+              description: "Goal progress",
             },
           ]);
         },
@@ -255,7 +267,6 @@ export default function App() {
     };
   }, []);
 
-  // 角色包下拉的外部点击关闭
   useEffect(() => {
     if (!packMenuOpen) return;
     const onDown = (e: MouseEvent) => {
@@ -265,7 +276,6 @@ export default function App() {
     return () => document.removeEventListener("mousedown", onDown);
   }, [packMenuOpen]);
 
-  // Agent 下拉的外部点击关闭
   useEffect(() => {
     if (!agentMenuOpen) return;
     const onDown = (e: MouseEvent) => {
@@ -280,6 +290,7 @@ export default function App() {
     const attachmentPrompt = buildAttachmentPrompt(attachments);
     if ((!text && !attachmentPrompt) || busy) return false;
     setInput("");
+    setActiveView("chat");
     const uid = genId();
     setItems((p) => [...p, { id: uid, kind: "user", text: buildUserDisplayText(text, attachments) }]);
     setBusy(true);
@@ -297,10 +308,10 @@ export default function App() {
         curAssistantId.current = null;
       }
       const nid = genId();
-      setItems((p) => [...p, { id: nid, kind: "assistant", text: `⚠️ ${String(err)}`, streaming: false, error: true }]);
+      setItems((p) => [...p, { id: nid, kind: "assistant", text: `Warning: ${String(err)}`, streaming: false, error: true }]);
     } finally {
       setBusy(false);
-      void refreshSessions(); // 标题/排序可能因本轮更新
+      void refreshSessions();
     }
     return true;
   }
@@ -312,7 +323,7 @@ export default function App() {
     try {
       await api.respondConfirm(id, allow, scope);
     } catch (e) {
-      console.error("确认回执失败", e);
+      console.error("Failed to respond to confirmation", e);
     }
   }
 
@@ -383,7 +394,7 @@ export default function App() {
       setSettings(s);
       setSettingsOpen(false);
     } catch (e) {
-      console.error("保存设置失败", e);
+      console.error("Failed to save settings", e);
     }
   }
 
@@ -415,11 +426,13 @@ export default function App() {
     <main className="flex h-[100dvh] overflow-hidden bg-[#eef1f5] text-[#202124]">
       <Sidebar
         open={sidebarOpen}
+        activeView={activeView}
         packName={packName}
         sessions={sessions}
         activeId={activeId}
         busy={busy}
         onToggle={() => setSidebarOpen((v) => !v)}
+        onViewChange={setActiveView}
         onNewChat={handleNewChat}
         onSelectSession={handleSelectSession}
         onRenameSession={handleRenameSession}
@@ -429,141 +442,158 @@ export default function App() {
       />
 
       <section className="flex min-h-0 min-w-0 flex-1 flex-col p-2 pl-0">
-        <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-xl border border-[#dfe3e8] bg-white shadow-[0_1px_2px_rgba(15,23,42,0.06)]">
-        <header className="flex h-12 shrink-0 items-center gap-2 border-b border-[#eceff3] bg-[#fbfcfd] px-3">
-          <button
-            onClick={() => setSidebarOpen(true)}
-            aria-label="打开侧边栏"
-            className="grid h-8 w-8 shrink-0 place-items-center rounded-md text-[#4f5661] transition hover:bg-[#eef1f5] md:hidden"
-          >
-            <PanelLeftIcon size={20} />
-          </button>
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-lg border border-[#dfe3e8] bg-white shadow-[0_1px_2px_rgba(15,23,42,0.06)]">
+          {activeView === "chat" ? (
+            <>
+              <header className="flex h-12 shrink-0 items-center gap-2 border-b border-[#eceff3] bg-[#fbfcfd] px-3">
+                <button
+                  onClick={() => setSidebarOpen(true)}
+                  aria-label="Open sidebar"
+                  className="grid h-8 w-8 shrink-0 place-items-center rounded-md text-[#4f5661] transition hover:bg-[#eef1f5] md:hidden"
+                >
+                  <PanelLeftIcon size={20} />
+                </button>
 
-          <div ref={packMenuRef} className="relative">
-            <button
-              onClick={() => setPackMenuOpen((v) => !v)}
-              className="flex h-8 items-center gap-1 rounded-md px-2 text-[14px] font-semibold text-[#202124] transition hover:bg-[#eef1f5]"
-            >
-              {packName}
-              <ChevronDownIcon
-                size={18}
-                className={`text-[#9a9a9a] transition-transform duration-200 ${packMenuOpen ? "rotate-180" : ""}`}
-              />
-            </button>
-            {packMenuOpen && (
-              <div className="cf-pop cf-pop-down absolute left-0 top-10 z-20 max-h-[70vh] w-64 overflow-y-auto rounded-lg border border-[#dfe3e8] bg-white p-1.5 shadow-[0_16px_48px_rgba(15,23,42,0.16)]">
-                {packs.length === 0 && <div className="px-3 py-2 text-sm text-[#9a9a9a]">未找到角色包</div>}
-                {packs.map((p) => (
+                <div ref={packMenuRef} className="relative">
                   <button
-                    key={p.id}
-                    onClick={() => handleSelectPack(p.id)}
-                    className={`flex w-full items-center justify-between gap-2 rounded-md px-2.5 py-2 text-left text-[13px] transition hover:bg-[#f6f7f9] ${
-                      settings?.current_pack === p.id ? "bg-[#eef1f5]" : ""
+                    onClick={() => setPackMenuOpen((v) => !v)}
+                    className="flex h-8 items-center gap-1 rounded-md px-2 text-[14px] font-semibold text-[#202124] transition hover:bg-[#eef1f5]"
+                  >
+                    {packName}
+                    <ChevronDownIcon
+                      size={18}
+                      className={`text-[#9a9a9a] transition-transform duration-200 ${packMenuOpen ? "rotate-180" : ""}`}
+                    />
+                  </button>
+                  {packMenuOpen && (
+                    <div className="cf-pop cf-pop-down absolute left-0 top-10 z-20 max-h-[70vh] w-64 overflow-y-auto rounded-lg border border-[#dfe3e8] bg-white p-1.5 shadow-[0_16px_48px_rgba(15,23,42,0.16)]">
+                      {packs.length === 0 && <div className="px-3 py-2 text-sm text-[#9a9a9a]">No persona packs found</div>}
+                      {packs.map((p) => (
+                        <button
+                          key={p.id}
+                          onClick={() => handleSelectPack(p.id)}
+                          className={`flex w-full items-center justify-between gap-2 rounded-md px-2.5 py-2 text-left text-[13px] transition hover:bg-[#f6f7f9] ${
+                            settings?.current_pack === p.id ? "bg-[#eef1f5]" : ""
+                          }`}
+                        >
+                          <span>
+                            <span className="block font-medium">{p.name}</span>
+                            <span className="block text-xs text-[#8a8a8a]">Pack / {p.id}</span>
+                          </span>
+                          {settings?.current_pack === p.id && <CheckIcon size={17} className="shrink-0 text-[#171717]" />}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                <div ref={agentMenuRef} className="relative">
+                  <button
+                    onClick={() => setAgentMenuOpen((v) => !v)}
+                    className={`flex items-center gap-1 rounded-md px-2.5 py-2 text-sm font-medium transition hover:bg-[#eef1f5] ${
+                      selectedAgentNames.length ? "text-[#171717]" : "text-[#6f7782]"
                     }`}
                   >
-                    <span>
-                      <span className="block font-medium">{p.name}</span>
-                      <span className="block text-xs text-[#8a8a8a]">角色包 · {p.id}</span>
-                    </span>
-                    {settings?.current_pack === p.id && <CheckIcon size={17} className="shrink-0 text-[#171717]" />}
+                    {selectedAgentLabel}
+                    <ChevronDownIcon
+                      size={16}
+                      className={`text-[#9a9a9a] transition-transform duration-200 ${agentMenuOpen ? "rotate-180" : ""}`}
+                    />
                   </button>
-                ))}
-              </div>
-            )}
-          </div>
+                  {agentMenuOpen && (
+                    <div className="cf-pop cf-pop-down absolute left-0 top-11 z-20 max-h-[70vh] w-80 overflow-y-auto rounded-lg border border-[#dfe3e8] bg-white p-2 shadow-[0_16px_48px_rgba(15,23,42,0.16)]">
+                      <div className="border-b border-[#eef1f4] px-3 py-2">
+                        <div className="text-[11px] font-semibold uppercase tracking-wide text-[#8a9099]">
+                          Agents folder
+                        </div>
+                        <div className="mt-1 truncate text-xs text-[#6f7782]" title={`${agentsDir}\\*.json`}>
+                          {agentsDir}\*.json
+                        </div>
+                      </div>
+                      {agentPanel.definitions.length === 0 && (
+                        <div className="px-3 py-3 text-sm text-[#9a9a9a]">
+                          No custom agents found. Add JSON files in the agents folder.
+                        </div>
+                      )}
+                      {agentPanel.definitions.map((agent) => {
+                        const selected = selectedAgentNames.includes(agent.name);
+                        return (
+                          <button
+                            key={agent.name}
+                            onClick={() => toggleAgent(agent.name)}
+                            className={`flex w-full items-start justify-between gap-2 rounded-md px-3 py-3 text-left text-sm transition hover:bg-[#f6f7f9] ${
+                              selected ? "bg-[#eef1f5]" : ""
+                            }`}
+                          >
+                            <span className="min-w-0">
+                              <span className="block truncate font-medium">{agent.name}</span>
+                              <span className="mt-0.5 block truncate text-xs text-[#8a8a8a]">
+                                {agent.kind} / {agent.description || agent.path}
+                              </span>
+                              {agent.allowed_tools.length ? (
+                                <span className="mt-1 block truncate text-xs text-[#9a9a9a]">
+                                  tools: {agent.allowed_tools.join(", ")}
+                                </span>
+                              ) : null}
+                            </span>
+                            {selected && <CheckIcon size={17} className="mt-0.5 shrink-0 text-[#171717]" />}
+                          </button>
+                        );
+                      })}
+                      {selectedAgentNames.length > 0 && (
+                        <button
+                          onClick={() => setSelectedAgentNames([])}
+                          className="mt-1 w-full rounded-md px-3 py-2 text-left text-xs text-[#8a8a8a] transition hover:bg-[#f6f7f9]"
+                        >
+                          Clear selection
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </div>
 
-          <div ref={agentMenuRef} className="relative">
-            <button
-              onClick={() => setAgentMenuOpen((v) => !v)}
-              className={`flex items-center gap-1 rounded-lg px-3 py-2 text-sm font-medium transition hover:bg-[#f5f5f5] ${
-                selectedAgentNames.length ? "text-[#171717]" : "text-[#6f6f6f]"
-              }`}
-            >
-              {selectedAgentLabel}
-              <ChevronDownIcon
-                size={16}
-                className={`text-[#9a9a9a] transition-transform duration-200 ${agentMenuOpen ? "rotate-180" : ""}`}
+                <div className="hidden min-w-0 flex-col border-l border-[#dfe3e8] pl-3 text-[11px] text-[#8a9099] sm:flex">
+                  <span className="max-w-[28vw] truncate font-medium text-[#3f3f3f]" title={activeSession?.title ?? "New chat"}>
+                    {activeSession?.title ?? "New chat"}
+                  </span>
+                  <span>{busy ? "Processing current turn" : "Ready"}</span>
+                </div>
+
+                <button
+                  onClick={() => setWorkflowsOpen(true)}
+                  title="Workflows"
+                  className="ml-auto inline-flex h-8 shrink-0 items-center gap-2 rounded-md px-2.5 text-[12px] font-medium text-[#4f5661] transition hover:bg-[#eef1f5]"
+                >
+                  <WrenchIcon size={17} />
+                  <span className="hidden sm:inline">Workflows</span>
+                </button>
+              </header>
+
+              <MessageList
+                items={items}
+                thinking={thinking}
+                greeting="How can I help?"
+                suggestions={SUGGESTIONS}
+                onSuggestionClick={(t) => void handleSend(t)}
               />
-            </button>
-            {agentMenuOpen && (
-              <div className="cf-pop cf-pop-down absolute left-0 top-11 z-20 max-h-[70vh] w-80 overflow-y-auto rounded-2xl border border-[#ececec] bg-white p-2 shadow-[0_16px_48px_rgba(0,0,0,0.16)]">
-                <div className="px-3 py-2 text-xs text-[#8a8a8a]">.demiurge/agents/*.json 路 鍙閫夌粍鍚?</div>
-                {agentPanel.definitions.length === 0 && <div className="px-3 py-2 text-sm text-[#9a9a9a]">未找到自定义 Agent</div>}
-                {agentPanel.definitions.map((agent) => {
-                  const selected = selectedAgentNames.includes(agent.name);
-                  return (
-                    <button
-                      key={agent.name}
-                      onClick={() => toggleAgent(agent.name)}
-                      className={`flex w-full items-start justify-between gap-2 rounded-xl px-3 py-3 text-left text-sm transition hover:bg-[#f7f7f7] ${
-                        selected ? "bg-[#f7f7f7]" : ""
-                      }`}
-                    >
-                      <span className="min-w-0">
-                        <span className="block truncate font-medium">{agent.name}</span>
-                        <span className="mt-0.5 block truncate text-xs text-[#8a8a8a]">
-                          {agent.kind} · {agent.description || agent.path}
-                        </span>
-                        {agent.allowed_tools.length ? (
-                          <span className="mt-1 block truncate text-xs text-[#9a9a9a]">
-                            tools: {agent.allowed_tools.join(", ")}
-                          </span>
-                        ) : null}
-                      </span>
-                      {selected && <CheckIcon size={17} className="mt-0.5 shrink-0 text-[#171717]" />}
-                    </button>
-                  );
-                })}
-                {selectedAgentNames.length > 0 && (
-                  <button
-                    onClick={() => setSelectedAgentNames([])}
-                    className="mt-1 w-full rounded-xl px-3 py-2 text-left text-xs text-[#8a8a8a] transition hover:bg-[#f7f7f7]"
-                  >
-                    清除选择
-                  </button>
-                )}
-              </div>
-            )}
-          </div>
 
-          <div className="hidden min-w-0 flex-col border-l border-[#dfe3e8] pl-3 text-[11px] text-[#8a9099] sm:flex">
-            <span className="max-w-[28vw] truncate font-medium text-[#3f3f3f]" title={activeSession?.title ?? "新对话"}>
-              {activeSession?.title ?? "新对话"}
-            </span>
-            <span>{busy ? "正在处理当前会话" : "会话就绪"}</span>
-          </div>
-
-          <button
-            onClick={() => setWorkflowsOpen(true)}
-            title="Workflows"
-            className="ml-auto inline-flex h-8 shrink-0 items-center gap-2 rounded-md px-2.5 text-[12px] font-medium text-[#4f5661] transition hover:bg-[#eef1f5]"
-          >
-            <WrenchIcon size={17} />
-            <span className="hidden sm:inline">Workflows</span>
-          </button>
-        </header>
-
-        <MessageList
-          items={items}
-          thinking={thinking}
-          greeting="有什么可以帮忙的？"
-          suggestions={SUGGESTIONS}
-          onSuggestionClick={(t) => void handleSend(t)}
-        />
-
-        <Composer
-          input={input}
-          canSend={canSend}
-          loading={busy}
-          textareaRef={textareaRef}
-          onSubmit={(attachments) => handleSend(undefined, attachments)}
-          onStop={() => {
-            void api.interrupt();
-            setConfirmReq(null);
-          }}
-          onInputChange={setInput}
-          onOpenSandbox={() => void api.openSandbox()}
-        />
+              <Composer
+                input={input}
+                canSend={canSend}
+                loading={busy}
+                textareaRef={textareaRef}
+                onSubmit={(attachments) => handleSend(undefined, attachments)}
+                onStop={() => {
+                  void api.interrupt();
+                  setConfirmReq(null);
+                }}
+                onInputChange={setInput}
+                onOpenSandbox={() => void api.openSandbox()}
+              />
+            </>
+          ) : (
+            <MediaStudio settings={settings} onOpenSettings={() => setSettingsOpen(true)} />
+          )}
         </div>
       </section>
 

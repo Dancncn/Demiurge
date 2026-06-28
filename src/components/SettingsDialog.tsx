@@ -27,7 +27,7 @@ interface Props {
   onSave: (s: Settings) => void;
 }
 
-type SettingsTab = "provider" | "web" | "files" | "context" | "tools" | "voice" | "advanced";
+type SettingsTab = "provider" | "media" | "web" | "files" | "context" | "tools" | "voice" | "advanced";
 
 type ProviderOption = {
   value: ProviderKind;
@@ -40,20 +40,36 @@ type ProviderOption = {
 
 const providerOptions: ProviderOption[] = [
   {
-    value: "open_ai_compatible",
-    label: "OpenAI Compatible",
-    short: "OA",
+    value: "deepseek",
+    label: "DeepSeek",
+    short: "DS",
     baseUrl: "https://api.deepseek.com/v1",
     model: "deepseek-chat",
-    help: "DeepSeek, OpenRouter, siliconflow and other OpenAI-compatible endpoints.",
+    help: "DeepSeek official OpenAI-compatible endpoint.",
   },
   {
-    value: "local",
-    label: "Local Endpoint",
-    short: "LO",
-    baseUrl: "http://localhost:11434/v1",
-    model: "llama3.1",
-    help: "Ollama, LM Studio, vLLM or any local OpenAI-compatible service.",
+    value: "dashscope",
+    label: "阿里云百炼",
+    short: "BL",
+    baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    model: "deepseek-v4-flash",
+    help: "DashScope/Bailian OpenAI-compatible chat endpoint. Media uses native DashScope APIs below.",
+  },
+  {
+    value: "openai",
+    label: "ChatGPT / OpenAI",
+    short: "AI",
+    baseUrl: "https://api.openai.com/v1",
+    model: "gpt-4o",
+    help: "OpenAI chat completions endpoint.",
+  },
+  {
+    value: "openrouter",
+    label: "OpenRouter",
+    short: "OR",
+    baseUrl: "https://openrouter.ai/api/v1",
+    model: "openai/gpt-4o",
+    help: "OpenRouter model gateway.",
   },
   {
     value: "anthropic",
@@ -70,6 +86,46 @@ const providerOptions: ProviderOption[] = [
     baseUrl: "https://generativelanguage.googleapis.com/v1beta",
     model: "gemini-2.5-pro",
     help: "Google AI Studio compatible Gemini endpoint.",
+  },
+  {
+    value: "glm",
+    label: "智谱 GLM",
+    short: "GL",
+    baseUrl: "https://open.bigmodel.cn/api/paas/v4",
+    model: "glm-4-plus",
+    help: "Zhipu AI OpenAI-compatible endpoint.",
+  },
+  {
+    value: "minimax",
+    label: "MiniMax",
+    short: "MM",
+    baseUrl: "https://api.minimax.chat/v1",
+    model: "MiniMax-Text-01",
+    help: "MiniMax OpenAI-compatible endpoint.",
+  },
+  {
+    value: "custom",
+    label: "Custom Provider",
+    short: "CU",
+    baseUrl: "",
+    model: "",
+    help: "Any OpenAI-compatible endpoint.",
+  },
+  {
+    value: "open_ai_compatible",
+    label: "OpenAI Compatible",
+    short: "OA",
+    baseUrl: "https://api.deepseek.com/v1",
+    model: "deepseek-chat",
+    help: "Legacy generic OpenAI-compatible profile.",
+  },
+  {
+    value: "local",
+    label: "Local Endpoint",
+    short: "LO",
+    baseUrl: "http://localhost:11434/v1",
+    model: "llama3.1",
+    help: "Ollama, LM Studio, vLLM or any local OpenAI-compatible service.",
   },
 ];
 
@@ -107,6 +163,10 @@ function formatBytes(n: number) {
 
 function normalizeWebSearchProvider(value: string): WebSearchProvider {
   return webSearchProviders.some((p) => p.value === value) ? (value as WebSearchProvider) : "auto";
+}
+
+function normalizeMediaProvider(value: string) {
+  return value.trim() || "dashscope";
 }
 
 function permissionEffectLabel(effect: string) {
@@ -411,6 +471,7 @@ export default function SettingsDialog({ open, settings, packs, agentPanel, onCl
 
   const navItems: { id: SettingsTab; label: string; detail: string }[] = [
     { id: "provider", label: "Providers", detail: selectedProvider.label },
+    { id: "media", label: "Media", detail: form.image_model || "DashScope" },
     { id: "web", label: "Web Search", detail: selectedWebSearchProvider.label },
     { id: "files", label: "Files", detail: form.webdav_enabled ? "WebDAV enabled" : "Docs and backup" },
     { id: "context", label: "Context", detail: `${form.max_input_tokens} tokens` },
@@ -442,6 +503,13 @@ export default function SettingsDialog({ open, settings, packs, agentPanel, onCl
       webdav_username: form.webdav_username.trim(),
       webdav_password: form.webdav_password.trim(),
       webdav_path: form.webdav_path.trim() || "Demiurge",
+      media_provider: normalizeMediaProvider(form.media_provider),
+      media_base_url: form.media_base_url.trim() || "https://dashscope.aliyuncs.com",
+      media_api_key: form.media_api_key.trim(),
+      image_model: form.image_model.trim() || "qwen-image-2.0",
+      image_size: form.image_size.trim() || "1024*1024",
+      tts_model: form.tts_model.trim() || "qwen3-tts-flash",
+      tts_voice: form.tts_voice.trim() || "Cherry",
     });
   }
 
@@ -529,8 +597,8 @@ export default function SettingsDialog({ open, settings, packs, agentPanel, onCl
                               type="button"
                               onClick={() => {
                                 set("provider", provider.value);
-                                if (!form.base_url.trim()) set("base_url", provider.baseUrl);
-                                if (!form.model.trim()) set("model", provider.model);
+                                set("base_url", provider.baseUrl);
+                                set("model", provider.model);
                               }}
                               className={`flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left transition ${
                                 selected ? "bg-white shadow-sm" : "hover:bg-white/70"
@@ -612,6 +680,89 @@ export default function SettingsDialog({ open, settings, packs, agentPanel, onCl
                           </div>
                         </div>
                       </div>
+                    </div>
+                  </Section>
+                </>
+              )}
+
+              {activeTab === "media" && (
+                <>
+                  <Section
+                    title="Media Provider"
+                    description="Image generation and TTS use DashScope native AIGC APIs. The key is stored outside settings.json."
+                  >
+                    <div className="grid gap-4">
+                      <Field label="Provider">
+                        <select
+                          className={inputCls}
+                          value={form.media_provider}
+                          onChange={(e) => set("media_provider", e.target.value)}
+                        >
+                          <option value="dashscope">阿里云百炼 / DashScope</option>
+                        </select>
+                      </Field>
+                      <Field label="Media Base URL" help="Use the origin only. Compatible-mode suffix is stripped automatically.">
+                        <input
+                          className={inputCls}
+                          value={form.media_base_url}
+                          placeholder="https://dashscope.aliyuncs.com"
+                          onChange={(e) => set("media_base_url", e.target.value)}
+                        />
+                      </Field>
+                      <Field label="Media API Key" help="Optional when the active LLM provider is DashScope and uses the same key.">
+                        <input
+                          className={inputCls}
+                          type="password"
+                          value={form.media_api_key}
+                          placeholder="sk-..."
+                          onChange={(e) => set("media_api_key", e.target.value)}
+                        />
+                      </Field>
+                    </div>
+                  </Section>
+                  <Section title="Image Generation" description="Defaults used by the Images workspace.">
+                    <div className="grid gap-4 sm:grid-cols-2">
+                      <Field label="Image model">
+                        <input
+                          className={inputCls}
+                          value={form.image_model}
+                          placeholder="qwen-image-2.0"
+                          onChange={(e) => set("image_model", e.target.value)}
+                        />
+                      </Field>
+                      <Field label="Default size">
+                        <select
+                          className={inputCls}
+                          value={form.image_size}
+                          onChange={(e) => set("image_size", e.target.value)}
+                        >
+                          {["512*512", "768*768", "1024*1024", "1280*720", "720*1280"].map((size) => (
+                            <option key={size} value={size}>
+                              {size}
+                            </option>
+                          ))}
+                        </select>
+                      </Field>
+                    </div>
+                  </Section>
+                  <Section title="Text To Speech" description="Defaults for DashScope TTS testing in the Images workspace.">
+                    <div className="grid gap-4 sm:grid-cols-2">
+                      <Field label="TTS model">
+                        <input
+                          className={inputCls}
+                          value={form.tts_model}
+                          placeholder="qwen3-tts-flash"
+                          onChange={(e) => set("tts_model", e.target.value)}
+                        />
+                      </Field>
+                      <Field label="Voice">
+                        <input
+                          className={inputCls}
+                          value={form.tts_voice}
+                          placeholder="Cherry"
+                          onChange={(e) => set("tts_voice", e.target.value)}
+                        />
+                      </Field>
                     </div>
                   </Section>
                 </>
