@@ -65,6 +65,67 @@ export interface Settings {
   image_size: string;
   tts_model: string;
   tts_voice: string;
+  mcp_servers: McpServerConfig[];
+}
+
+export type McpTransportKind = "stdio";
+
+export interface McpEnvVar {
+  key: string;
+  value: string;
+  secret: boolean;
+}
+
+export interface McpServerConfig {
+  name: string;
+  enabled: boolean;
+  transport: McpTransportKind;
+  command: string;
+  args: string[];
+  env: McpEnvVar[];
+}
+
+export type McpServerStatus = "disabled" | "pending" | "connected" | "failed";
+
+export interface McpToolView {
+  name: string;
+  server_name: string;
+  original_name: string;
+  title?: string;
+  description: string;
+  risk: ToolRisk;
+  read_only: boolean;
+  destructive: boolean;
+  open_world: boolean;
+}
+
+export interface McpResourceView {
+  uri: string;
+  name?: string;
+  description?: string;
+  mime_type?: string;
+}
+
+export interface McpServerView {
+  name: string;
+  enabled: boolean;
+  transport: McpTransportKind;
+  command: string;
+  args: string[];
+  status: McpServerStatus;
+  error?: string;
+  server_info?: string;
+  instructions?: string;
+  tool_count: number;
+  resource_count: number;
+  updated_at: number;
+  stderr_tail?: string;
+}
+
+export interface McpPanelState {
+  servers: McpServerView[];
+  tools: McpToolView[];
+  resources: Record<string, McpResourceView[]>;
 }
 
 export interface ImageGenerationRequest {

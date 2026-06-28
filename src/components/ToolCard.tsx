@@ -38,6 +38,16 @@ function riskLabel(risk?: ToolRisk) {
 }
 
 function progressSummary(name: string, status: Props["status"], args: unknown, result?: string) {
+  if (name.startsWith("mcp__")) {
+    const parts = name.split("__");
+    const server = parts[1] || "server";
+    const tool = parts.slice(2).join("__") || name;
+    if (status === "running") return `正在调用 MCP ${server} / ${tool}`;
+    if (status === "done") {
+      const chars = result?.length ?? 0;
+      return chars > 0 ? `MCP 工具完成，返回 ${chars} 字符` : "MCP 工具完成";
+    }
+  }
   if (name === "web_search") {
     const query = typeof args === "object" && args && "query" in args ? String((args as { query?: unknown }).query ?? "") : "";
     if (status === "running") return `正在搜索${query ? `：${query}` : ""}`;
