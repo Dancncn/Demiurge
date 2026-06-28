@@ -286,14 +286,49 @@ export interface ContextPanelState {
   assistant_messages: number;
   tool_messages: number;
   summary_chars: number;
+  summary_tokens: number;
   system_prompt_chars: number;
   system_prompt_tokens: number;
   estimated_history_tokens: number;
   tools_tokens: number;
   history_budget_tokens: number;
+  history_remaining_tokens: number;
+  history_over_budget_tokens: number;
   max_input_tokens: number;
   reserved_output_tokens: number;
+  input_budget_used_tokens: number;
+  input_budget_remaining_tokens: number;
+  projected_total_tokens: number;
+  prompt_section_tokens: number;
+  budget_items: ContextBudgetItem[];
+  history_buckets: ContextHistoryBucket[];
+  memory_sources: ContextMemorySource[];
   prompt_sections: PromptSectionReport[];
+}
+
+export interface ContextBudgetItem {
+  id: string;
+  label: string;
+  tokens: number;
+  limit_tokens?: number | null;
+  detail: string;
+}
+
+export interface ContextHistoryBucket {
+  role: string;
+  label: string;
+  messages: number;
+  tokens: number;
+}
+
+export interface ContextMemorySource {
+  id: string;
+  label: string;
+  path: string;
+  exists: boolean;
+  chars: number;
+  tokens: number;
+  entries: number;
 }
 
 export interface PromptSectionReport {
@@ -301,6 +336,8 @@ export interface PromptSectionReport {
   title: string;
   priority: number;
   chars: number;
+  original_chars: number;
+  tokens: number;
   included: boolean;
   truncated: boolean;
 }

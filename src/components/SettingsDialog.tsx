@@ -367,33 +367,151 @@ function ContextMetric({ label, value }: { label: string; value: number }) {
   );
 }
 
+function contextPct(value: number, total: number) {
+  if (!Number.isFinite(value) || !Number.isFinite(total) || total <= 0) return 0;
+  return Math.max(0, Math.min(100, Math.round((value / total) * 100)));
+}
+
+const contextBudgetColors: Record<string, string> = {
+  system: "bg-[#334155]",
+  tools: "bg-[#0f766e]",
+  history: "bg-[#7c3aed]",
+  output_reserve: "bg-[#c2410c]",
+};
+
+function ContextBudgetBreakdown({ state }: { state: ContextPanelState | null }) {
+  if (!state) return null;
+  const maxInput = Math.max(1, state.max_input_tokens);
+  const projectedPct = contextPct(state.projected_total_tokens, maxInput);
+  return (
+    <div className="mt-3 rounded-lg border border-[#e2e5ea] bg-white p-3">
+      <div className="mb-2 flex items-center justify-between gap-3 text-[12px]">
+        <span className="font-medium text-[#202124]">Budget allocation</span>
+        <span className={state.projected_total_tokens > state.max_input_tokens ? "text-[#b42318]" : "text-[#7a8088]"}>
+          {state.projected_total_tokens.toLocaleString()} / {state.max_input_tokens.toLocaleString()} tokens
+        </span>
+      </div>
+      <div className="flex h-2 overflow-hidden rounded-full bg-[#e8ebef]">
+        {state.budget_items.map((item) => {
+          const width = contextPct(item.tokens, maxInput);
+          return (
+            <div
+              key={item.id}
+              className={`${contextBudgetColors[item.id] ?? "bg-[#64748b]"} h-full`}
+              style={{ width: `${width}%` }}
+              title={`${item.label}: ${item.tokens.toLocaleString()} tokens`}
+            />
+          );
+        })}
+      </div>
+      <div className="mt-1 h-1 overflow-hidden rounded-full bg-transparent">
+        <div
+          className={projectedPct >= 100 ? "h-full bg-[#b42318]" : "h-full bg-[#9aa3af]"}
+          style={{ width: `${projectedPct}%` }}
+        />
+      </div>
+      <div className="mt-3 grid gap-2 sm:grid-cols-2">
+        {state.budget_items.map((item) => (
+          <div key={item.id} className="rounded-md border border-[#edf0f4] bg-[#fbfcfd] px-3 py-2">
+            <div className="flex items-center justify-between gap-2">
+              <span className="flex items-center gap-2 text-[12px] font-medium text-[#202124]">
+                <span className={`h-2 w-2 rounded-full ${contextBudgetColors[item.id] ?? "bg-[#64748b]"}`} />
+                {item.label}
+              </span>
+              <span className="font-mono text-[11px] tabular-nums text-[#59616d]">
+                {item.tokens.toLocaleString()}
+              </span>
+            </div>
+            <div className="mt-1 text-[11px] leading-4 text-[#7a8088]">{item.detail}</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ContextHistoryBreakdown({ buckets }: { buckets: ContextPanelState["history_buckets"] }) {
+  if (!buckets.length) return null;
+  return (
+    <div className="mt-3 overflow-hidden rounded-lg border border-[#e2e5ea] bg-white">
+      <div className="grid grid-cols-[minmax(0,1fr)_80px_96px] gap-3 border-b border-[#eceff3] bg-[#fbfcfd] px-3 py-2 text-[11px] font-medium uppercase text-[#7a8088]">
+        <span>History</span>
+        <span className="text-right">Messages</span>
+        <span className="text-right">Tokens</span>
+      </div>
+      {buckets.map((bucket) => (
+        <div
+          key={bucket.role}
+          className="grid grid-cols-[minmax(0,1fr)_80px_96px] items-center gap-3 border-b border-[#f0f2f5] px-3 py-2 text-[12px] last:border-b-0"
+        >
+          <span className="truncate font-medium text-[#202124]">{bucket.label}</span>
+          <span className="text-right font-mono text-[11px] tabular-nums text-[#59616d]">
+            {bucket.messages.toLocaleString()}
+          </span>
+          <span className="text-right font-mono text-[11px] tabular-nums text-[#59616d]">
+            {bucket.tokens.toLocaleString()}
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function ContextMemorySources({ sources }: { sources: ContextPanelState["memory_sources"] }) {
+  if (!sources.length) return null;
+  return (
+    <div className="mt-3 grid gap-2">
+      {sources.map((source) => (
+        <div key={source.id} className="rounded-lg border border-[#e2e5ea] bg-white p-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="text-[12px] font-medium text-[#202124]">{source.label}</div>
+            <div className="flex items-center gap-2 text-[11px] text-[#7a8088]">
+              <span className={source.exists ? "text-[#177245]" : "text-[#8a9099]"}>
+                {source.exists ? "Loaded" : "Missing"}
+              </span>
+              <span>{source.entries.toLocaleString()} entries</span>
+              <span>{source.tokens.toLocaleString()} tokens</span>
+            </div>
+          </div>
+          <div className="mt-1 break-all text-[11px] leading-4 text-[#8a9099]">{source.path}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function PromptSectionList({ sections }: { sections: ContextPanelState["prompt_sections"] }) {
   if (!sections.length) return null;
   const ordered = [...sections].sort((a, b) => b.priority - a.priority);
   return (
     <div className="mt-3 overflow-hidden rounded-lg border border-[#e2e5ea] bg-white">
-      <div className="grid grid-cols-[1fr_auto_auto] gap-3 border-b border-[#eceff3] bg-[#fbfcfd] px-3 py-2 text-[11px] font-medium uppercase tracking-wide text-[#7a8088]">
+      <div className="grid grid-cols-[minmax(0,1fr)_82px_92px_92px] gap-3 border-b border-[#eceff3] bg-[#fbfcfd] px-3 py-2 text-[11px] font-medium uppercase text-[#7a8088]">
         <span>Prompt Sections</span>
         <span>Priority</span>
-        <span>Chars</span>
+        <span className="text-right">Tokens</span>
+        <span className="text-right">Chars</span>
       </div>
       <div className="max-h-52 overflow-y-auto">
         {ordered.map((section) => (
           <div
             key={section.id}
-            className="grid grid-cols-[1fr_auto_auto] items-center gap-3 border-b border-[#f0f2f5] px-3 py-2 text-[12px] last:border-b-0"
+            className="grid grid-cols-[minmax(0,1fr)_82px_92px_92px] items-center gap-3 border-b border-[#f0f2f5] px-3 py-2 text-[12px] last:border-b-0"
           >
             <div className="min-w-0">
               <div className="truncate font-medium text-[#202124]">{section.title}</div>
               <div className="mt-0.5 text-[11px] text-[#8a9099]">
                 {section.included ? "Included" : "Skipped"}
                 {section.truncated ? " / truncated" : ""}
+                {section.original_chars > section.chars ? ` / ${section.original_chars.toLocaleString()} original chars` : ""}
               </div>
             </div>
             <span className="rounded-md bg-[#eef1f5] px-2 py-1 font-mono text-[11px] text-[#59616d]">
               {section.priority}
             </span>
-            <span className="font-mono text-[11px] tabular-nums text-[#59616d]">
+            <span className="text-right font-mono text-[11px] tabular-nums text-[#59616d]">
+              {section.tokens.toLocaleString()}
+            </span>
+            <span className="text-right font-mono text-[11px] tabular-nums text-[#59616d]">
               {section.chars.toLocaleString()}
             </span>
           </div>
@@ -941,7 +1059,7 @@ export default function SettingsDialog({
     ocrProgress?.totalBytes && ocrProgress.totalBytes > 0
       ? Math.min(100, Math.round((ocrProgress.downloadedBytes / ocrProgress.totalBytes) * 100))
       : null;
-  const tokenPct = Math.min(
+  const historyPct = Math.min(
     100,
     Math.round(
       ((contextState?.estimated_history_tokens ?? 0) / Math.max(1, contextState?.history_budget_tokens ?? 1)) * 100,
@@ -1518,18 +1636,52 @@ export default function SettingsDialog({
                         <ContextMetric label="System chars" value={contextState?.system_prompt_chars ?? 0} />
                         <ContextMetric label="System tokens" value={contextState?.system_prompt_tokens ?? 0} />
                         <ContextMetric label="Tools tokens" value={contextState?.tools_tokens ?? 0} />
+                        <ContextMetric label="Output reserve" value={contextState?.reserved_output_tokens ?? 0} />
+                      </div>
+                      <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4">
+                        <ContextMetric label="History tokens" value={contextState?.estimated_history_tokens ?? 0} />
                         <ContextMetric label="History budget" value={contextState?.history_budget_tokens ?? 0} />
+                        <ContextMetric label="History remaining" value={contextState?.history_remaining_tokens ?? 0} />
+                        <ContextMetric label="Summary tokens" value={contextState?.summary_tokens ?? 0} />
                       </div>
-                      <div className="mt-3 h-2 overflow-hidden rounded-full bg-[#e8ebef]">
-                        <div className="h-full rounded-full bg-[#111827]" style={{ width: `${tokenPct}%` }} />
+                      <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4">
+                        <ContextMetric label="Input used" value={contextState?.input_budget_used_tokens ?? 0} />
+                        <ContextMetric label="Input remaining" value={contextState?.input_budget_remaining_tokens ?? 0} />
+                        <ContextMetric label="Projected total" value={contextState?.projected_total_tokens ?? 0} />
+                        <ContextMetric label="Section tokens" value={contextState?.prompt_section_tokens ?? 0} />
                       </div>
-                      <div className="mt-2 text-[12px] text-[#7a8088]">
-                        Estimated history {(contextState?.estimated_history_tokens ?? 0).toLocaleString()} /{" "}
-                        {(contextState?.history_budget_tokens ?? form.max_input_tokens).toLocaleString()} tokens. Max input{" "}
-                        {(contextState?.max_input_tokens ?? form.max_input_tokens).toLocaleString()}, reserved output{" "}
-                        {(contextState?.reserved_output_tokens ?? form.reserved_output_tokens).toLocaleString()}. Summary{" "}
-                        {(contextState?.summary_chars ?? 0).toLocaleString()} chars.
+                      <ContextBudgetBreakdown state={contextState} />
+                      <div className="mt-3 rounded-lg border border-[#e2e5ea] bg-white p-3">
+                        <div className="mb-2 flex items-center justify-between gap-3 text-[12px]">
+                          <span className="font-medium text-[#202124]">History budget</span>
+                          <span
+                            className={
+                              (contextState?.history_over_budget_tokens ?? 0) > 0 ? "text-[#b42318]" : "text-[#7a8088]"
+                            }
+                          >
+                            {historyPct}%
+                          </span>
+                        </div>
+                        <div className="h-2 overflow-hidden rounded-full bg-[#e8ebef]">
+                          <div
+                            className={
+                              (contextState?.history_over_budget_tokens ?? 0) > 0
+                                ? "h-full rounded-full bg-[#b42318]"
+                                : "h-full rounded-full bg-[#111827]"
+                            }
+                            style={{ width: `${historyPct}%` }}
+                          />
+                        </div>
+                        <div className="mt-2 text-[12px] leading-5 text-[#7a8088]">
+                          Estimated history {(contextState?.estimated_history_tokens ?? 0).toLocaleString()} /{" "}
+                          {(contextState?.history_budget_tokens ?? form.max_input_tokens).toLocaleString()} tokens.
+                          Projected total {(contextState?.projected_total_tokens ?? 0).toLocaleString()} tokens; input
+                          remaining {(contextState?.input_budget_remaining_tokens ?? 0).toLocaleString()}. Summary{" "}
+                          {(contextState?.summary_chars ?? 0).toLocaleString()} chars.
+                        </div>
                       </div>
+                      <ContextHistoryBreakdown buckets={contextState?.history_buckets ?? []} />
+                      <ContextMemorySources sources={contextState?.memory_sources ?? []} />
                       <PromptSectionList sections={contextState?.prompt_sections ?? []} />
                     </div>
                   </Section>
