@@ -187,24 +187,34 @@ export interface OcrModelFileStatus {
   name: string;
   present: boolean;
   bytes: number;
+  downloadUrl: string;
 }
 
 export interface OcrModelStatus {
   installed: boolean;
   modelDir: string;
   source: OcrModelSource;
+  sourceLabel: string;
+  sourceNote: string;
+  sourceUrl: string;
   files: OcrModelFileStatus[];
   missing: string[];
   totalBytes: number;
+  manualInstallHint: string;
 }
 
 export interface OcrDownloadProgress {
   source: OcrModelSource;
+  sourceLabel: string;
   file: string;
   index: number;
   totalFiles: number;
+  completedFiles: number;
   downloadedBytes: number;
+  downloadedTotalBytes: number;
   totalBytes?: number;
+  phase: "starting" | "downloading" | "finished";
+  url: string;
   done: boolean;
 }
 

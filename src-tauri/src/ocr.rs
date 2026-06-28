@@ -47,6 +47,31 @@ impl OcrModelSource {
             OcrModelSource::HuggingFace => "huggingface",
         }
     }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            OcrModelSource::ModelScope => "ModelScope",
+            OcrModelSource::HuggingFace => "Hugging Face",
+        }
+    }
+
+    pub fn note(self) -> &'static str {
+        match self {
+            OcrModelSource::ModelScope => {
+                "Recommended for mainland China. Uses the ModelScope mirror for PP-OCRv5 mobile files."
+            }
+            OcrModelSource::HuggingFace => {
+                "Use this when Hugging Face is reachable from the current network."
+            }
+        }
+    }
+
+    pub fn url(self) -> &'static str {
+        match self {
+            OcrModelSource::ModelScope => "https://modelscope.cn/models/greatv/oar-ocr",
+            OcrModelSource::HuggingFace => "https://huggingface.co/monkt/paddleocr-onnx",
+        }
+    }
 }
 
 #[derive(Serialize, Clone)]
@@ -55,6 +80,7 @@ pub struct OcrModelFileStatus {
     pub name: &'static str,
     pub present: bool,
     pub bytes: u64,
+    pub download_url: String,
 }
 
 #[derive(Serialize, Clone)]
@@ -63,20 +89,29 @@ pub struct OcrModelStatus {
     pub installed: bool,
     pub model_dir: String,
     pub source: String,
+    pub source_label: String,
+    pub source_note: String,
+    pub source_url: String,
     pub files: Vec<OcrModelFileStatus>,
     pub missing: Vec<&'static str>,
     pub total_bytes: u64,
+    pub manual_install_hint: String,
 }
 
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct OcrDownloadEvent {
     source: String,
+    source_label: String,
     file: &'static str,
     index: usize,
     total_files: usize,
+    completed_files: usize,
     downloaded_bytes: u64,
+    downloaded_total_bytes: u64,
     total_bytes: Option<u64>,
+    phase: &'static str,
+    url: String,
     done: bool,
 }
 
@@ -128,8 +163,20 @@ pub async fn download_models(
     std::fs::create_dir_all(&dir).map_err(|e| format!("创建 OCR 模型目录失败：{e}"))?;
 
     let files = source_files(source);
+    let mut completed_bytes = 0u64;
     for (idx, file) in files.iter().enumerate() {
-        download_one(&app, state, source, file, idx + 1, files.len(), &dir).await?;
+        let bytes = download_one(
+            &app,
+            state,
+            source,
+            file,
+            idx + 1,
+            files.len(),
+            &dir,
+            completed_bytes,
+        )
+        .await?;
+        completed_bytes += bytes;
     }
     state.ocr.clear();
     Ok(status_for_dir(&dir, source))
@@ -223,15 +270,17 @@ pub fn recognize_rgba(state: &crate::AppState, rgba: image::RgbaImage) -> Result
 }
 
 fn status_for_dir(dir: &Path, source: OcrModelSource) -> OcrModelStatus {
-    let files = [DET_FILE, REC_FILE, DICT_FILE]
-        .into_iter()
-        .map(|name| {
-            let path = dir.join(name);
+    let source_files = source_files(source);
+    let files = source_files
+        .iter()
+        .map(|file| {
+            let path = dir.join(file.target);
             let bytes = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
             OcrModelFileStatus {
-                name,
+                name: file.target,
                 present: bytes > 0,
                 bytes,
+                download_url: file.url.clone(),
             }
         })
         .collect::<Vec<_>>();
@@ -245,10 +294,22 @@ fn status_for_dir(dir: &Path, source: OcrModelSource) -> OcrModelStatus {
         installed: missing.is_empty(),
         model_dir: dir.display().to_string(),
         source: source.as_setting().to_string(),
+        source_label: source.label().to_string(),
+        source_note: source.note().to_string(),
+        source_url: source.url().to_string(),
         files,
         missing,
         total_bytes,
+        manual_install_hint: manual_install_hint(dir, source),
     }
+}
+
+fn manual_install_hint(dir: &Path, source: OcrModelSource) -> String {
+    format!(
+        "If download fails, download the missing files from {} and place them in {}.",
+        source.label(),
+        dir.display()
+    )
 }
 
 fn source_files(source: OcrModelSource) -> Vec<ModelFile> {
@@ -285,9 +346,23 @@ async fn download_one(
     index: usize,
     total_files: usize,
     dir: &Path,
-) -> Result<(), String> {
+    completed_bytes: u64,
+) -> Result<u64, String> {
     let target = dir.join(file.target);
     let tmp = dir.join(format!("{}.download", file.target));
+    emit_download_event(
+        app,
+        source,
+        file,
+        index,
+        total_files,
+        index.saturating_sub(1),
+        0,
+        completed_bytes,
+        None,
+        "starting",
+        false,
+    );
     let response = state
         .http
         .get(&file.url)
@@ -306,17 +381,18 @@ async fn download_one(
         out.write_all(&chunk)
             .map_err(|e| format!("写入模型文件失败：{e}"))?;
         downloaded += chunk.len() as u64;
-        let _ = app.emit(
-            "ocr-download-progress",
-            OcrDownloadEvent {
-                source: source.as_setting().to_string(),
-                file: file.target,
-                index,
-                total_files,
-                downloaded_bytes: downloaded,
-                total_bytes,
-                done: false,
-            },
+        emit_download_event(
+            app,
+            source,
+            file,
+            index,
+            total_files,
+            index.saturating_sub(1),
+            downloaded,
+            completed_bytes + downloaded,
+            total_bytes,
+            "downloading",
+            false,
         );
     }
     out.flush().map_err(|e| format!("刷新模型文件失败：{e}"))?;
@@ -326,19 +402,53 @@ async fn download_one(
         return Err(format!("下载 {} 得到空文件", file.target));
     }
     std::fs::rename(&tmp, &target).map_err(|e| format!("保存模型文件失败：{e}"))?;
+    emit_download_event(
+        app,
+        source,
+        file,
+        index,
+        total_files,
+        index,
+        downloaded,
+        completed_bytes + downloaded,
+        Some(downloaded),
+        "finished",
+        true,
+    );
+    Ok(downloaded)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn emit_download_event(
+    app: &AppHandle,
+    source: OcrModelSource,
+    file: &ModelFile,
+    index: usize,
+    total_files: usize,
+    completed_files: usize,
+    downloaded_bytes: u64,
+    downloaded_total_bytes: u64,
+    total_bytes: Option<u64>,
+    phase: &'static str,
+    done: bool,
+) {
     let _ = app.emit(
         "ocr-download-progress",
         OcrDownloadEvent {
             source: source.as_setting().to_string(),
+            source_label: source.label().to_string(),
             file: file.target,
             index,
             total_files,
-            downloaded_bytes: downloaded,
-            total_bytes: Some(downloaded),
-            done: true,
+            completed_files,
+            downloaded_bytes,
+            downloaded_total_bytes,
+            total_bytes,
+            phase,
+            url: file.url.clone(),
+            done,
         },
     );
-    Ok(())
 }
 
 fn is_noise(s: &str) -> bool {
@@ -408,5 +518,24 @@ mod tests {
             OcrModelSource::from_setting("modelscope"),
             OcrModelSource::ModelScope
         );
+    }
+
+    #[test]
+    fn status_exposes_source_guidance_and_download_urls() {
+        let dir = std::env::temp_dir().join(format!(
+            "demiurge_ocr_guidance_{}",
+            crate::store::new_session_id()
+        ));
+        let status = status_for_dir(&dir, OcrModelSource::ModelScope);
+        assert_eq!(status.source, "modelscope");
+        assert_eq!(status.source_label, "ModelScope");
+        assert!(status.source_note.contains("mainland China"));
+        assert!(status.source_url.contains("modelscope.cn"));
+        assert!(status.manual_install_hint.contains(&status.model_dir));
+        assert_eq!(status.files.len(), 3);
+        assert!(status
+            .files
+            .iter()
+            .all(|file| file.download_url.starts_with("https://")));
     }
 }
