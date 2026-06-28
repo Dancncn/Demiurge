@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tauri::{AppHandle, Emitter};
 
+use super::conversation::Message;
 use crate::{store, tools};
 
 const INPUT_PREVIEW_CHARS: usize = 160;
@@ -123,6 +124,69 @@ pub struct TurnStart {
 #[derive(Clone, Debug)]
 pub struct TurnHandle {
     pub id: String,
+}
+
+pub struct SessionTurnStore<'a> {
+    state: &'a crate::AppState,
+    session_id: String,
+}
+
+impl<'a> SessionTurnStore<'a> {
+    pub fn new(state: &'a crate::AppState, session_id: String) -> Self {
+        SessionTurnStore { state, session_id }
+    }
+
+    pub fn snapshot(&self) -> (Vec<Message>, Option<String>) {
+        let store = self.state.sessions.lock().unwrap();
+        store
+            .get(&self.session_id)
+            .map(|session| (session.messages.clone(), session.summary.clone()))
+            .unwrap_or_else(|| (Vec::new(), None))
+    }
+
+    pub fn append_user_message(&self, text: String) {
+        self.mutate_and_persist(|session| {
+            session.messages.push(Message::user(text));
+            if session.title == "新对话" {
+                session.title = store::derive_title(&session.messages);
+            }
+        });
+    }
+
+    pub fn append_message(&self, message: Message) {
+        self.mutate_and_persist(|session| {
+            session.messages.push(message);
+        });
+    }
+
+    pub fn replace_messages(&self, messages: Vec<Message>) {
+        self.mutate_and_persist(|session| {
+            session.messages = messages;
+        });
+    }
+
+    pub fn replace_messages_and_summary(&self, messages: Vec<Message>, summary: Option<String>) {
+        self.mutate_and_persist(|session| {
+            session.messages = messages;
+            session.summary = summary;
+        });
+    }
+
+    fn mutate_and_persist(&self, mutate: impl FnOnce(&mut store::Session)) {
+        let changed = {
+            let mut store = self.state.sessions.lock().unwrap();
+            if let Some(session) = store.get_mut(&self.session_id) {
+                mutate(session);
+                session.updated_at = store::now_millis();
+                true
+            } else {
+                false
+            }
+        };
+        if changed {
+            self.state.persist_sessions();
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -344,5 +408,36 @@ mod tests {
             runtime.last_turn.as_ref().map(|turn| &turn.status),
             Some(&TurnStatus::Completed)
         );
+    }
+
+    #[test]
+    fn session_turn_store_appends_user_and_derives_title() {
+        let dir = std::env::temp_dir().join(format!(
+            "demiurge_session_engine_{}",
+            store::new_session_id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let state = crate::AppState::new(reqwest::Client::new());
+        *state.data_dir.lock().unwrap() = dir.clone();
+
+        let session = store::Session::new();
+        let session_id = session.id.clone();
+        {
+            let mut sessions = state.sessions.lock().unwrap();
+            sessions.active = session_id.clone();
+            sessions.sessions.push(session);
+        }
+
+        let turn_store = SessionTurnStore::new(&state, session_id.clone());
+        turn_store.append_user_message("please inspect the repo".to_string());
+
+        let sessions = state.sessions.lock().unwrap();
+        let session = sessions.get(&session_id).unwrap();
+        assert_eq!(session.messages.len(), 1);
+        assert_eq!(session.messages[0].role, "user");
+        assert_eq!(session.title, "please inspect the repo");
+        assert!(dir.join("sessions.json").exists());
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -14,6 +14,7 @@ import type {
   PermissionMode,
   PermissionScope,
   PlanState,
+  SessionEnginePanelState,
   SessionMeta,
   Settings,
 } from "./lib/types";
@@ -135,6 +136,7 @@ export default function App() {
   const [agentPanel, setAgentPanel] = useState<AgentPanelState>({ definitions: [], agents_dir: "" });
   const [goalPanel, setGoalPanel] = useState<GoalPanelState | null>(null);
   const [goalProgress, setGoalProgress] = useState<GoalProgressEvent | null>(null);
+  const [sessionEngine, setSessionEngine] = useState<SessionEnginePanelState | null>(null);
   const [selectedAgentNames, setSelectedAgentNames] = useState<string[]>([]);
   const [sessions, setSessions] = useState<SessionMeta[]>([]);
   const [activeId, setActiveId] = useState("");
@@ -159,6 +161,14 @@ export default function App() {
 
   const activeSession = useMemo(() => sessions.find((s) => s.id === activeId) ?? null, [activeId, sessions]);
   const agentsDir = agentPanel.agents_dir || ".demiurge/agents";
+  const appBusy = busy || sessionEngine?.busy === true;
+  const runtimeStatus = sessionEngine?.cancel_requested
+    ? "Cancelling current turn"
+    : sessionEngine?.active_turn
+      ? sessionEngine.active_turn.status === "cancelling"
+        ? "Cancelling current turn"
+        : "Processing current turn"
+      : "Ready";
 
   const packName = useMemo(() => {
     const p = packs.find((x) => x.id === settings?.current_pack);
@@ -183,7 +193,7 @@ export default function App() {
   useEffect(() => {
     (async () => {
       try {
-        const [s, ps, agents, goal, list, hist, plan] = await Promise.all([
+        const [s, ps, agents, goal, list, hist, plan, engine] = await Promise.all([
           api.getSettings(),
           api.listPacks(),
           api.agentPanelState(),
@@ -191,6 +201,7 @@ export default function App() {
           api.listSessions(),
           api.getHistory(),
           api.planState(),
+          api.sessionEngineState(),
         ]);
         setSettings(s);
         setPacks(ps);
@@ -200,6 +211,8 @@ export default function App() {
         setActiveId(list.active);
         setItems(buildHistory(hist));
         setPlanState(plan);
+        setSessionEngine(engine);
+        setBusy(engine.busy);
       } catch (e) {
         console.error("Failed to initialize Demiurge", e);
       }
@@ -355,6 +368,7 @@ export default function App() {
 
     let unPlan: UnlistenFn | undefined;
     let unMode: UnlistenFn | undefined;
+    let unSessionEngine: UnlistenFn | undefined;
     api.listenPlanUpdated(setPlanState).then((u) => {
       if (disposed) u();
       else unPlan = u;
@@ -365,12 +379,20 @@ export default function App() {
       if (disposed) u();
       else unMode = u;
     });
+    api.listenSessionEngineUpdated((next) => {
+      setSessionEngine(next);
+      setBusy(next.busy);
+    }).then((u) => {
+      if (disposed) u();
+      else unSessionEngine = u;
+    });
 
     return () => {
       disposed = true;
       un?.();
       unPlan?.();
       unMode?.();
+      unSessionEngine?.();
     };
   }, []);
 
@@ -395,7 +417,7 @@ export default function App() {
   async function handleSend(textArg?: string, attachments: ProcessedAttachment[] = []) {
     const text = (textArg ?? input).trim();
     const attachmentPrompt = buildAttachmentPrompt(attachments);
-    if ((!text && !attachmentPrompt) || busy) return false;
+    if ((!text && !attachmentPrompt) || appBusy) return false;
     setInput("");
     setActiveView("chat");
     assistantErrorDelivered.current = false;
@@ -453,7 +475,7 @@ export default function App() {
   }
 
   async function handleGoalAction(action: GoalAction) {
-    if ((action === "resume" || action === "continue") && busy) return;
+    if ((action === "resume" || action === "continue") && appBusy) return;
     setGoalProgress(null);
     if (action === "resume" || action === "continue") {
       setActiveView("chat");
@@ -488,7 +510,7 @@ export default function App() {
   }
 
   async function handleNewChat() {
-    if (busy) return;
+    if (appBusy) return;
     try {
       await api.newSession();
     } catch (e) {
@@ -515,7 +537,7 @@ export default function App() {
   }
 
   async function handleSelectSession(id: string) {
-    if (busy || id === activeId) return;
+    if (appBusy || id === activeId) return;
     try {
       await api.selectSession(id);
       setActiveId(id);
@@ -527,7 +549,7 @@ export default function App() {
   }
 
   async function handleRenameSession(id: string, title: string) {
-    if (busy) return;
+    if (appBusy) return;
     const renamed = await api.renameSession(id, title);
     setSessions((prev) =>
       prev
@@ -538,7 +560,7 @@ export default function App() {
   }
 
   async function handleDeleteSession(id: string) {
-    if (busy) return;
+    if (appBusy) return;
     try {
       await api.deleteSession(id);
       await refreshSessions();
@@ -609,8 +631,8 @@ export default function App() {
   const last = items[items.length - 1];
   const tailStreaming = last?.kind === "assistant" && last.streaming;
   const tailToolRunning = last?.kind === "tool" && last.status === "running";
-  const thinking = busy && !tailStreaming && !tailToolRunning;
-  const canSend = input.trim().length > 0 && !busy;
+  const thinking = appBusy && !tailStreaming && !tailToolRunning;
+  const canSend = input.trim().length > 0 && !appBusy;
 
   return (
     <main className="flex h-[100dvh] overflow-hidden bg-[#eef1f5] text-[#202124]">
@@ -620,7 +642,7 @@ export default function App() {
         packName={packName}
         sessions={sessions}
         activeId={activeId}
-        busy={busy}
+        busy={appBusy}
         onToggle={() => setSidebarOpen((v) => !v)}
         onViewChange={setActiveView}
         onNewChat={handleNewChat}
@@ -746,7 +768,7 @@ export default function App() {
                   <span className="max-w-[28vw] truncate font-medium text-[#3f3f3f]" title={activeSession?.title ?? "New chat"}>
                     {activeSession?.title ?? "New chat"}
                   </span>
-                  <span>{busy ? "Processing current turn" : "Ready"}</span>
+                  <span>{runtimeStatus}</span>
                 </div>
 
 
@@ -794,7 +816,7 @@ export default function App() {
                 </button>
               </header>
 
-              <GoalBar goal={goalPanel} busy={busy} progress={goalProgress} onAction={handleGoalAction} />
+              <GoalBar goal={goalPanel} busy={appBusy} progress={goalProgress} onAction={handleGoalAction} />
 
               <MessageList
                 items={items}
@@ -808,7 +830,7 @@ export default function App() {
               <Composer
                 input={input}
                 canSend={canSend}
-                loading={busy}
+                loading={appBusy}
                 textareaRef={textareaRef}
                 onSubmit={(attachments) => handleSend(undefined, attachments)}
                 onStop={() => {
@@ -827,7 +849,7 @@ export default function App() {
 
       <WorkflowsPanel
         open={workflowsOpen}
-        busy={busy}
+        busy={appBusy}
         onClose={() => setWorkflowsOpen(false)}
         onResume={(command) => void handleSend(command)}
       />

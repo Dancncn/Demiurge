@@ -179,6 +179,7 @@ pub async fn run_turn_with_options(
     custom::record_runtime_start(state, &selected_agents.definitions);
     // 捕获本轮的目标会话 id：即便用户中途切换会话，写入也始终落到这一段对话
     let sid = state.sessions.lock().unwrap().active.clone();
+    let session_store = session_engine::SessionTurnStore::new(state, sid.clone());
 
     // 取当前角色包人格，后续每次请求会结合最新会话摘要拼装 system prompt
     let packs_dir = state.packs_dir.lock().unwrap().clone();
@@ -221,26 +222,10 @@ pub async fn run_turn_with_options(
     }
 
     // 向目标会话追加一条消息（并刷新 updated_at）
-    let push = |msg: Message| {
-        let mut storeg = state.sessions.lock().unwrap();
-        if let Some(s) = storeg.get_mut(&sid) {
-            s.messages.push(msg);
-            s.updated_at = store::now_millis();
-        }
-    };
+    let push = |msg: Message| session_store.append_message(msg);
 
     // 追加用户消息；若标题仍是默认值，用首条用户消息生成标题
-    {
-        let mut storeg = state.sessions.lock().unwrap();
-        if let Some(s) = storeg.get_mut(&sid) {
-            s.messages.push(Message::user(stored_user_text.clone()));
-            if s.title == "新对话" {
-                s.title = store::derive_title(&s.messages);
-            }
-            s.updated_at = store::now_millis();
-        }
-    }
-    state.persist_sessions();
+    session_store.append_user_message(stored_user_text.clone());
 
     for _step in 0..max_steps {
         if state.cancel.load(Ordering::Relaxed) {
@@ -249,14 +234,7 @@ pub async fn run_turn_with_options(
         }
 
         // 组装本轮请求消息：system + token-aware 裁剪后的历史。若裁剪掉旧消息，先滚动更新会话摘要。
-        let (mut msgs, mut session_summary) = {
-            let storeg = state.sessions.lock().unwrap();
-            if let Some(s) = storeg.get(&sid) {
-                (s.messages.clone(), s.summary.clone())
-            } else {
-                (Vec::new(), None)
-            }
-        };
+        let (mut msgs, mut session_summary) = session_store.snapshot();
 
         let mut system = prompt::build(state, &settings, &persona_text, session_summary.as_deref());
         if settings.permission_mode == store::PermissionMode::Plan {
@@ -283,14 +261,7 @@ pub async fn run_turn_with_options(
             .await
             {
                 session_summary = next_summary;
-                let mut storeg = state.sessions.lock().unwrap();
-                if let Some(s) = storeg.get_mut(&sid) {
-                    s.messages = msgs.clone();
-                    s.summary = session_summary.clone();
-                    s.updated_at = store::now_millis();
-                }
-                drop(storeg);
-                state.persist_sessions();
+                session_store.replace_messages_and_summary(msgs.clone(), session_summary.clone());
 
                 system = prompt::build(state, &settings, &persona_text, session_summary.as_deref());
                 if settings.permission_mode == store::PermissionMode::Plan {
@@ -311,25 +282,13 @@ pub async fn run_turn_with_options(
                 );
                 should_persist_trim = should_persist_trim || !removed_messages.is_empty();
                 if !removed_messages.is_empty() {
-                    let mut storeg = state.sessions.lock().unwrap();
-                    if let Some(s) = storeg.get_mut(&sid) {
-                        s.messages = msgs.clone();
-                        s.updated_at = store::now_millis();
-                    }
-                    drop(storeg);
-                    state.persist_sessions();
+                    session_store.replace_messages(msgs.clone());
                 }
             }
         }
 
         if should_persist_trim {
-            let mut storeg = state.sessions.lock().unwrap();
-            if let Some(s) = storeg.get_mut(&sid) {
-                s.messages = msgs.clone();
-                s.updated_at = store::now_millis();
-            }
-            drop(storeg);
-            state.persist_sessions();
+            session_store.replace_messages(msgs.clone());
         }
 
         let full: Vec<Message> = {
@@ -345,7 +304,6 @@ pub async fn run_turn_with_options(
         {
             let message = "（已达到本轮 token 硬预算，已停止继续调用模型）".to_string();
             push(Message::assistant_text(message.clone()));
-            state.persist_sessions();
             if let Some(run_id) = &options.workflow_run_id {
                 let _ = workflow_journal::append(
                     state,
@@ -414,7 +372,6 @@ pub async fn run_turn_with_options(
             if !turn.content.is_empty() {
                 push(Message::assistant_text(turn.content));
             }
-            state.persist_sessions();
             if let Some(run_id) = &options.workflow_run_id {
                 let _ = workflow_journal::append(
                     state,
@@ -435,7 +392,6 @@ pub async fn run_turn_with_options(
                 goal::add_estimated_tokens(state, &sid, &original_user_text);
                 goal::add_estimated_tokens(state, &sid, &assistant_text);
             }
-            state.persist_sessions();
             if let Some(run_id) = &options.workflow_run_id {
                 let _ = workflow_journal::append(
                     state,
@@ -621,8 +577,6 @@ pub async fn run_turn_with_options(
             push(Message::tool_result(tc.id.clone(), name, result));
         }
 
-        state.persist_sessions();
-
         // 工具执行阶段被中断：补齐配对后结束本轮
         if state.cancel.load(Ordering::Relaxed) {
             if let Some(run_id) = &options.workflow_run_id {
@@ -649,7 +603,6 @@ pub async fn run_turn_with_options(
             json!({ "reason": "max_steps" }),
         );
     }
-    state.persist_sessions();
     Ok(())
 }
 
