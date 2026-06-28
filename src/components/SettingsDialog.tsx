@@ -146,9 +146,19 @@ const webSearchProviders: { value: WebSearchProvider; label: string; help: strin
   { value: "exa", label: "Exa", help: "Requires an Exa API key." },
 ];
 
-const ocrSources: { value: OcrModelSource; label: string }[] = [
-  { value: "modelscope", label: "ModelScope" },
-  { value: "huggingface", label: "Hugging Face" },
+const ocrSources: { value: OcrModelSource; label: string; note: string; url: string }[] = [
+  {
+    value: "modelscope",
+    label: "ModelScope",
+    note: "Recommended for mainland China. Uses the ModelScope mirror for PP-OCRv5 mobile files.",
+    url: "https://modelscope.cn/models/greatv/oar-ocr",
+  },
+  {
+    value: "huggingface",
+    label: "Hugging Face",
+    note: "Use this when Hugging Face is reachable from the current network.",
+    url: "https://huggingface.co/monkt/paddleocr-onnx",
+  },
 ];
 
 const inputCls =
@@ -676,6 +686,10 @@ export default function SettingsDialog({
     () => webSearchProviders.find((p) => p.value === form.web_search_provider) ?? webSearchProviders[0],
     [form.web_search_provider],
   );
+  const selectedOcrSource = useMemo(
+    () => ocrSources.find((source) => source.value === form.ocr_model_source) ?? ocrSources[0],
+    [form.ocr_model_source],
+  );
   const selectedAgentDefinition = useMemo(
     () => (agentFile ? agentState.definitions.find((agent) => agent.name === agentFile.name) ?? null : null),
     [agentFile, agentState.definitions],
@@ -962,6 +976,15 @@ export default function SettingsDialog({
     }
   }
 
+  async function refreshOcrStatus() {
+    setOcrError("");
+    try {
+      setOcrStatus(await api.ocrModelStatus());
+    } catch (err) {
+      setOcrError(String(err));
+    }
+  }
+
   async function downloadOcrModels() {
     setOcrBusy(true);
     setOcrError("");
@@ -1055,10 +1078,22 @@ export default function SettingsDialog({
     }
   }
 
-  const progressPct =
+  const ocrFileProgressPct =
     ocrProgress?.totalBytes && ocrProgress.totalBytes > 0
       ? Math.min(100, Math.round((ocrProgress.downloadedBytes / ocrProgress.totalBytes) * 100))
       : null;
+  const ocrOverallProgressPct = ocrProgress
+    ? Math.min(
+        100,
+        Math.round(
+          ((ocrProgress.done
+            ? ocrProgress.completedFiles
+            : Math.max(0, ocrProgress.index - 1) + (ocrFileProgressPct ?? 0) / 100) /
+            Math.max(1, ocrProgress.totalFiles)) *
+            100,
+        ),
+      )
+    : null;
   const historyPct = Math.min(
     100,
     Math.round(
@@ -2184,8 +2219,8 @@ export default function SettingsDialog({
                       description="Screen capture and OCR still require explicit confirmation before reading pixels."
                       onChange={(checked) => set("computer_use_enabled", checked)}
                     />
-                    <div className="mt-4 grid gap-3 sm:grid-cols-[1fr_auto]">
-                      <Field label="OCR model source">
+                    <div className="mt-4 grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto_auto]">
+                      <Field label="OCR model source" help={selectedOcrSource.note}>
                         <select
                           className={inputCls}
                           value={form.ocr_model_source}
@@ -2199,6 +2234,14 @@ export default function SettingsDialog({
                         </select>
                       </Field>
                       <button
+                        className={`${secondaryButtonCls} mt-[22px]`}
+                        disabled={ocrBusy}
+                        onClick={refreshOcrStatus}
+                        type="button"
+                      >
+                        Refresh
+                      </button>
+                      <button
                         className="mt-[22px] inline-flex h-9 items-center justify-center rounded-md bg-[#111827] px-4 text-[12px] font-medium text-white transition hover:bg-[#2b3442] disabled:cursor-not-allowed disabled:bg-[#b8bec8]"
                         disabled={ocrBusy}
                         onClick={downloadOcrModels}
@@ -2208,14 +2251,85 @@ export default function SettingsDialog({
                       </button>
                     </div>
                     <div className="mt-3 rounded-lg border border-[#e2e5ea] bg-[#fbfcfd] p-3 text-[12px] leading-5 text-[#6f7782]">
-                      <div>Status: {ocrStatus?.installed ? "Installed" : "Not installed"} {ocrStatus ? `(${formatBytes(ocrStatus.totalBytes)})` : ""}</div>
-                      {ocrStatus?.modelDir && <div className="break-all">Path: {ocrStatus.modelDir}</div>}
-                      {ocrStatus && !ocrStatus.installed && <div>Missing: {ocrStatus.missing.join(", ")}</div>}
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="font-medium text-[#202124]">
+                          {ocrStatus?.installed ? "Ready" : "Missing models"}
+                          {ocrStatus ? ` · ${formatBytes(ocrStatus.totalBytes)}` : ""}
+                        </div>
+                        <a
+                          className="text-[#1557b0] hover:underline"
+                          href={ocrStatus?.sourceUrl || selectedOcrSource.url}
+                          rel="noreferrer"
+                          target="_blank"
+                        >
+                          {ocrStatus?.sourceLabel || selectedOcrSource.label}
+                        </a>
+                      </div>
+                      <div className="mt-1 text-[#7a8088]">{ocrStatus?.sourceNote || selectedOcrSource.note}</div>
+                      {ocrStatus?.modelDir && <div className="mt-2 break-all">Path: {ocrStatus.modelDir}</div>}
+                      {ocrStatus && (
+                        <div className="mt-3 overflow-hidden rounded-md border border-[#e4e7eb] bg-white">
+                          {ocrStatus.files.map((file) => (
+                            <div
+                              key={file.name}
+                              className="grid grid-cols-[minmax(0,1fr)_78px_62px] items-center gap-3 border-b border-[#f0f2f5] px-3 py-2 last:border-b-0"
+                            >
+                              <div className="min-w-0 truncate font-mono text-[11px] text-[#3b4350]" title={file.name}>
+                                {file.name}
+                              </div>
+                              <div className={file.present ? "text-[#177245]" : "text-[#b42318]"}>
+                                {file.present ? "Present" : "Missing"}
+                              </div>
+                              <a
+                                className="text-right text-[#1557b0] hover:underline"
+                                href={file.downloadUrl}
+                                rel="noreferrer"
+                                target="_blank"
+                              >
+                                Source
+                              </a>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      {ocrStatus && !ocrStatus.installed && (
+                        <div className="mt-3 rounded-md border border-[#f5d6a4] bg-[#fff8eb] px-3 py-2 text-[#7a4d00]">
+                          Missing: {ocrStatus.missing.join(", ")}. {ocrStatus.manualInstallHint}
+                        </div>
+                      )}
                       {ocrProgress && (
-                        <div>
-                          {ocrProgress.file}: {formatBytes(ocrProgress.downloadedBytes)}
-                          {ocrProgress.totalBytes ? ` / ${formatBytes(ocrProgress.totalBytes)}` : ""}
-                          {progressPct !== null ? ` (${progressPct}%)` : ""}
+                        <div className="mt-3 space-y-2">
+                          <div className="flex flex-wrap items-center justify-between gap-2 text-[#3b4350]">
+                            <span>
+                              Overall: {ocrOverallProgressPct ?? 0}% · {ocrProgress.completedFiles}/
+                              {ocrProgress.totalFiles} files
+                            </span>
+                            <span>{formatBytes(ocrProgress.downloadedTotalBytes)}</span>
+                          </div>
+                          <div className="h-2 overflow-hidden rounded-full bg-[#e5e9ef]">
+                            <div
+                              className="h-full rounded-full bg-[#111827] transition-[width]"
+                              style={{ width: `${ocrOverallProgressPct ?? 0}%` }}
+                            />
+                          </div>
+                          <div className="flex flex-wrap items-center justify-between gap-2 text-[#6f7782]">
+                            <span>
+                              File {ocrProgress.index}/{ocrProgress.totalFiles}: {ocrProgress.file} · {ocrProgress.phase}
+                            </span>
+                            <span>
+                              {formatBytes(ocrProgress.downloadedBytes)}
+                              {ocrProgress.totalBytes ? ` / ${formatBytes(ocrProgress.totalBytes)}` : ""}
+                              {ocrFileProgressPct !== null ? ` (${ocrFileProgressPct}%)` : ""}
+                            </span>
+                          </div>
+                          {ocrFileProgressPct !== null && (
+                            <div className="h-1.5 overflow-hidden rounded-full bg-[#edf1f5]">
+                              <div
+                                className="h-full rounded-full bg-[#59616d] transition-[width]"
+                                style={{ width: `${ocrFileProgressPct}%` }}
+                              />
+                            </div>
+                          )}
                         </div>
                       )}
                       {ocrError && <div className="text-[#b42318]">{ocrError}</div>}
