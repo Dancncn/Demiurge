@@ -9,6 +9,7 @@ Demiurge 当前已经从 MVP 进入 Agent 能力打磨阶段。下面把现有 T
 - [x] **Session Engine 成熟化**：后端集中 turn runtime state、入口互斥、中断状态和最近回合记录；`TurnEventEmitter` 同时发送 legacy assistant/tool 事件与统一 `agent-event`；`SessionTurnStore` 收敛会话写入和持久化；前端 busy/cancel 状态由 `session-engine-updated` 驱动。
 - [x] **Provider Adapter**：OpenAI-compatible、local、Anthropic、Gemini。
 - [x] **Provider Capability Profile 2.0 first slice**：集中 provider capability flags、tool schema dialect、structured output 能力标记和 provider body-builder gating。
+- [x] **Provider / adapter 规范化**：provider dispatch 改为统一走 `ProviderProfile::for_kind` 与 adapter kind，OpenAI 官方 profile 生效 `parallel_tool_calls` 和 token clamp；OpenAI-compatible/local、Anthropic、Gemini 共享 usage merge 与 streaming finish_reason normalization，连接测试也复用同一 profile adapter 映射。
 - [x] **工具注册表**：统一 metadata、JSON Schema、权限策略、并发属性和输出属性。
 - [x] **文件沙箱**：读写限定沙箱目录、路径校验 + canonicalize 防逃逸。
 - [x] **编辑工具**：`read_file`、`write_file`、`edit_file`、`multi_edit`、`apply_patch`、`undo_edit`。
@@ -39,6 +40,8 @@ Demiurge 当前已经从 MVP 进入 Agent 能力打磨阶段。下面把现有 T
 - [x] **设置连接测试**：Settings 支持直接验证 LLM Provider/base_url/model/key、Web Search provider/key 和 WebDAV 连接；测试使用当前表单值，不要求先保存密钥。
 - [x] **细粒度上下文可视化**：Settings Context 页展示 system/tools/history/output reserve、summary、memory source、预算消耗、history role breakdown 和 prompt section token/截断细节。
 - [x] **项目记忆审计 UI**：长期记忆可查看、编辑、删除，对应条目自动去重。
+- [x] **Skills 支持**：Markdown `SKILL.md` 支持 global/project/repository/pack/`.claude` 目录发现、YAML frontmatter、自动匹配、`/skills` slash 输出、prompt context injection、declared tool needs、required_permissions 和安全 references 注入。
+- [x] **记忆分层与手动维护**：memory 已拆为 user/project/session/pack scopes；prompt 和 Context 面板读取分层记忆，Settings Memory 面板支持按 scope 新增、编辑、删除和去重。
 - [x] **自定义 Agent 模板**：`.demiurge/agents/*.json` 支持 prompt、allowed tools、budget、handoff format 和评审定义；前端对话可多选 Agent。
 - [x] **多 Agent 证据包与 reviewer**：`agent_spawn` 支持 `output_format=evidence_packet`、`reviewer_count` 和 `max_total_tokens` 硬预算。
 - [x] **MCP 集成第一阶段**：Rust 原生 stdio MCP Manager，支持 server 配置、启动/停止/刷新、tool discovery、resource list/read、secret env keyring、水合/脱敏、动态 `mcp__server__tool` 工具注册、权限风险分级和 Settings/ToolCard UI。
@@ -70,9 +73,9 @@ Demiurge 当前已经从 MVP 进入 Agent 能力打磨阶段。下面把现有 T
 - [x] **OCR 体验补全**：补齐模型源选择、下载进度、缺模型引导和国内镜像文档。
 - [x] **角色包头像与导入器**：读取 `manifest.avatar` 替换默认头像；创建拖拽 zip 导入器，解压到 `packs/` 并校验 manifest，避免提交具体受版权保护的角色资产、语音/美术资产或人格设定。
 - [x] **更多内置工具**：增加 `list_dir`、`http_get`、`clipboard`、包脚本等 typed tools，并配置合适权限分级；继续优先 typed tools，shell 保持后置和强确认。
-- [ ] **Skills 支持**：实现 Markdown skills、slash command、pack-scoped/global skill directories、自动推荐、`SKILL.md` context injection、declared tool needs、required_permissions 和 references。
-- [ ] **记忆分层与手动维护**：把 memory 分为 user/project/session/pack scopes；先做 read-only loading 和手动编辑，再考虑自动总结/抽取增强。
-- [ ] **Provider / adapter 扩展**：在能力画像基础上继续规范 Anthropic、OpenAI-compatible、Gemini、本地模型适配器、schema dialect adaptation 与 streaming normalization。
+- [x] **Skills 支持**：实现 Markdown skills、slash command、pack-scoped/global skill directories、自动推荐、`SKILL.md` context injection、declared tool needs、required_permissions 和 references。
+- [x] **记忆分层与手动维护**：把 memory 分为 user/project/session/pack scopes；先做 read-only loading 和手动编辑，再考虑自动总结/抽取增强。
+- [x] **Provider / adapter 扩展**：在能力画像基础上继续规范 Anthropic、OpenAI-compatible、Gemini、本地模型适配器、schema dialect adaptation 与 streaming normalization。
 - [ ] **应用体验补齐**：增加 i18n 中英文切换；拆分 MiSans、KaTeX 和前端 chunks 以瘦身安装包。
 
 ## Optional / 方向探索
