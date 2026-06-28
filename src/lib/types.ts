@@ -317,7 +317,7 @@ export interface SessionList {
 }
 
 export type PermissionEffect = "allow" | "deny" | "ask";
-export type PermissionScope = "once" | "session" | "project";
+export type PermissionScope = "once" | "session" | "project" | "user";
 export type PermissionDecisionSource = "tool_default" | "user_override" | "unknown_tool";
 export type ToolRisk = "read_only" | "mutating" | "external" | "privileged";
 export type ToolConcurrency = "parallel_safe" | "serial_only";
@@ -339,9 +339,26 @@ export interface PermissionAuditEntry {
   reason: string;
 }
 
+export interface PermissionToolView {
+  tool: string;
+  description: string;
+  risk: ToolRisk;
+  default_effect: PermissionEffect;
+  default_scope: PermissionScope;
+  default_reason: string;
+}
+
+export interface PermissionRuleInput {
+  tool: string;
+  effect: PermissionEffect;
+  scope: PermissionScope;
+  reason: string;
+}
+
 export interface PermissionPanelState {
   rules: PermissionRuleView[];
   audit: PermissionAuditEntry[];
+  tools: PermissionToolView[];
 }
 
 // ---- 后端 emit 的事件载荷 ----
@@ -354,6 +371,7 @@ export interface ToolStartEvent {
   permission_effect?: PermissionEffect;
   concurrency?: ToolConcurrency;
   preview?: string;
+  affected_paths?: string[];
 }
 export interface ToolEndEvent {
   tool_call_id: string;
@@ -370,9 +388,11 @@ export interface ConfirmRequestEvent {
   risk?: ToolRisk;
   effect?: PermissionEffect;
   scope?: PermissionScope;
+  source?: PermissionDecisionSource;
   reason?: string;
   summary?: string;
   preview?: string;
+  affected_paths?: string[];
 }
 
 export interface GoalProgressEvent {

@@ -407,6 +407,14 @@ fn permission_reset_rule(
 }
 
 #[tauri::command]
+fn permission_upsert_rule(
+    state: State<'_, AppState>,
+    input: permission::PermissionRuleInput,
+) -> Result<permission::PermissionPanelState, String> {
+    permission::upsert_rule(state.inner(), input)
+}
+
+#[tauri::command]
 fn list_packs(state: State<'_, AppState>) -> Vec<pack::PackManifest> {
     let dir = state.packs_dir.lock().unwrap().clone();
     pack::list_packs(&dir)
@@ -993,6 +1001,7 @@ pub fn run() {
             webdav_delete_backup,
             permission_panel_state,
             permission_reset_rule,
+            permission_upsert_rule,
             list_packs,
             agent_panel_state,
             agent_template_json,

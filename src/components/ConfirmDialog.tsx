@@ -26,7 +26,14 @@ const scopeOptions: { value: PermissionScope; label: string; detail: string }[] 
   { value: "once", label: "Once", detail: "Only this call" },
   { value: "session", label: "Session", detail: "Remember in this chat" },
   { value: "project", label: "Project", detail: "Remember for this project" },
+  { value: "user", label: "User", detail: "Remember globally" },
 ];
+
+function sourceLabel(source?: string) {
+  if (source === "user_override") return "Saved rule";
+  if (source === "unknown_tool") return "Unknown tool";
+  return "Tool default";
+}
 
 export default function ConfirmDialog({ req, onRespond }: Props) {
   const [scope, setScope] = useState<PermissionScope>("once");
@@ -49,6 +56,7 @@ export default function ConfirmDialog({ req, onRespond }: Props) {
                 <span className="rounded-md bg-[#eef1f5] px-2 py-1">{riskLabel(req.risk)}</span>
                 {req.effect && <span className="rounded-md bg-[#eef1f5] px-2 py-1">Policy: {req.effect}</span>}
                 {req.scope && <span className="rounded-md bg-[#eef1f5] px-2 py-1">Default: {req.scope}</span>}
+                <span className="rounded-md bg-[#eef1f5] px-2 py-1">{sourceLabel(req.source)}</span>
               </div>
             </div>
           </div>
@@ -76,6 +84,18 @@ export default function ConfirmDialog({ req, onRespond }: Props) {
                     {req.reason}
                   </div>
                 )}
+                {req.affected_paths?.length ? (
+                  <div>
+                    <span className="font-medium text-[#344054]">Affected paths: </span>
+                    <div className="mt-1 flex flex-wrap gap-1">
+                      {req.affected_paths.map((path) => (
+                        <span key={path} className="rounded-md bg-white px-2 py-0.5 font-mono text-[11px] text-[#344054]">
+                          {path}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
               </div>
               <pre className="mt-3 max-h-72 overflow-auto whitespace-pre-wrap rounded-lg border border-[#e2e5ea] bg-white p-3 text-[12px] text-[#344054]">
                 {req.args}
@@ -96,7 +116,7 @@ export default function ConfirmDialog({ req, onRespond }: Props) {
         </div>
 
         <footer className="border-t border-[#eceff3] bg-[#fbfcfd] px-5 py-4">
-          <div className="grid grid-cols-3 gap-2 rounded-lg bg-[#eef1f5] p-1 text-xs">
+          <div className="grid grid-cols-2 gap-2 rounded-lg bg-[#eef1f5] p-1 text-xs sm:grid-cols-4">
             {scopeOptions.map((option) => (
               <button
                 key={option.value}

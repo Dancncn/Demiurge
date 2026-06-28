@@ -77,9 +77,28 @@ pub struct PermissionRuleView {
 }
 
 #[derive(Clone, Debug, Serialize)]
+pub struct PermissionToolView {
+    pub tool: String,
+    pub description: String,
+    pub risk: ToolRisk,
+    pub default_effect: PermissionEffect,
+    pub default_scope: PermissionScope,
+    pub default_reason: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
 pub struct PermissionPanelState {
     pub rules: Vec<PermissionRuleView>,
     pub audit: Vec<PermissionAuditEntry>,
+    pub tools: Vec<PermissionToolView>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct PermissionRuleInput {
+    pub tool: String,
+    pub effect: PermissionEffect,
+    pub scope: PermissionScope,
+    pub reason: String,
 }
 
 #[derive(Clone, Debug)]
@@ -105,6 +124,7 @@ pub struct PermissionRequest<'a> {
     pub decision: PermissionDecision,
     pub summary: String,
     pub preview: Option<String>,
+    pub affected_paths: Vec<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -116,9 +136,11 @@ pub struct PermissionPromptPayload<'a> {
     pub risk: ToolRisk,
     pub effect: PermissionEffect,
     pub scope: PermissionScope,
+    pub source: PermissionDecisionSource,
     pub reason: &'a str,
     pub summary: String,
     pub preview: Option<&'a str>,
+    pub affected_paths: Vec<String>,
 }
 
 pub fn decide(
@@ -138,6 +160,10 @@ pub fn decide(
 
     let data_dir = state.data_dir.lock().unwrap().clone();
     if let Some(rule) = load_project_rules(&data_dir).remove(tool) {
+        return decision_from_rule(rule);
+    }
+
+    if let Some(rule) = load_user_rules(&data_dir).remove(tool) {
         return decision_from_rule(rule);
     }
 
@@ -181,6 +207,12 @@ pub fn remember_response(
             rules.insert(tool.to_string(), rule);
             save_project_rules(&data_dir, &rules)
         }
+        PermissionScope::User => {
+            let data_dir = state.data_dir.lock().unwrap().clone();
+            let mut rules = load_user_rules(&data_dir);
+            rules.insert(tool.to_string(), rule);
+            save_user_rules(&data_dir, &rules)
+        }
     }
 }
 
@@ -222,9 +254,11 @@ pub async fn confirm(
         risk: req.risk,
         effect: req.decision.effect,
         scope: req.decision.scope,
+        source: req.decision.source.clone(),
         reason: &req.decision.reason,
         summary: req.summary,
         preview: req.preview.as_deref(),
+        affected_paths: req.affected_paths,
     };
 
     let _ = app.emit("tool-confirm-request", payload);
@@ -248,6 +282,9 @@ pub fn panel_state(state: &crate::AppState) -> PermissionPanelState {
     for rule in load_project_rules(&data_dir).values() {
         rules.push(rule_view(rule));
     }
+    for rule in load_user_rules(&data_dir).values() {
+        rules.push(rule_view(rule));
+    }
     rules.sort_by(|a, b| {
         b.updated_at
             .cmp(&a.updated_at)
@@ -256,6 +293,7 @@ pub fn panel_state(state: &crate::AppState) -> PermissionPanelState {
     PermissionPanelState {
         rules,
         audit: load_recent_audit(&data_dir, 80),
+        tools: tool_views(),
     }
 }
 
@@ -275,6 +313,59 @@ pub fn reset_rule(
             rules.remove(tool);
             save_project_rules(&data_dir, &rules)?;
         }
+        PermissionScope::User => {
+            let data_dir = state.data_dir.lock().unwrap().clone();
+            let mut rules = load_user_rules(&data_dir);
+            rules.remove(tool);
+            save_user_rules(&data_dir, &rules)?;
+        }
+    }
+    Ok(panel_state(state))
+}
+
+pub fn upsert_rule(
+    state: &crate::AppState,
+    input: PermissionRuleInput,
+) -> Result<PermissionPanelState, String> {
+    if input.scope == PermissionScope::Once {
+        return Err("Once scope is only valid for a single confirmation response.".to_string());
+    }
+    if crate::tools::definition_for(&input.tool).is_none() {
+        return Err(format!("Unknown tool `{}`.", input.tool));
+    }
+    let reason = if input.reason.trim().is_empty() {
+        "User-managed permission rule.".to_string()
+    } else {
+        input.reason.trim().to_string()
+    };
+    let rule = PermissionRule {
+        tool: input.tool.clone(),
+        effect: input.effect,
+        scope: input.scope,
+        reason,
+        updated_at: store::now_millis(),
+    };
+    match input.scope {
+        PermissionScope::Once => {}
+        PermissionScope::Session => {
+            state
+                .session_permission_rules
+                .lock()
+                .unwrap()
+                .insert(input.tool, rule);
+        }
+        PermissionScope::Project => {
+            let data_dir = state.data_dir.lock().unwrap().clone();
+            let mut rules = load_project_rules(&data_dir);
+            rules.insert(input.tool, rule);
+            save_project_rules(&data_dir, &rules)?;
+        }
+        PermissionScope::User => {
+            let data_dir = state.data_dir.lock().unwrap().clone();
+            let mut rules = load_user_rules(&data_dir);
+            rules.insert(input.tool, rule);
+            save_user_rules(&data_dir, &rules)?;
+        }
     }
     Ok(panel_state(state))
 }
@@ -289,6 +380,22 @@ fn rule_view(rule: &PermissionRule) -> PermissionRuleView {
     }
 }
 
+fn tool_views() -> Vec<PermissionToolView> {
+    let mut tools = crate::tools::registry()
+        .into_iter()
+        .map(|tool| PermissionToolView {
+            tool: tool.name.to_string(),
+            description: tool.description.to_string(),
+            risk: tool.risk,
+            default_effect: tool.permission.effect,
+            default_scope: tool.permission.scope,
+            default_reason: tool.permission.reason.to_string(),
+        })
+        .collect::<Vec<_>>();
+    tools.sort_by(|a, b| a.tool.cmp(&b.tool));
+    tools
+}
+
 fn decision_from_rule(rule: PermissionRule) -> PermissionDecision {
     PermissionDecision {
         effect: rule.effect,
@@ -300,14 +407,32 @@ fn decision_from_rule(rule: PermissionRule) -> PermissionDecision {
 
 fn load_project_rules(dir: &Path) -> HashMap<String, PermissionRule> {
     let p = dir.join("permissions.json");
+    load_rules_file(&p)
+}
+
+fn save_project_rules(dir: &Path, rules: &HashMap<String, PermissionRule>) -> Result<(), String> {
+    let p = dir.join("permissions.json");
+    save_rules_file(&p, rules)
+}
+
+fn load_user_rules(dir: &Path) -> HashMap<String, PermissionRule> {
+    let p = dir.join("user_permissions.json");
+    load_rules_file(&p)
+}
+
+fn save_user_rules(dir: &Path, rules: &HashMap<String, PermissionRule>) -> Result<(), String> {
+    let p = dir.join("user_permissions.json");
+    save_rules_file(&p, rules)
+}
+
+fn load_rules_file(p: &Path) -> HashMap<String, PermissionRule> {
     std::fs::read_to_string(&p)
         .ok()
         .and_then(|s| serde_json::from_str::<HashMap<String, PermissionRule>>(&s).ok())
         .unwrap_or_default()
 }
 
-fn save_project_rules(dir: &Path, rules: &HashMap<String, PermissionRule>) -> Result<(), String> {
-    let p = dir.join("permissions.json");
+fn save_rules_file(p: &Path, rules: &HashMap<String, PermissionRule>) -> Result<(), String> {
     let json = serde_json::to_string_pretty(rules).map_err(|e| e.to_string())?;
     std::fs::write(&p, json).map_err(|e| e.to_string())
 }

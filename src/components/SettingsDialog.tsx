@@ -10,6 +10,7 @@ import type {
   OcrModelSource,
   OcrModelStatus,
   PackManifest,
+  PermissionEffect,
   PermissionPanelState,
   PermissionScope,
   ProviderKind,
@@ -179,9 +180,18 @@ function permissionEffectLabel(effect: string) {
 }
 
 function permissionScopeLabel(scope: string) {
+  if (scope === "user") return "User";
   if (scope === "session") return "Session";
   if (scope === "project") return "Project";
   return "Once";
+}
+
+function permissionRiskLabel(risk: string) {
+  if (risk === "read_only") return "Read only";
+  if (risk === "mutating") return "Writes";
+  if (risk === "external") return "Network";
+  if (risk === "privileged") return "System";
+  return risk;
 }
 
 function formatTime(ms: number) {
@@ -311,6 +321,12 @@ export default function SettingsDialog({
   const [ocrError, setOcrError] = useState("");
   const [permissionState, setPermissionState] = useState<PermissionPanelState | null>(null);
   const [permissionBusy, setPermissionBusy] = useState(false);
+  const [permissionDraft, setPermissionDraft] = useState<{
+    tool: string;
+    effect: PermissionEffect;
+    scope: Exclude<PermissionScope, "once">;
+    reason: string;
+  }>({ tool: "shell", effect: "ask", scope: "session", reason: "" });
   const [contextState, setContextState] = useState<ContextPanelState | null>(null);
   const [memoryState, setMemoryState] = useState<MemoryPanelState | null>(null);
   const [memoryBusy, setMemoryBusy] = useState(false);
@@ -397,6 +413,10 @@ export default function SettingsDialog({
     () => (agentFile ? agentState.definitions.find((agent) => agent.name === agentFile.name) ?? null : null),
     [agentFile, agentState.definitions],
   );
+  const selectedPermissionTool = useMemo(
+    () => permissionState?.tools.find((tool) => tool.tool === permissionDraft.tool) ?? null,
+    [permissionDraft.tool, permissionState?.tools],
+  );
 
   if (!open) return null;
 
@@ -427,6 +447,27 @@ export default function SettingsDialog({
     } finally {
       setPermissionBusy(false);
     }
+  }
+
+  async function savePermissionRule() {
+    setPermissionBusy(true);
+    try {
+      setPermissionState(
+        await api.permissionUpsertRule({
+          tool: permissionDraft.tool,
+          effect: permissionDraft.effect,
+          scope: permissionDraft.scope,
+          reason: permissionDraft.reason,
+        }),
+      );
+    } finally {
+      setPermissionBusy(false);
+    }
+  }
+
+  function editPermissionRule(scope: PermissionScope, tool: string, effect: PermissionEffect, reason: string) {
+    if (scope === "once") return;
+    setPermissionDraft({ tool, effect, scope, reason });
   }
 
   function setAgentPanelState(next: AgentPanelState) {
@@ -1586,8 +1627,11 @@ export default function SettingsDialog({
                       {ocrError && <div className="text-[#b42318]">{ocrError}</div>}
                     </div>
                   </Section>
-                  <Section title="Permission Rules" description="Rules remembered from confirmation dialogs.">
-                    <div className="mb-3 flex justify-end">
+                  <Section title="Permission Rules" description="Rule-based allow / deny / ask controls for tool calls.">
+                    <div className="mb-3 flex justify-between gap-3">
+                      <div className="text-[12px] leading-5 text-[#7a8088]">
+                        Resolution order: session rules, project rules, user rules, then the tool default.
+                      </div>
                       <button
                         className={secondaryButtonCls}
                         type="button"
@@ -1597,6 +1641,86 @@ export default function SettingsDialog({
                         Refresh
                       </button>
                     </div>
+
+                    <div className="mb-4 rounded-lg border border-[#e2e5ea] bg-[#fbfcfd] p-3">
+                      <div className="grid gap-3 md:grid-cols-[1fr_140px_140px]">
+                        <Field label="Tool">
+                          <select
+                            className={inputCls}
+                            value={permissionDraft.tool}
+                            onChange={(e) => setPermissionDraft((draft) => ({ ...draft, tool: e.target.value }))}
+                          >
+                            {(permissionState?.tools.length ? permissionState.tools : []).map((tool) => (
+                              <option key={tool.tool} value={tool.tool}>
+                                {tool.tool}
+                              </option>
+                            ))}
+                          </select>
+                        </Field>
+                        <Field label="Effect">
+                          <select
+                            className={inputCls}
+                            value={permissionDraft.effect}
+                            onChange={(e) =>
+                              setPermissionDraft((draft) => ({
+                                ...draft,
+                                effect: e.target.value as PermissionEffect,
+                              }))
+                            }
+                          >
+                            <option value="ask">Ask</option>
+                            <option value="allow">Allow</option>
+                            <option value="deny">Deny</option>
+                          </select>
+                        </Field>
+                        <Field label="Scope">
+                          <select
+                            className={inputCls}
+                            value={permissionDraft.scope}
+                            onChange={(e) =>
+                              setPermissionDraft((draft) => ({
+                                ...draft,
+                                scope: e.target.value as Exclude<PermissionScope, "once">,
+                              }))
+                            }
+                          >
+                            <option value="session">Session</option>
+                            <option value="project">Project</option>
+                            <option value="user">User</option>
+                          </select>
+                        </Field>
+                      </div>
+                      <div className="mt-3 grid gap-3 md:grid-cols-[1fr_auto]">
+                        <Field label="Reason">
+                          <input
+                            className={inputCls}
+                            value={permissionDraft.reason}
+                            placeholder="Why this rule exists"
+                            onChange={(e) => setPermissionDraft((draft) => ({ ...draft, reason: e.target.value }))}
+                          />
+                        </Field>
+                        <button
+                          className="mt-[22px] inline-flex h-9 items-center justify-center rounded-md bg-[#111827] px-4 text-[12px] font-medium text-white transition hover:bg-[#2b3442] disabled:cursor-not-allowed disabled:bg-[#b8bec8]"
+                          type="button"
+                          disabled={permissionBusy || !permissionDraft.tool}
+                          onClick={savePermissionRule}
+                        >
+                          Save Rule
+                        </button>
+                      </div>
+                      {selectedPermissionTool && (
+                        <div className="mt-3 rounded-md border border-[#e8ebef] bg-white p-3 text-[12px] leading-5 text-[#6f7782]">
+                          <div className="font-medium text-[#202124]">
+                            {permissionRiskLabel(selectedPermissionTool.risk)} / default{" "}
+                            {permissionEffectLabel(selectedPermissionTool.default_effect)} /{" "}
+                            {permissionScopeLabel(selectedPermissionTool.default_scope)}
+                          </div>
+                          <div className="mt-1">{selectedPermissionTool.description}</div>
+                          <div className="mt-1 text-[#8a9099]">{selectedPermissionTool.default_reason}</div>
+                        </div>
+                      )}
+                    </div>
+
                     <div className="space-y-2">
                       {permissionState?.rules.length ? (
                         permissionState.rules.map((rule) => (
@@ -1610,6 +1734,14 @@ export default function SettingsDialog({
                                 </div>
                                 <div className="mt-1 text-[12px] leading-5 text-[#8a9099]">{rule.reason}</div>
                               </div>
+                              <button
+                                className={secondaryButtonCls}
+                                type="button"
+                                disabled={permissionBusy || rule.scope === "once"}
+                                onClick={() => editPermissionRule(rule.scope, rule.tool, rule.effect, rule.reason)}
+                              >
+                                Edit
+                              </button>
                               <button
                                 className={secondaryButtonCls}
                                 type="button"

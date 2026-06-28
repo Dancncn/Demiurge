@@ -18,6 +18,7 @@ import type {
   PackManifest,
   PermissionScope,
   PermissionPanelState,
+  PermissionRuleInput,
   SessionList,
   Settings,
   SpeechSynthesisRequest,
@@ -42,6 +43,8 @@ export const saveSettings = (settings: Settings) => invoke<void>("save_settings"
 export const permissionPanelState = () => invoke<PermissionPanelState>("permission_panel_state");
 export const permissionResetRule = (scope: PermissionScope, tool: string) =>
   invoke<PermissionPanelState>("permission_reset_rule", { scope, tool });
+export const permissionUpsertRule = (input: PermissionRuleInput) =>
+  invoke<PermissionPanelState>("permission_upsert_rule", { input });
 export const listPacks = () => invoke<PackManifest[]>("list_packs");
 export const agentPanelState = () => invoke<AgentPanelState>("agent_panel_state");
 export const agentTemplateJson = () => invoke<string>("agent_template_json");

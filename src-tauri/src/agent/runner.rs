@@ -367,6 +367,7 @@ pub async fn run_turn_with_options(
                 serde_json::from_str(&tc.function.arguments).unwrap_or_else(|_| json!({}));
             let tool_def = tools::definition_for(&name);
             let preview = tools::confirmation_preview(state, &name, args.clone());
+            let affected_paths = tools::affected_paths(&name, &args);
 
             let _ = app.emit(
                 "tool-start",
@@ -380,6 +381,7 @@ pub async fn run_turn_with_options(
                     "concurrency": tool_def.as_ref().map(|t| t.concurrency),
                     "output_policy": tool_def.as_ref().map(|t| t.output_policy),
                     "preview": preview,
+                    "affected_paths": &affected_paths,
                 }),
             );
             if let Some(run_id) = &options.workflow_run_id {
@@ -420,6 +422,7 @@ pub async fn run_turn_with_options(
                             decision: decision.clone(),
                             summary,
                             preview: preview.clone(),
+                            affected_paths: affected_paths.clone(),
                         },
                     )
                     .await;
