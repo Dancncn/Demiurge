@@ -264,6 +264,14 @@ export interface AgentBudget {
   max_total_tokens?: number;
 }
 
+export interface AgentRuntimeStats {
+  run_count: number;
+  total_tokens: number;
+  error_count: number;
+  last_used_at?: number;
+  last_error?: string;
+}
+
 export interface AgentDefinitionInfo {
   name: string;
   description: string;
@@ -275,6 +283,7 @@ export interface AgentDefinitionInfo {
   budget?: AgentBudget;
   handoff_format: string;
   members: string[];
+  runtime: AgentRuntimeStats;
 }
 
 export interface AgentPanelState {

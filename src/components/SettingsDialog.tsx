@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import * as api from "../lib/api";
 import type {
   AgentEditorFile,
@@ -189,6 +189,18 @@ function formatTime(ms: number) {
   return new Date(ms).toLocaleString();
 }
 
+function downloadTextFile(fileName: string, text: string, type = "application/json") {
+  const blob = new Blob([text], { type });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = fileName;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
 function ProviderMark({ short, selected }: { short: string; selected?: boolean }) {
   return (
     <span
@@ -306,6 +318,7 @@ export default function SettingsDialog({
   const [webdavBusy, setWebdavBusy] = useState(false);
   const [webdavStatus, setWebdavStatus] = useState("");
   const [webdavFiles, setWebdavFiles] = useState<WebDavBackupFile[]>([]);
+  const agentImportInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (open) {
@@ -379,6 +392,10 @@ export default function SettingsDialog({
   const selectedWebSearchProvider = useMemo(
     () => webSearchProviders.find((p) => p.value === form.web_search_provider) ?? webSearchProviders[0],
     [form.web_search_provider],
+  );
+  const selectedAgentDefinition = useMemo(
+    () => (agentFile ? agentState.definitions.find((agent) => agent.name === agentFile.name) ?? null : null),
+    [agentFile, agentState.definitions],
   );
 
   if (!open) return null;
@@ -515,6 +532,57 @@ export default function SettingsDialog({
         setAgentValidation(null);
       }
       setAgentStatus("Agent deleted.");
+    } catch (err) {
+      setAgentStatus(String(err));
+    } finally {
+      setAgentBusy(false);
+    }
+  }
+
+  async function importAgentJson(file?: File | null) {
+    if (!file) return;
+    setAgentBusy(true);
+    setAgentStatus("");
+    try {
+      const raw = await file.text();
+      const validation = await api.agentValidateJson(raw);
+      setAgentFile(null);
+      setAgentJson(raw);
+      setAgentValidation(validation);
+      setAgentFileName(file.name.endsWith(".json") ? file.name : validation.suggested_file_name);
+      setAgentStatus(validation.ok ? `Imported ${file.name}. Review and save it.` : `Imported ${file.name}; validation failed.`);
+    } catch (err) {
+      setAgentStatus(String(err));
+    } finally {
+      setAgentBusy(false);
+    }
+  }
+
+  function exportCurrentAgentJson() {
+    if (!agentJson.trim()) return;
+    const fileName = agentFileName.trim() || agentValidation?.suggested_file_name || "agent.json";
+    downloadTextFile(fileName, agentJson);
+    setAgentStatus(`Exported ${fileName}.`);
+  }
+
+  async function exportAllAgents() {
+    if (!agentState.definitions.length) return;
+    setAgentBusy(true);
+    setAgentStatus("");
+    try {
+      const files = await Promise.all(agentState.definitions.map((agent) => api.agentReadFile(agent.name)));
+      const payload = {
+        exported_at: new Date().toISOString(),
+        agents_dir: agentState.agents_dir,
+        agents: files.map((file) => ({
+          name: file.name,
+          file_name: file.file_name,
+          path: file.path,
+          json: JSON.parse(file.raw_json),
+        })),
+      };
+      downloadTextFile("demiurge-agents-export.json", JSON.stringify(payload, null, 2));
+      setAgentStatus(`Exported ${files.length} agents.`);
     } catch (err) {
       setAgentStatus(String(err));
     } finally {
@@ -1242,6 +1310,17 @@ export default function SettingsDialog({
                   </Section>
                   <Section title="Custom Agents" description="Agent definitions loaded from the project sandbox.">
                     <div className="rounded-lg border border-[#e2e5ea] bg-[#fbfcfd]">
+                      <input
+                        ref={agentImportInputRef}
+                        className="hidden"
+                        type="file"
+                        accept="application/json,.json"
+                        onChange={(e) => {
+                          const file = e.currentTarget.files?.[0];
+                          e.currentTarget.value = "";
+                          void importAgentJson(file);
+                        }}
+                      />
                       <div className="flex items-center justify-between gap-3 border-b border-[#e8ebef] px-3 py-3">
                         <div className="min-w-0">
                           <div className="text-[13px] font-medium text-[#202124]">
@@ -1251,9 +1330,25 @@ export default function SettingsDialog({
                             {agentState.agents_dir || ".demiurge/agents"}
                           </div>
                         </div>
-                        <div className="flex shrink-0 gap-2">
+                        <div className="flex shrink-0 flex-wrap justify-end gap-2">
                           <button className={secondaryButtonCls} type="button" disabled={agentBusy} onClick={refreshAgents}>
                             Refresh
+                          </button>
+                          <button
+                            className={secondaryButtonCls}
+                            type="button"
+                            disabled={agentBusy}
+                            onClick={() => agentImportInputRef.current?.click()}
+                          >
+                            Import
+                          </button>
+                          <button
+                            className={secondaryButtonCls}
+                            type="button"
+                            disabled={agentBusy || !agentState.definitions.length}
+                            onClick={exportAllAgents}
+                          >
+                            Export All
                           </button>
                           <button className={secondaryButtonCls} type="button" disabled={agentBusy} onClick={newAgentTemplate}>
                             New Template
@@ -1279,6 +1374,19 @@ export default function SettingsDialog({
                                     <div className="truncate text-[13px] font-semibold text-[#202124]">{agent.name}</div>
                                     <div className="mt-0.5 truncate text-[11px] text-[#7a8088]">
                                       {agent.kind} / {agent.description || agent.path}
+                                    </div>
+                                    <div className="mt-1 flex flex-wrap gap-1 text-[10px] text-[#8a9099]">
+                                      <span className="rounded bg-[#eef1f5] px-1.5 py-0.5">
+                                        runs {agent.runtime.run_count}
+                                      </span>
+                                      <span className="rounded bg-[#eef1f5] px-1.5 py-0.5">
+                                        tokens {agent.runtime.total_tokens.toLocaleString()}
+                                      </span>
+                                      {agent.runtime.error_count > 0 && (
+                                        <span className="rounded bg-[#fff1f0] px-1.5 py-0.5 text-[#b42318]">
+                                          errors {agent.runtime.error_count}
+                                        </span>
+                                      )}
                                     </div>
                                     {agent.invalid_tools.length ? (
                                       <div className="mt-0.5 truncate text-[11px] text-[#b42318]">
@@ -1306,7 +1414,7 @@ export default function SettingsDialog({
                                 onChange={(e) => setAgentFileName(e.target.value)}
                               />
                             </Field>
-                            <div className="mt-[22px] flex gap-2">
+                            <div className="mt-[22px] flex flex-wrap gap-2">
                               <button
                                 className={secondaryButtonCls}
                                 type="button"
@@ -1314,6 +1422,14 @@ export default function SettingsDialog({
                                 onClick={validateAgentJson}
                               >
                                 Validate
+                              </button>
+                              <button
+                                className={secondaryButtonCls}
+                                type="button"
+                                disabled={agentBusy || !agentJson.trim()}
+                                onClick={exportCurrentAgentJson}
+                              >
+                                Export
                               </button>
                               <button
                                 className="inline-flex h-9 items-center justify-center rounded-md bg-[#111827] px-4 text-[12px] font-medium text-white transition hover:bg-[#2b3442] disabled:cursor-not-allowed disabled:bg-[#b8bec8]"
@@ -1336,6 +1452,43 @@ export default function SettingsDialog({
                               setAgentValidation(null);
                             }}
                           />
+
+                          {selectedAgentDefinition && (
+                            <div className="mt-3 grid gap-2 rounded-lg border border-[#e2e5ea] bg-white p-3 text-[12px] text-[#6f7782] sm:grid-cols-4">
+                              <div>
+                                <div className="text-[11px] text-[#8a9099]">Runs</div>
+                                <div className="mt-1 font-semibold text-[#202124]">
+                                  {selectedAgentDefinition.runtime.run_count.toLocaleString()}
+                                </div>
+                              </div>
+                              <div>
+                                <div className="text-[11px] text-[#8a9099]">Tokens</div>
+                                <div className="mt-1 font-semibold text-[#202124]">
+                                  {selectedAgentDefinition.runtime.total_tokens.toLocaleString()}
+                                </div>
+                              </div>
+                              <div>
+                                <div className="text-[11px] text-[#8a9099]">Errors</div>
+                                <div className="mt-1 font-semibold text-[#202124]">
+                                  {selectedAgentDefinition.runtime.error_count.toLocaleString()}
+                                </div>
+                              </div>
+                              <div>
+                                <div className="text-[11px] text-[#8a9099]">Last Used</div>
+                                <div className="mt-1 font-semibold text-[#202124]">
+                                  {formatTime(selectedAgentDefinition.runtime.last_used_at || 0)}
+                                </div>
+                              </div>
+                              {selectedAgentDefinition.runtime.last_error && (
+                                <div className="min-w-0 sm:col-span-4">
+                                  <div className="text-[11px] text-[#8a9099]">Last Error</div>
+                                  <div className="mt-1 break-words text-[#b42318]">
+                                    {selectedAgentDefinition.runtime.last_error}
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          )}
 
                           <div className="mt-3 flex flex-wrap items-center gap-2">
                             {agentFile && (

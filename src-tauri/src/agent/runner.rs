@@ -69,6 +69,7 @@ pub async fn run_turn_with_options(
             .max_total_tokens
             .map(|total| budget::TokenBudgetState::new(Some(total)))
     });
+    custom::record_runtime_start(state, &selected_agents.definitions);
     // 捕获本轮的目标会话 id：即便用户中途切换会话，写入也始终落到这一段对话
     let sid = state.sessions.lock().unwrap().active.clone();
 
@@ -181,6 +182,7 @@ pub async fn run_turn_with_options(
                 state.persist_sessions();
 
                 system = prompt::build(state, &settings, &persona_text, session_summary.as_deref());
+                apply_system_overlay(&mut system, Some(&selected_agents.prompt_overlay));
                 apply_system_overlay(&mut system, options.system_overlay.as_deref());
                 current_budget = budget::history_budget(&settings, &system, &tools_schema, &msgs);
                 removed_messages = context::trim_collect_removed_by_tokens(
@@ -238,7 +240,7 @@ pub async fn run_turn_with_options(
 
         let _ = app.emit("assistant-start", ());
 
-        let turn = llm::stream_completion(
+        let turn = match llm::stream_completion(
             &state.http,
             &settings,
             &full,
@@ -248,12 +250,25 @@ pub async fn run_turn_with_options(
             },
             &state.cancel,
         )
-        .await?;
+        .await
+        {
+            Ok(turn) => turn,
+            Err(err) => {
+                custom::record_runtime_error(state, &selected_agents.definitions, &err);
+                return Err(err);
+            }
+        };
+
+        let estimated_usage = budget::estimate_messages_tokens(&full)
+            .saturating_add(budget::estimate_text_tokens(&turn.content));
+        let agent_usage_tokens = turn
+            .usage
+            .and_then(|usage| usage.total_or_sum())
+            .unwrap_or(estimated_usage);
+        custom::record_runtime_usage(state, &selected_agents.definitions, agent_usage_tokens);
 
         if let Some(budget_state) = &mut turn_budget {
-            let estimated = budget::estimate_messages_tokens(&full)
-                .saturating_add(budget::estimate_text_tokens(&turn.content));
-            budget_state.record_usage_or_estimate(turn.usage, estimated);
+            budget_state.record_usage_or_estimate(turn.usage, estimated_usage);
             if let Some(run_id) = &options.workflow_run_id {
                 let _ = workflow_journal::append(
                     state,

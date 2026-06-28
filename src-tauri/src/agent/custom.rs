@@ -1,10 +1,11 @@
-use std::collections::{HashSet, VecDeque};
+use std::collections::{BTreeMap, HashSet, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
 const AGENTS_DIR: &str = ".demiurge/agents";
+const AGENT_STATS_FILE: &str = ".demiurge/agent_stats.json";
 const MAX_TEXT_CHARS: usize = 16_000;
 const MAX_TEAM_DEPTH: usize = 8;
 
@@ -62,12 +63,30 @@ pub struct AgentDefinitionInfo {
     pub budget: Option<AgentBudget>,
     pub handoff_format: String,
     pub members: Vec<String>,
+    pub runtime: AgentRuntimeStats,
 }
 
 #[derive(Clone, Debug, Serialize)]
 pub struct AgentPanelState {
     pub definitions: Vec<AgentDefinitionInfo>,
     pub agents_dir: String,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct AgentRuntimeStats {
+    pub run_count: u64,
+    pub total_tokens: u64,
+    pub error_count: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_used_at: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_error: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+struct AgentStatsFile {
+    #[serde(default)]
+    agents: BTreeMap<String, AgentRuntimeStats>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -103,6 +122,15 @@ pub fn ensure_dir(state: &crate::AppState) -> Result<PathBuf, String> {
     let dir = sandbox.join(AGENTS_DIR);
     fs::create_dir_all(&dir).map_err(|e| format!("创建 Agent 目录失败：{e}"))?;
     Ok(dir)
+}
+
+fn stats_path(state: &crate::AppState) -> Result<PathBuf, String> {
+    let sandbox = state.sandbox_dir.lock().unwrap().clone();
+    let path = sandbox.join(AGENT_STATS_FILE);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|e| format!("创建 Agent 统计目录失败：{e}"))?;
+    }
+    Ok(path)
 }
 
 pub fn panel_state(state: &crate::AppState) -> AgentPanelState {
@@ -193,12 +221,70 @@ pub fn list_definitions(state: &crate::AppState) -> Vec<AgentDefinitionInfo> {
         return Vec::new();
     };
     let valid_tools = valid_tool_names();
+    let stats = load_stats(state).unwrap_or_default();
     let mut out = entries
         .filter_map(Result::ok)
         .filter_map(|entry| definition_from_path(&entry.path(), &valid_tools).ok())
         .collect::<Vec<_>>();
+    for def in &mut out {
+        if let Some(runtime) = stats.agents.get(&def.name) {
+            def.runtime = runtime.clone();
+        }
+    }
     out.sort_by(|a, b| a.name.cmp(&b.name));
     out
+}
+
+pub fn record_runtime_start(state: &crate::AppState, definitions: &[AgentDefinitionInfo]) {
+    if definitions.is_empty() {
+        return;
+    }
+    let _ = update_stats(state, |stats| {
+        let now = crate::store::now_millis();
+        for def in definitions {
+            let entry = stats.agents.entry(def.name.clone()).or_default();
+            entry.run_count = entry.run_count.saturating_add(1);
+            entry.last_used_at = Some(now);
+        }
+    });
+}
+
+pub fn record_runtime_usage(
+    state: &crate::AppState,
+    definitions: &[AgentDefinitionInfo],
+    tokens: usize,
+) {
+    if definitions.is_empty() || tokens == 0 {
+        return;
+    }
+    let _ = update_stats(state, |stats| {
+        let now = crate::store::now_millis();
+        for def in definitions {
+            let entry = stats.agents.entry(def.name.clone()).or_default();
+            entry.total_tokens = entry.total_tokens.saturating_add(tokens as u64);
+            entry.last_used_at = Some(now);
+        }
+    });
+}
+
+pub fn record_runtime_error(
+    state: &crate::AppState,
+    definitions: &[AgentDefinitionInfo],
+    error: &str,
+) {
+    if definitions.is_empty() {
+        return;
+    }
+    let _ = update_stats(state, |stats| {
+        let now = crate::store::now_millis();
+        let brief = cap_chars(error.to_string(), 800);
+        for def in definitions {
+            let entry = stats.agents.entry(def.name.clone()).or_default();
+            entry.error_count = entry.error_count.saturating_add(1);
+            entry.last_used_at = Some(now);
+            entry.last_error = Some(brief.clone());
+        }
+    });
 }
 
 pub fn load_agent(state: &crate::AppState, name: &str) -> Result<AgentDefinitionInfo, String> {
@@ -304,7 +390,33 @@ fn definition_from_path(
         budget: parsed.budget,
         handoff_format: cap_chars(parsed.handoff_format, MAX_TEXT_CHARS / 2),
         members: parsed.members,
+        runtime: AgentRuntimeStats::default(),
     })
+}
+
+fn load_stats(state: &crate::AppState) -> Result<AgentStatsFile, String> {
+    let path = stats_path(state)?;
+    if !path.exists() {
+        return Ok(AgentStatsFile::default());
+    }
+    let raw = fs::read_to_string(&path).map_err(|e| format!("读取 Agent 统计失败：{e}"))?;
+    serde_json::from_str(&raw).map_err(|e| format!("解析 Agent 统计失败：{e}"))
+}
+
+fn save_stats(state: &crate::AppState, stats: &AgentStatsFile) -> Result<(), String> {
+    let path = stats_path(state)?;
+    let raw =
+        serde_json::to_string_pretty(stats).map_err(|e| format!("序列化 Agent 统计失败：{e}"))?;
+    fs::write(&path, raw).map_err(|e| format!("保存 Agent 统计失败：{e}"))
+}
+
+fn update_stats(
+    state: &crate::AppState,
+    mut update: impl FnMut(&mut AgentStatsFile),
+) -> Result<(), String> {
+    let mut stats = load_stats(state).unwrap_or_default();
+    update(&mut stats);
+    save_stats(state, &stats)
 }
 
 fn find_agent_path(dir: &Path, requested: &str) -> Option<PathBuf> {
@@ -524,5 +636,15 @@ mod tests {
         );
         assert!(!validation.ok);
         assert_eq!(validation.errors.len(), 2);
+    }
+
+    #[test]
+    fn runtime_stats_accumulate_safely() {
+        let mut stats = AgentStatsFile::default();
+        let entry = stats.agents.entry("researcher".to_string()).or_default();
+        entry.run_count = entry.run_count.saturating_add(1);
+        entry.total_tokens = entry.total_tokens.saturating_add(1200);
+        assert_eq!(stats.agents["researcher"].run_count, 1);
+        assert_eq!(stats.agents["researcher"].total_tokens, 1200);
     }
 }
