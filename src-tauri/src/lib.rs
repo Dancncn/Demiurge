@@ -148,6 +148,7 @@ async fn send(app: AppHandle, state: State<'_, AppState>, text: String) -> Resul
                         system_overlay: Some(system_overlay),
                         stored_user_text: Some(stored_user_text),
                         workflow_run_id: None,
+                        agent_names: Vec::new(),
                     },
                 )
                 .await
@@ -186,6 +187,7 @@ async fn send(app: AppHandle, state: State<'_, AppState>, text: String) -> Resul
                 system_overlay: Some(overlay),
                 stored_user_text: None,
                 workflow_run_id: Some(run_id),
+                agent_names: Vec::new(),
             },
         )
         .await
@@ -206,6 +208,7 @@ async fn send(app: AppHandle, state: State<'_, AppState>, text: String) -> Resul
                 system_overlay: Some(overlay),
                 stored_user_text: None,
                 workflow_run_id: Some(run_id),
+                agent_names: Vec::new(),
             },
         )
         .await
@@ -214,6 +217,36 @@ async fn send(app: AppHandle, state: State<'_, AppState>, text: String) -> Resul
         agent::run_turn(&app, st, text).await
     };
     let res = if res.is_ok() && should_drive_goal && !st.cancel.load(Ordering::Relaxed) {
+        agent::goal::drive_after_turn(&app, st).await
+    } else {
+        res
+    };
+    st.busy.store(false, Ordering::SeqCst);
+    res
+}
+
+#[tauri::command]
+async fn send_with_agents(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    text: String,
+    agent_names: Vec<String>,
+) -> Result<(), String> {
+    let st = state.inner();
+    if st.busy.swap(true, Ordering::SeqCst) {
+        return Err("正在处理上一条消息，请稍候。".to_string());
+    }
+    let res = agent::run_turn_with_options(
+        &app,
+        st,
+        text,
+        agent::TurnOptions {
+            agent_names,
+            ..agent::TurnOptions::default()
+        },
+    )
+    .await;
+    let res = if res.is_ok() && !st.cancel.load(Ordering::Relaxed) {
         agent::goal::drive_after_turn(&app, st).await
     } else {
         res
@@ -482,6 +515,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             send,
+            send_with_agents,
             interrupt,
             respond_confirm,
             get_settings,

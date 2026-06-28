@@ -22,6 +22,8 @@ import type {
 
 // ---- 命令 ----
 export const send = (text: string) => invoke<void>("send", { text });
+export const sendWithAgents = (text: string, agentNames: string[]) =>
+  invoke<void>("send_with_agents", { text, agentNames });
 export const interrupt = () => invoke<void>("interrupt");
 export const respondConfirm = (id: string, allow: boolean, scope: PermissionScope) =>
   invoke<void>("respond_confirm", { id, allow, scope });

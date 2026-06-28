@@ -197,6 +197,7 @@ pub async fn drive_after_turn(
                         system_overlay: Some(overlay),
                         stored_user_text: Some(stored_user_text),
                         workflow_run_id: None,
+                        agent_names: Vec::new(),
                     },
                 )
                 .await?;
@@ -226,6 +227,7 @@ pub async fn drive_after_turn(
                         system_overlay: Some(overlay),
                         stored_user_text: Some("[Goal budget limit]".to_string()),
                         workflow_run_id: None,
+                        agent_names: Vec::new(),
                     },
                 )
                 .await?;

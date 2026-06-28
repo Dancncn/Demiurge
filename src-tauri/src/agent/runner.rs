@@ -6,7 +6,7 @@ use serde_json::json;
 use tauri::{AppHandle, Emitter};
 
 use super::conversation::Message;
-use super::{budget, context, goal, memory, prompt, summary, workflow_journal};
+use super::{budget, context, custom, goal, memory, prompt, summary, workflow_journal};
 use crate::{llm, pack, permission, store, tools};
 use permission::PermissionRequest;
 
@@ -29,6 +29,7 @@ pub struct TurnOptions {
     pub system_overlay: Option<String>,
     pub stored_user_text: Option<String>,
     pub workflow_run_id: Option<String>,
+    pub agent_names: Vec<String>,
 }
 
 pub async fn run_turn(
@@ -47,7 +48,18 @@ pub async fn run_turn_with_options(
 ) -> Result<(), String> {
     state.cancel.store(false, Ordering::Relaxed);
 
-    let settings = state.settings.lock().unwrap().clone();
+    let mut settings = state.settings.lock().unwrap().clone();
+    let selected_agents = custom::resolve_selected(state, &options.agent_names)?;
+    if let Some(max_input_tokens) = selected_agents.max_input_tokens {
+        settings.max_input_tokens = settings.max_input_tokens.min(max_input_tokens);
+    }
+    if let Some(reserved_output_tokens) = selected_agents.reserved_output_tokens {
+        settings.reserved_output_tokens = settings
+            .reserved_output_tokens
+            .min(reserved_output_tokens)
+            .min(settings.max_input_tokens.saturating_sub(512));
+    }
+    let max_steps = selected_agents.max_steps.unwrap_or(MAX_STEPS).min(MAX_STEPS);
     // 捕获本轮的目标会话 id：即便用户中途切换会话，写入也始终落到这一段对话
     let sid = state.sessions.lock().unwrap().active.clone();
 
@@ -58,7 +70,16 @@ pub async fn run_turn_with_options(
         Err(_) => String::new(),
     };
     let profile = llm::ProviderProfile::for_kind(settings.provider);
-    let tools_schema = tools::main_schemas_json_for(profile.tool_schema_dialect);
+    let allowed_tool_names = selected_agents
+        .allowed_tools
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    let tools_schema = if allowed_tool_names.is_empty() {
+        tools::main_schemas_json_for(profile.tool_schema_dialect)
+    } else {
+        tools::schemas_json_for_names(profile.tool_schema_dialect, &allowed_tool_names)
+    };
     let stored_user_text = options
         .stored_user_text
         .clone()
@@ -69,7 +90,14 @@ pub async fn run_turn_with_options(
             state,
             run_id,
             "run_started",
-            json!({ "user_text": stored_user_text.clone() }),
+            json!({
+                "user_text": stored_user_text.clone(),
+                "agents": selected_agents
+                    .definitions
+                    .iter()
+                    .map(|agent| agent.name.clone())
+                    .collect::<Vec<_>>()
+            }),
         );
     }
 
@@ -95,7 +123,7 @@ pub async fn run_turn_with_options(
     }
     state.persist_sessions();
 
-    for _step in 0..MAX_STEPS {
+    for _step in 0..max_steps {
         if state.cancel.load(Ordering::Relaxed) {
             let _ = app.emit("assistant-interrupted", ());
             break;
@@ -112,6 +140,7 @@ pub async fn run_turn_with_options(
         };
 
         let mut system = prompt::build(state, &settings, &persona_text, session_summary.as_deref());
+        apply_system_overlay(&mut system, Some(&selected_agents.prompt_overlay));
         apply_system_overlay(&mut system, options.system_overlay.as_deref());
         let mut current_budget = budget::history_budget(&settings, &system, &tools_schema, &msgs);
         let mut removed_messages = context::trim_collect_removed_by_tokens(
