@@ -4,7 +4,7 @@ import tailwindcss from "@tailwindcss/vite";
 import { fileURLToPath, URL } from "node:url";
 
 // 与 tauri.conf.json 的 devUrl 对齐
-const DEV_PORT = 41430;
+const DEV_PORT = 1420;
 const host = process.env.TAURI_DEV_HOST;
 
 export default defineConfig({
