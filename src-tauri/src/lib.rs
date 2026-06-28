@@ -12,11 +12,11 @@ mod voice;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use serde::Serialize;
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::sync::oneshot;
 
 use agent::conversation::Message;
@@ -36,6 +36,8 @@ pub struct AppState {
     pub session_permission_rules: Mutex<HashMap<String, PermissionRule>>,
     /// 本进程内最近 edit_file 修改记录，用于 undo_edit 安全撤销
     pub edit_undo_stack: Mutex<Vec<tools::EditUndoEntry>>,
+    pub workflow_runs: Mutex<Vec<agent::workflow_runtime::WorkflowRunProgress>>,
+    pub workflow_cancels: Mutex<HashMap<String, Arc<AtomicBool>>>,
     /// 用户中断标志
     pub cancel: AtomicBool,
     /// 是否正在处理一轮对话（防止并发 send）
@@ -55,6 +57,8 @@ impl AppState {
             pending_confirms: Mutex::new(HashMap::new()),
             session_permission_rules: Mutex::new(HashMap::new()),
             edit_undo_stack: Mutex::new(Vec::new()),
+            workflow_runs: Mutex::new(Vec::new()),
+            workflow_cancels: Mutex::new(HashMap::new()),
             cancel: AtomicBool::new(false),
             busy: AtomicBool::new(false),
             data_dir: Mutex::new(PathBuf::new()),
@@ -105,14 +109,82 @@ async fn send(app: AppHandle, state: State<'_, AppState>, text: String) -> Resul
         return Err("正在处理上一条消息，请稍候。".to_string());
     }
     let trimmed = text.trim();
+    let mut should_drive_goal = false;
     let res = if trimmed == "/dream" || trimmed.starts_with("/dream ") {
+        should_drive_goal = true;
         agent::dream::run_manual_dream(&app, st, text).await
+    } else if trimmed == "/compact" || trimmed.starts_with("/compact ") {
+        should_drive_goal = true;
+        agent::collapse::run_manual_compact(&app, st, text).await
+    } else if trimmed == "/goal" || trimmed.starts_with("/goal ") {
+        match agent::goal::handle_slash(st, trimmed) {
+            Ok(agent::goal::GoalSlashOutcome::Respond(body)) => {
+                let _ = app.emit("assistant-done", body);
+                Ok(())
+            }
+            Ok(agent::goal::GoalSlashOutcome::Query {
+                stored_user_text,
+                system_overlay,
+                ..
+            }) => {
+                should_drive_goal = true;
+                agent::run_turn_with_options(
+                    &app,
+                    st,
+                    text,
+                    agent::TurnOptions {
+                        system_overlay: Some(system_overlay),
+                        stored_user_text: Some(stored_user_text),
+                        workflow_run_id: None,
+                    },
+                )
+                .await
+            }
+            Err(e) => Err(e),
+        }
+    } else if trimmed == "/workflows" {
+        should_drive_goal = true;
+        let runs = agent::workflow_journal::list(st);
+        let body = if runs.is_empty() {
+            "暂无 workflow journal。使用 /ultracode <任务> 会自动创建 run。".to_string()
+        } else {
+            let mut out = String::from("Workflow runs:\n");
+            for run in runs.iter().take(20) {
+                out.push_str(&format!(
+                    "- `{}` updated_at={} journal={}\n",
+                    run.run_id, run.updated_at, run.journal_path
+                ));
+            }
+            out
+        };
+        let _ = app.emit("assistant-done", body);
+        Ok(())
+    } else if trimmed.starts_with("/workflow resume ") {
+        let run_id = trimmed
+            .trim_start_matches("/workflow resume ")
+            .trim()
+            .to_string();
+        let overlay = agent::workflow_journal::resume_overlay(st, &run_id)?;
+        should_drive_goal = true;
+        agent::run_turn_with_options(
+            &app,
+            st,
+            text,
+            agent::TurnOptions {
+                system_overlay: Some(overlay),
+                stored_user_text: None,
+                workflow_run_id: Some(run_id),
+            },
+        )
+        .await
     } else if trimmed == "/ultracode" || trimmed.starts_with("/ultracode ") {
+        should_drive_goal = true;
         let task = trimmed
             .strip_prefix("/ultracode")
             .unwrap_or("")
             .trim()
             .to_string();
+        let run_id = agent::workflow_journal::new_run_id();
         let overlay = agent::ultracode::overlay(&task);
         agent::run_turn_with_options(
             &app,
@@ -121,11 +193,18 @@ async fn send(app: AppHandle, state: State<'_, AppState>, text: String) -> Resul
             agent::TurnOptions {
                 system_overlay: Some(overlay),
                 stored_user_text: None,
+                workflow_run_id: Some(run_id),
             },
         )
         .await
     } else {
+        should_drive_goal = true;
         agent::run_turn(&app, st, text).await
+    };
+    let res = if res.is_ok() && should_drive_goal && !st.cancel.load(Ordering::Relaxed) {
+        agent::goal::drive_after_turn(&app, st).await
+    } else {
+        res
     };
     st.busy.store(false, Ordering::SeqCst);
     res
@@ -261,6 +340,31 @@ async fn ocr_download_models(
     ocr::download_models(app, state.inner(), source).await
 }
 
+#[tauri::command]
+fn workflow_panel_state(state: State<'_, AppState>) -> agent::workflow_runtime::WorkflowPanelState {
+    agent::workflow_runtime::panel_state(state.inner())
+}
+
+#[tauri::command]
+fn workflow_run(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    name: String,
+) -> Result<String, String> {
+    let run_id = agent::workflow_runtime::launch(&app, state.inner(), &name)?;
+    let app_for_task = app.clone();
+    let run_id_for_task = run_id.clone();
+    tauri::async_runtime::spawn(async move {
+        agent::workflow_runtime::run_launched(app_for_task, run_id_for_task, name).await;
+    });
+    Ok(run_id)
+}
+
+#[tauri::command]
+fn workflow_stop(app: AppHandle, state: State<'_, AppState>, run_id: String) -> Result<(), String> {
+    agent::workflow_runtime::stop(&app, state.inner(), &run_id)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let http = reqwest::Client::builder()
@@ -310,6 +414,9 @@ pub fn run() {
             open_sandbox,
             ocr_model_status,
             ocr_download_models,
+            workflow_panel_state,
+            workflow_run,
+            workflow_stop,
             voice::voice_status,
             voice::voice_transcribe,
             voice::voice_synthesize,

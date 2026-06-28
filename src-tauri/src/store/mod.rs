@@ -141,6 +141,8 @@ pub struct Session {
     pub title: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub summary: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub goal: Option<crate::agent::goal::GoalState>,
     pub messages: Vec<Message>,
     pub updated_at: u64,
 }
@@ -151,6 +153,7 @@ impl Session {
             id: new_session_id(),
             title: "新对话".to_string(),
             summary: None,
+            goal: None,
             messages: Vec::new(),
             updated_at: now_millis(),
         }

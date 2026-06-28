@@ -6,7 +6,7 @@ use serde_json::json;
 use tauri::{AppHandle, Emitter};
 
 use super::conversation::Message;
-use super::{budget, context, memory, prompt, summary};
+use super::{budget, context, goal, memory, prompt, summary, workflow_journal};
 use crate::{llm, pack, permission, store, tools};
 use permission::PermissionRequest;
 
@@ -28,6 +28,7 @@ fn truncate_ui(s: &str) -> String {
 pub struct TurnOptions {
     pub system_overlay: Option<String>,
     pub stored_user_text: Option<String>,
+    pub workflow_run_id: Option<String>,
 }
 
 pub async fn run_turn(
@@ -57,12 +58,20 @@ pub async fn run_turn_with_options(
         Err(_) => String::new(),
     };
     let profile = llm::ProviderProfile::for_kind(settings.provider);
-    let tools_schema = tools::schemas_json_for(profile.tool_schema_dialect);
+    let tools_schema = tools::main_schemas_json_for(profile.tool_schema_dialect);
     let stored_user_text = options
         .stored_user_text
         .clone()
         .unwrap_or_else(|| user_text.clone());
     let original_user_text = stored_user_text.clone();
+    if let Some(run_id) = &options.workflow_run_id {
+        let _ = workflow_journal::append(
+            state,
+            run_id,
+            "run_started",
+            json!({ "user_text": stored_user_text.clone() }),
+        );
+    }
 
     // 向目标会话追加一条消息（并刷新 updated_at）
     let push = |msg: Message| {
@@ -188,6 +197,14 @@ pub async fn run_turn_with_options(
                 push(Message::assistant_text(turn.content));
             }
             state.persist_sessions();
+            if let Some(run_id) = &options.workflow_run_id {
+                let _ = workflow_journal::append(
+                    state,
+                    run_id,
+                    "run_interrupted",
+                    json!({ "reason": "model_interrupted" }),
+                );
+            }
             let _ = app.emit("assistant-interrupted", ());
             return Ok(());
         }
@@ -196,7 +213,17 @@ pub async fn run_turn_with_options(
         if turn.tool_calls.is_empty() {
             let assistant_text = turn.content.clone();
             push(Message::assistant_text(assistant_text.clone()));
+            goal::add_estimated_tokens(state, &sid, &original_user_text);
+            goal::add_estimated_tokens(state, &sid, &assistant_text);
             state.persist_sessions();
+            if let Some(run_id) = &options.workflow_run_id {
+                let _ = workflow_journal::append(
+                    state,
+                    run_id,
+                    "run_done",
+                    json!({ "assistant_text": assistant_text.clone() }),
+                );
+            }
             let _ = app.emit("assistant-done", assistant_text.clone());
 
             let sandbox_dir = state.sandbox_dir.lock().unwrap().clone();
@@ -255,6 +282,14 @@ pub async fn run_turn_with_options(
                     "output_policy": tool_def.as_ref().map(|t| t.output_policy),
                 }),
             );
+            if let Some(run_id) = &options.workflow_run_id {
+                let _ = workflow_journal::append(
+                    state,
+                    run_id,
+                    "tool_started",
+                    json!({ "tool_call_id": tc.id.clone(), "name": name.clone(), "args": args.clone() }),
+                );
+            }
 
             // 权限门（confirm 等待期间若用户点「停止」，interrupt 会立即唤醒并返回 deny-once）
             let default_policy = tools::permission_policy_for(&name);
@@ -321,7 +356,22 @@ pub async fn run_turn_with_options(
                 "tool-end",
                 json!({ "tool_call_id": tc.id, "name": name, "ok": allowed, "result": truncate_ui(&result) }),
             );
+            if let Some(run_id) = &options.workflow_run_id {
+                let _ = workflow_journal::append(
+                    state,
+                    run_id,
+                    "tool_done",
+                    json!({
+                        "tool_call_id": tc.id.clone(),
+                        "name": name.clone(),
+                        "ok": allowed,
+                        "result": truncate_ui(&result),
+                    }),
+                );
+            }
 
+            goal::add_estimated_tokens(state, &sid, &tc.function.arguments);
+            goal::add_estimated_tokens(state, &sid, &truncate_ui(&result));
             push(Message::tool_result(tc.id.clone(), name, result));
         }
 
@@ -329,6 +379,14 @@ pub async fn run_turn_with_options(
 
         // 工具执行阶段被中断：补齐配对后结束本轮
         if state.cancel.load(Ordering::Relaxed) {
+            if let Some(run_id) = &options.workflow_run_id {
+                let _ = workflow_journal::append(
+                    state,
+                    run_id,
+                    "run_interrupted",
+                    json!({ "reason": "user_cancelled_during_tools" }),
+                );
+            }
             let _ = app.emit("assistant-interrupted", ());
             return Ok(());
         }
@@ -340,6 +398,14 @@ pub async fn run_turn_with_options(
         "assistant-done",
         "（已达到本轮工具调用次数上限）".to_string(),
     );
+    if let Some(run_id) = &options.workflow_run_id {
+        let _ = workflow_journal::append(
+            state,
+            run_id,
+            "run_stopped",
+            json!({ "reason": "max_steps" }),
+        );
+    }
     state.persist_sessions();
     Ok(())
 }

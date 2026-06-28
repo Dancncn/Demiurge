@@ -73,6 +73,41 @@ export interface VoiceStatus {
   reason: string;
 }
 
+export type WorkflowStatus = "running" | "done" | "failed" | "killed" | "journaled";
+
+export interface WorkflowDefinitionInfo {
+  name: string;
+  description: string;
+  path: string;
+}
+
+export interface WorkflowAgentProgress {
+  id: number;
+  label: string;
+  phase?: string;
+  status: WorkflowStatus;
+  result?: string;
+  error?: string;
+}
+
+export interface WorkflowRunProgress {
+  run_id: string;
+  name: string;
+  status: WorkflowStatus;
+  current_phase?: string;
+  agents: WorkflowAgentProgress[];
+  logs: string[];
+  journal_path: string;
+  started_at: number;
+  updated_at: number;
+  error?: string;
+}
+
+export interface WorkflowPanelState {
+  definitions: WorkflowDefinitionInfo[];
+  runs: WorkflowRunProgress[];
+}
+
 export interface PackManifest {
   id: string;
   name: string;

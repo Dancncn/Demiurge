@@ -1,0 +1,650 @@
+use std::collections::HashSet;
+use std::fs;
+use std::future::Future;
+use std::path::PathBuf;
+use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+
+use serde::{Deserialize, Serialize};
+use serde_json::json;
+use tauri::{AppHandle, Emitter, Manager};
+
+use super::subagent::{SubagentContextMode, SubagentRequest};
+use super::{subagent, workflow_journal};
+use crate::store;
+
+const WORKFLOW_DIR: &str = ".demiurge/workflows";
+const MAX_PARALLEL_ITEMS: usize = 8;
+
+type StepFuture<'a> = Pin<Box<dyn Future<Output = Result<(), String>> + Send + 'a>>;
+
+#[derive(Clone, Debug, Serialize)]
+pub struct WorkflowDefinitionInfo {
+    pub name: String,
+    pub description: String,
+    pub path: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct WorkflowPanelState {
+    pub definitions: Vec<WorkflowDefinitionInfo>,
+    pub runs: Vec<WorkflowRunProgress>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct WorkflowRunProgress {
+    pub run_id: String,
+    pub name: String,
+    pub status: WorkflowStatus,
+    pub current_phase: Option<String>,
+    pub agents: Vec<WorkflowAgentProgress>,
+    pub logs: Vec<String>,
+    pub journal_path: String,
+    pub started_at: u64,
+    pub updated_at: u64,
+    pub error: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkflowStatus {
+    Running,
+    Done,
+    Failed,
+    Killed,
+    Journaled,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct WorkflowAgentProgress {
+    pub id: u64,
+    pub label: String,
+    pub phase: Option<String>,
+    pub status: WorkflowStatus,
+    pub result: Option<String>,
+    pub error: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct WorkflowFile {
+    name: Option<String>,
+    description: Option<String>,
+    steps: Vec<WorkflowStep>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum WorkflowStep {
+    Log {
+        message: String,
+    },
+    Phase {
+        name: String,
+        steps: Vec<WorkflowStep>,
+    },
+    Agent {
+        prompt: String,
+        label: Option<String>,
+        agent_type: Option<String>,
+        context_mode: Option<String>,
+    },
+    Parallel {
+        items: Vec<WorkflowStep>,
+    },
+    Pipeline {
+        items: Vec<WorkflowStep>,
+    },
+    Budget {
+        total: Option<usize>,
+    },
+}
+
+pub fn ensure_dir(state: &crate::AppState) -> Result<PathBuf, String> {
+    let sandbox = state.sandbox_dir.lock().unwrap().clone();
+    let dir = sandbox.join(WORKFLOW_DIR);
+    fs::create_dir_all(&dir).map_err(|e| format!("创建 workflow 目录失败：{e}"))?;
+    Ok(dir)
+}
+
+pub fn panel_state(state: &crate::AppState) -> WorkflowPanelState {
+    let definitions = list_definitions(state);
+    let mut runs = state.workflow_runs.lock().unwrap().clone();
+    let seen = runs
+        .iter()
+        .map(|run| run.run_id.clone())
+        .collect::<HashSet<_>>();
+    for info in workflow_journal::list(state) {
+        if seen.contains(&info.run_id) {
+            continue;
+        }
+        runs.push(WorkflowRunProgress {
+            run_id: info.run_id,
+            name: "journal".to_string(),
+            status: WorkflowStatus::Journaled,
+            current_phase: None,
+            agents: Vec::new(),
+            logs: Vec::new(),
+            journal_path: info.journal_path,
+            started_at: info.updated_at,
+            updated_at: info.updated_at,
+            error: None,
+        });
+    }
+    runs.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+    WorkflowPanelState { definitions, runs }
+}
+
+pub fn list_definitions(state: &crate::AppState) -> Vec<WorkflowDefinitionInfo> {
+    let Ok(dir) = ensure_dir(state) else {
+        return Vec::new();
+    };
+    let Ok(entries) = fs::read_dir(&dir) else {
+        return Vec::new();
+    };
+    let mut out = entries
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            let path = entry.path();
+            if path.extension().and_then(|s| s.to_str()) != Some("json") {
+                return None;
+            }
+            let raw = fs::read_to_string(&path).ok()?;
+            let parsed = serde_json::from_str::<WorkflowFile>(&raw).ok();
+            let name = parsed
+                .as_ref()
+                .and_then(|w| w.name.clone())
+                .or_else(|| path.file_stem().map(|s| s.to_string_lossy().to_string()))?;
+            Some(WorkflowDefinitionInfo {
+                name,
+                description: parsed.and_then(|w| w.description).unwrap_or_default(),
+                path: path.to_string_lossy().to_string(),
+            })
+        })
+        .collect::<Vec<_>>();
+    out.sort_by(|a, b| a.name.cmp(&b.name));
+    out
+}
+
+pub fn launch(app: &AppHandle, state: &crate::AppState, name: &str) -> Result<String, String> {
+    let (workflow, path) = load_workflow(state, name)?;
+    let run_id = workflow_journal::new_run_id();
+    let journal_path = state
+        .sandbox_dir
+        .lock()
+        .unwrap()
+        .join(".demiurge")
+        .join("workflow-runs")
+        .join(&run_id)
+        .join("journal.jsonl")
+        .to_string_lossy()
+        .to_string();
+    let now = store::now_millis();
+    let progress = WorkflowRunProgress {
+        run_id: run_id.clone(),
+        name: workflow.name.clone().unwrap_or_else(|| name.to_string()),
+        status: WorkflowStatus::Running,
+        current_phase: None,
+        agents: Vec::new(),
+        logs: vec![format!("loaded {}", path.display())],
+        journal_path,
+        started_at: now,
+        updated_at: now,
+        error: None,
+    };
+    state.workflow_runs.lock().unwrap().push(progress);
+    state
+        .workflow_cancels
+        .lock()
+        .unwrap()
+        .insert(run_id.clone(), Arc::new(AtomicBool::new(false)));
+    emit_update(app, state);
+    let _ = workflow_journal::append(
+        state,
+        &run_id,
+        "workflow_started",
+        json!({ "name": name, "path": path.to_string_lossy() }),
+    );
+    Ok(run_id)
+}
+
+pub async fn run_launched(app: AppHandle, run_id: String, name: String) {
+    let state = app.state::<crate::AppState>();
+    let result = async {
+        let (workflow, _) = load_workflow(state.inner(), &name)?;
+        for step in workflow.steps {
+            run_step(&app, state.inner(), &run_id, None, step).await?;
+            if is_cancelled(state.inner(), &run_id) {
+                mark_run(
+                    state.inner(),
+                    &run_id,
+                    WorkflowStatus::Killed,
+                    Some("用户停止 workflow".to_string()),
+                );
+                emit_update(&app, state.inner());
+                return Ok(());
+            }
+        }
+        mark_run(state.inner(), &run_id, WorkflowStatus::Done, None);
+        let _ = workflow_journal::append(state.inner(), &run_id, "workflow_done", json!({}));
+        emit_update(&app, state.inner());
+        Ok::<(), String>(())
+    }
+    .await;
+
+    if let Err(e) = result {
+        mark_run(
+            state.inner(),
+            &run_id,
+            WorkflowStatus::Failed,
+            Some(e.clone()),
+        );
+        let _ = workflow_journal::append(
+            state.inner(),
+            &run_id,
+            "workflow_failed",
+            json!({ "error": e }),
+        );
+        emit_update(&app, state.inner());
+    }
+    state.workflow_cancels.lock().unwrap().remove(&run_id);
+}
+
+pub fn stop(app: &AppHandle, state: &crate::AppState, run_id: &str) -> Result<(), String> {
+    let Some(flag) = state.workflow_cancels.lock().unwrap().get(run_id).cloned() else {
+        return Err("该 workflow 当前没有运行中的任务。".to_string());
+    };
+    flag.store(true, Ordering::Relaxed);
+    mark_run(
+        state,
+        run_id,
+        WorkflowStatus::Killed,
+        Some("用户请求停止".to_string()),
+    );
+    let _ = workflow_journal::append(state, run_id, "workflow_killed", json!({}));
+    emit_update(app, state);
+    Ok(())
+}
+
+fn run_step<'a>(
+    app: &'a AppHandle,
+    state: &'a crate::AppState,
+    run_id: &'a str,
+    phase: Option<String>,
+    step: WorkflowStep,
+) -> StepFuture<'a> {
+    Box::pin(async move {
+        if is_cancelled(state, run_id) {
+            return Ok(());
+        }
+        match step {
+            WorkflowStep::Log { message } => {
+                push_log(app, state, run_id, message.clone());
+                let _ =
+                    workflow_journal::append(state, run_id, "log", json!({ "message": message }));
+            }
+            WorkflowStep::Phase { name, steps } => {
+                set_phase(app, state, run_id, Some(name.clone()));
+                let _ = workflow_journal::append(
+                    state,
+                    run_id,
+                    "phase_started",
+                    json!({ "name": name }),
+                );
+                for child in steps {
+                    run_step(app, state, run_id, Some(name.clone()), child).await?;
+                }
+                let _ =
+                    workflow_journal::append(state, run_id, "phase_done", json!({ "name": name }));
+            }
+            WorkflowStep::Agent {
+                prompt,
+                label,
+                agent_type,
+                context_mode,
+            } => {
+                run_agent_step(
+                    app,
+                    state,
+                    run_id,
+                    phase,
+                    prompt,
+                    label,
+                    agent_type,
+                    context_mode,
+                )
+                .await?;
+            }
+            WorkflowStep::Parallel { items } => {
+                if items.len() > MAX_PARALLEL_ITEMS {
+                    return Err(format!(
+                        "parallel 最多支持 {MAX_PARALLEL_ITEMS} 个 item，当前 {} 个。",
+                        items.len()
+                    ));
+                }
+                let futures = items
+                    .into_iter()
+                    .map(|item| run_step(app, state, run_id, phase.clone(), item))
+                    .collect::<Vec<_>>();
+                let results = futures_util::future::join_all(futures).await;
+                for result in results {
+                    result?;
+                }
+            }
+            WorkflowStep::Pipeline { items } => {
+                for item in items {
+                    run_step(app, state, run_id, phase.clone(), item).await?;
+                }
+            }
+            WorkflowStep::Budget { total } => {
+                push_log(
+                    app,
+                    state,
+                    run_id,
+                    format!(
+                        "budget total set to {}",
+                        total
+                            .map(|n| n.to_string())
+                            .unwrap_or_else(|| "unlimited".to_string())
+                    ),
+                );
+                let _ =
+                    workflow_journal::append(state, run_id, "budget", json!({ "total": total }));
+            }
+        }
+        Ok(())
+    })
+}
+
+async fn run_agent_step(
+    app: &AppHandle,
+    state: &crate::AppState,
+    run_id: &str,
+    phase: Option<String>,
+    prompt: String,
+    label: Option<String>,
+    agent_type: Option<String>,
+    context_mode: Option<String>,
+) -> Result<(), String> {
+    let id = next_agent_id(state, run_id);
+    let label = label.unwrap_or_else(|| format!("agent-{id}"));
+    push_agent(app, state, run_id, id, label.clone(), phase.clone());
+    let _ = workflow_journal::append(
+        state,
+        run_id,
+        "agent_started",
+        json!({ "agent_id": id, "label": label, "phase": phase, "prompt": prompt }),
+    );
+    let mode = SubagentContextMode::parse(context_mode.as_deref());
+    let result = subagent::run(
+        state,
+        SubagentRequest {
+            prompt,
+            label: Some(label.clone()),
+            agent_type,
+            context_mode: mode,
+        },
+    )
+    .await;
+
+    match result {
+        Ok(text) => {
+            update_agent(
+                app,
+                state,
+                run_id,
+                id,
+                WorkflowStatus::Done,
+                Some(text.clone()),
+                None,
+            );
+            let _ = workflow_journal::append(
+                state,
+                run_id,
+                "agent_done",
+                json!({ "agent_id": id, "label": label, "result": text }),
+            );
+            Ok(())
+        }
+        Err(e) => {
+            update_agent(
+                app,
+                state,
+                run_id,
+                id,
+                WorkflowStatus::Failed,
+                None,
+                Some(e.clone()),
+            );
+            let _ = workflow_journal::append(
+                state,
+                run_id,
+                "agent_failed",
+                json!({ "agent_id": id, "label": label, "error": e }),
+            );
+            Err(e)
+        }
+    }
+}
+
+fn load_workflow(state: &crate::AppState, name: &str) -> Result<(WorkflowFile, PathBuf), String> {
+    let dir = ensure_dir(state)?;
+    let requested = name.trim();
+    if requested.is_empty() {
+        return Err("workflow 名称不能为空。".to_string());
+    }
+    let path = if let Some(path) = find_workflow_path(&dir, requested) {
+        path
+    } else {
+        let safe = sanitize_name(requested);
+        if safe.is_empty() {
+            return Err("workflow 名称至少需要包含一个字母、数字、下划线或连字符。".to_string());
+        }
+        dir.join(format!("{safe}.json"))
+    };
+    let raw = fs::read_to_string(&path)
+        .map_err(|e| format!("读取 workflow `{name}` 失败：{e}。路径：{}", path.display()))?;
+    let workflow = serde_json::from_str::<WorkflowFile>(&raw)
+        .map_err(|e| format!("解析 workflow JSON 失败：{e}"))?;
+    Ok((workflow, path))
+}
+
+fn find_workflow_path(dir: &PathBuf, requested: &str) -> Option<PathBuf> {
+    let requested_safe = sanitize_name(requested);
+    let entries = fs::read_dir(dir).ok()?;
+    for entry in entries.filter_map(Result::ok) {
+        let path = entry.path();
+        if path.extension().and_then(|s| s.to_str()) != Some("json") {
+            continue;
+        }
+        let stem = path.file_stem().map(|s| s.to_string_lossy().to_string());
+        if stem.as_deref() == Some(requested) || stem.as_deref() == Some(requested_safe.as_str()) {
+            return Some(path);
+        }
+        let Ok(raw) = fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(workflow) = serde_json::from_str::<WorkflowFile>(&raw) else {
+            continue;
+        };
+        if workflow
+            .name
+            .as_deref()
+            .map(|name| name == requested || sanitize_name(name) == requested_safe)
+            .unwrap_or(false)
+        {
+            return Some(path);
+        }
+    }
+    None
+}
+
+fn sanitize_name(name: &str) -> String {
+    name.trim()
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+                ch
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>()
+        .trim_matches('-')
+        .to_string()
+}
+
+fn is_cancelled(state: &crate::AppState, run_id: &str) -> bool {
+    state
+        .workflow_cancels
+        .lock()
+        .unwrap()
+        .get(run_id)
+        .map(|flag| flag.load(Ordering::Relaxed))
+        .unwrap_or(false)
+}
+
+fn next_agent_id(state: &crate::AppState, run_id: &str) -> u64 {
+    let runs = state.workflow_runs.lock().unwrap();
+    runs.iter()
+        .find(|run| run.run_id == run_id)
+        .map(|run| run.agents.iter().map(|a| a.id).max().unwrap_or(0) + 1)
+        .unwrap_or(1)
+}
+
+fn push_agent(
+    app: &AppHandle,
+    state: &crate::AppState,
+    run_id: &str,
+    id: u64,
+    label: String,
+    phase: Option<String>,
+) {
+    let mut runs = state.workflow_runs.lock().unwrap();
+    if let Some(run) = runs.iter_mut().find(|run| run.run_id == run_id) {
+        run.agents.push(WorkflowAgentProgress {
+            id,
+            label,
+            phase,
+            status: WorkflowStatus::Running,
+            result: None,
+            error: None,
+        });
+        run.updated_at = store::now_millis();
+    }
+    drop(runs);
+    emit_update(app, state);
+}
+
+fn update_agent(
+    app: &AppHandle,
+    state: &crate::AppState,
+    run_id: &str,
+    id: u64,
+    status: WorkflowStatus,
+    result: Option<String>,
+    error: Option<String>,
+) {
+    let mut runs = state.workflow_runs.lock().unwrap();
+    if let Some(run) = runs.iter_mut().find(|run| run.run_id == run_id) {
+        if let Some(agent) = run.agents.iter_mut().find(|agent| agent.id == id) {
+            agent.status = status;
+            agent.result = result.map(|s| cap_chars(&s, 1200));
+            agent.error = error;
+        }
+        run.updated_at = store::now_millis();
+    }
+    drop(runs);
+    emit_update(app, state);
+}
+
+fn set_phase(app: &AppHandle, state: &crate::AppState, run_id: &str, phase: Option<String>) {
+    let mut runs = state.workflow_runs.lock().unwrap();
+    if let Some(run) = runs.iter_mut().find(|run| run.run_id == run_id) {
+        run.current_phase = phase;
+        run.updated_at = store::now_millis();
+    }
+    drop(runs);
+    emit_update(app, state);
+}
+
+fn push_log(app: &AppHandle, state: &crate::AppState, run_id: &str, message: String) {
+    let mut runs = state.workflow_runs.lock().unwrap();
+    if let Some(run) = runs.iter_mut().find(|run| run.run_id == run_id) {
+        run.logs.push(message);
+        if run.logs.len() > 80 {
+            let drain = run.logs.len() - 80;
+            run.logs.drain(0..drain);
+        }
+        run.updated_at = store::now_millis();
+    }
+    drop(runs);
+    emit_update(app, state);
+}
+
+fn mark_run(state: &crate::AppState, run_id: &str, status: WorkflowStatus, error: Option<String>) {
+    let mut runs = state.workflow_runs.lock().unwrap();
+    if let Some(run) = runs.iter_mut().find(|run| run.run_id == run_id) {
+        run.status = status;
+        run.error = error;
+        run.updated_at = store::now_millis();
+    }
+}
+
+fn emit_update(app: &AppHandle, state: &crate::AppState) {
+    let _ = app.emit("workflow-updated", panel_state(state));
+}
+
+fn cap_chars(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        s.to_string()
+    } else {
+        let head: String = s.chars().take(max).collect();
+        format!("{head}\n…[workflow result truncated]")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sanitizes_workflow_names() {
+        assert_eq!(sanitize_name(" review plan! "), "review-plan");
+    }
+
+    #[test]
+    fn workflow_name_matches_sanitized_definition_name() {
+        let dir = std::env::temp_dir().join(format!(
+            "demiurge_workflow_name_{}",
+            crate::store::now_millis()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("agent-review.json");
+        std::fs::write(&path, r#"{ "name": "Agent Review", "steps": [] }"#).unwrap();
+
+        assert_eq!(find_workflow_path(&dir, "Agent Review").unwrap(), path);
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn parses_workflow_json() {
+        let raw = r#"{
+          "name": "demo",
+          "steps": [
+            {"type": "log", "message": "hello"},
+            {"type": "phase", "name": "find", "steps": [
+              {"type": "agent", "label": "reader", "prompt": "inspect"}
+            ]}
+          ]
+        }"#;
+        let parsed = serde_json::from_str::<WorkflowFile>(raw).unwrap();
+        assert_eq!(parsed.steps.len(), 2);
+    }
+
+    #[test]
+    fn caps_long_agent_result() {
+        assert!(cap_chars(&"x".repeat(20), 5).contains("truncated"));
+    }
+}
