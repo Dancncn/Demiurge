@@ -146,12 +146,30 @@ const RISK_RULES: &[RiskRule] = &[
     },
     RiskRule {
         class: ShellRiskClass::Network,
-        needles: &["curl ", "wget ", "irm ", "iwr ", "http://", "https://", " gh ", "git clone"],
+        needles: &[
+            "curl ",
+            "wget ",
+            "irm ",
+            "iwr ",
+            "http://",
+            "https://",
+            " gh ",
+            "git clone",
+        ],
         reason: "包含联网访问或外部 URL",
     },
     RiskRule {
         class: ShellRiskClass::FileWrite,
-        needles: &[">", "tee ", "touch ", "mkdir ", "mv ", "cp ", "copy ", "write-output"],
+        needles: &[
+            ">",
+            "tee ",
+            "touch ",
+            "mkdir ",
+            "mv ",
+            "cp ",
+            "copy ",
+            "write-output",
+        ],
         reason: "可能写入或移动沙盒内文件",
     },
     RiskRule {
@@ -323,7 +341,10 @@ fn classify_command(command: &str) -> ShellSafetyProfile {
     ShellSafetyProfile { risk, reasons }
 }
 
-fn validate_isolation_policy(req: &ShellRequest, profile: &ShellSafetyProfile) -> Result<(), String> {
+fn validate_isolation_policy(
+    req: &ShellRequest,
+    profile: &ShellSafetyProfile,
+) -> Result<(), String> {
     if req.isolation == ShellIsolationMode::Strict && profile.risk.blocked_in_strict() {
         return Err(format!(
             "strict isolation 拒绝执行 {} 命令：{}",
@@ -430,12 +451,30 @@ mod tests {
             classify_command("git status --short").risk,
             ShellRiskClass::ReadOnly
         );
-        assert_eq!(classify_command("cargo test").risk, ShellRiskClass::BuildTest);
-        assert_eq!(classify_command("touch out.txt").risk, ShellRiskClass::FileWrite);
-        assert_eq!(classify_command("curl https://example.com").risk, ShellRiskClass::ExternalExecution);
-        assert_eq!(classify_command("npm install").risk, ShellRiskClass::DependencyInstall);
-        assert_eq!(classify_command("rm -rf target").risk, ShellRiskClass::Destructive);
-        assert_eq!(classify_command("sudo chown a b").risk, ShellRiskClass::Privilege);
+        assert_eq!(
+            classify_command("cargo test").risk,
+            ShellRiskClass::BuildTest
+        );
+        assert_eq!(
+            classify_command("touch out.txt").risk,
+            ShellRiskClass::FileWrite
+        );
+        assert_eq!(
+            classify_command("curl https://example.com").risk,
+            ShellRiskClass::ExternalExecution
+        );
+        assert_eq!(
+            classify_command("npm install").risk,
+            ShellRiskClass::DependencyInstall
+        );
+        assert_eq!(
+            classify_command("rm -rf target").risk,
+            ShellRiskClass::Destructive
+        );
+        assert_eq!(
+            classify_command("sudo chown a b").risk,
+            ShellRiskClass::Privilege
+        );
     }
 
     #[test]

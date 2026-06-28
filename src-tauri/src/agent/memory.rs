@@ -61,7 +61,12 @@ pub fn panel_state(sandbox_dir: &Path) -> MemoryPanelState {
     }
 }
 
-pub fn update_entry(sandbox_dir: &Path, id: &str, kind: &str, text: &str) -> Result<MemoryPanelState, String> {
+pub fn update_entry(
+    sandbox_dir: &Path,
+    id: &str,
+    kind: &str,
+    text: &str,
+) -> Result<MemoryPanelState, String> {
     let path = memory_path(sandbox_dir);
     let raw = fs::read_to_string(&path).unwrap_or_default();
     let mut lines = raw.lines().map(str::to_string).collect::<Vec<_>>();
@@ -393,10 +398,15 @@ mod tests {
 
     #[test]
     fn updates_and_deletes_memory_entries_on_disk() {
-        let dir = std::env::temp_dir().join(format!("demiurge_memory_{}", crate::store::now_millis()));
+        let dir =
+            std::env::temp_dir().join(format!("demiurge_memory_{}", crate::store::now_millis()));
         let memory_dir = dir.join(".demiurge");
         std::fs::create_dir_all(&memory_dir).unwrap();
-        std::fs::write(memory_dir.join("memory.md"), "# 自动记忆\n- [project] Old text\n").unwrap();
+        std::fs::write(
+            memory_dir.join("memory.md"),
+            "# 自动记忆\n- [project] Old text\n",
+        )
+        .unwrap();
 
         let state = update_entry(&dir, "mem-2", "user", "New text").unwrap();
         assert_eq!(state.entries[0].kind, "user");

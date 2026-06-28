@@ -60,11 +60,15 @@ pub async fn run_turn_with_options(
             .min(reserved_output_tokens)
             .min(settings.max_input_tokens.saturating_sub(512));
     }
-    let max_steps = selected_agents.max_steps.unwrap_or(MAX_STEPS).min(MAX_STEPS);
-    let mut turn_budget = options
-        .token_budget
-        .clone()
-        .or_else(|| selected_agents.max_total_tokens.map(|total| budget::TokenBudgetState::new(Some(total))));
+    let max_steps = selected_agents
+        .max_steps
+        .unwrap_or(MAX_STEPS)
+        .min(MAX_STEPS);
+    let mut turn_budget = options.token_budget.clone().or_else(|| {
+        selected_agents
+            .max_total_tokens
+            .map(|total| budget::TokenBudgetState::new(Some(total)))
+    });
     // 捕获本轮的目标会话 id：即便用户中途切换会话，写入也始终落到这一段对话
     let sid = state.sessions.lock().unwrap().active.clone();
 
@@ -211,7 +215,10 @@ pub async fn run_turn_with_options(
             v
         };
 
-        if turn_budget.as_ref().is_some_and(|budget| budget.is_exhausted()) {
+        if turn_budget
+            .as_ref()
+            .is_some_and(|budget| budget.is_exhausted())
+        {
             let message = "（已达到本轮 token 硬预算，已停止继续调用模型）".to_string();
             push(Message::assistant_text(message.clone()));
             state.persist_sessions();

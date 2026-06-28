@@ -59,7 +59,11 @@ impl TokenBudgetState {
         self.used_estimated = self.used_estimated.saturating_add(tokens);
     }
 
-    pub fn record_usage_or_estimate(&mut self, usage: Option<crate::llm::Usage>, estimated: usize) -> bool {
+    pub fn record_usage_or_estimate(
+        &mut self,
+        usage: Option<crate::llm::Usage>,
+        estimated: usize,
+    ) -> bool {
         if let Some(tokens) = usage.and_then(|u| u.total_or_sum()) {
             self.record_exact(tokens);
             true

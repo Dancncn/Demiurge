@@ -439,7 +439,9 @@ fn memory_delete_entry(
 }
 
 #[tauri::command]
-fn memory_dedupe_apply(state: State<'_, AppState>) -> Result<agent::memory::MemoryPanelState, String> {
+fn memory_dedupe_apply(
+    state: State<'_, AppState>,
+) -> Result<agent::memory::MemoryPanelState, String> {
     let sandbox = state.sandbox_dir.lock().unwrap().clone();
     agent::memory::apply_dedupe(&sandbox)
 }
@@ -480,9 +482,18 @@ fn context_panel_state(state: State<'_, AppState>) -> ContextPanelState {
     ContextPanelState {
         message_count: session.messages.len(),
         user_messages: session.messages.iter().filter(|m| m.role == "user").count(),
-        assistant_messages: session.messages.iter().filter(|m| m.role == "assistant").count(),
+        assistant_messages: session
+            .messages
+            .iter()
+            .filter(|m| m.role == "assistant")
+            .count(),
         tool_messages: session.messages.iter().filter(|m| m.role == "tool").count(),
-        summary_chars: session.summary.as_deref().unwrap_or_default().chars().count(),
+        summary_chars: session
+            .summary
+            .as_deref()
+            .unwrap_or_default()
+            .chars()
+            .count(),
         estimated_history_tokens: agent::budget::estimate_messages_tokens(&session.messages),
         max_input_tokens: settings.max_input_tokens,
         reserved_output_tokens: settings.reserved_output_tokens,
@@ -549,9 +560,7 @@ fn rename_session(state: State<'_, AppState>, id: String, title: String) -> Resu
     let clean: String = trimmed.chars().take(80).collect();
     {
         let mut store = state.sessions.lock().unwrap();
-        let session = store
-            .get_mut(&id)
-            .ok_or_else(|| "会话不存在".to_string())?;
+        let session = store.get_mut(&id).ok_or_else(|| "会话不存在".to_string())?;
         session.title = clean.clone();
         session.updated_at = store::now_millis();
     }
@@ -574,10 +583,7 @@ fn ocr_image_bytes(state: State<'_, AppState>, bytes: Vec<u8>) -> Result<String,
     ocr::recognize_rgba(state.inner(), img).map(|frame| frame.text)
 }
 
-fn webdav_auth(
-    req: reqwest::RequestBuilder,
-    config: &WebDavConfig,
-) -> reqwest::RequestBuilder {
+fn webdav_auth(req: reqwest::RequestBuilder, config: &WebDavConfig) -> reqwest::RequestBuilder {
     let username = config.username.trim();
     if username.is_empty() {
         req
@@ -623,11 +629,14 @@ async fn webdav_propfind(
     depth_one: bool,
 ) -> Result<String, String> {
     let method = reqwest::Method::from_bytes(b"PROPFIND").map_err(|e| e.to_string())?;
-    let resp = webdav_auth(client.request(method, webdav_collection_url(config)?), config)
-        .header("Depth", if depth_one { "1" } else { "0" })
-        .header("Content-Type", "application/xml")
-        .body(
-            r#"<?xml version="1.0" encoding="utf-8" ?>
+    let resp = webdav_auth(
+        client.request(method, webdav_collection_url(config)?),
+        config,
+    )
+    .header("Depth", if depth_one { "1" } else { "0" })
+    .header("Content-Type", "application/xml")
+    .body(
+        r#"<?xml version="1.0" encoding="utf-8" ?>
 <propfind xmlns="DAV:">
   <prop>
     <displayname />
@@ -636,10 +645,10 @@ async fn webdav_propfind(
     <resourcetype />
   </prop>
 </propfind>"#,
-        )
-        .send()
-        .await
-        .map_err(|e| format!("WebDAV PROPFIND 失败：{e}"))?;
+    )
+    .send()
+    .await
+    .map_err(|e| format!("WebDAV PROPFIND 失败：{e}"))?;
     let status = resp.status();
     let body = resp.text().await.unwrap_or_default();
     if status.is_success() || status.as_u16() == 207 {
@@ -657,10 +666,13 @@ async fn webdav_ensure_collection(
         return Ok(());
     }
     let method = reqwest::Method::from_bytes(b"MKCOL").map_err(|e| e.to_string())?;
-    let resp = webdav_auth(client.request(method, webdav_collection_url(config)?), config)
-        .send()
-        .await
-        .map_err(|e| format!("创建 WebDAV 目录失败：{e}"))?;
+    let resp = webdav_auth(
+        client.request(method, webdav_collection_url(config)?),
+        config,
+    )
+    .send()
+    .await
+    .map_err(|e| format!("创建 WebDAV 目录失败：{e}"))?;
     if resp.status().is_success() || resp.status().as_u16() == 405 {
         Ok(())
     } else {
@@ -673,10 +685,9 @@ fn parse_webdav_backup_files(body: &str) -> Vec<WebDavBackupFile> {
         .expect("valid WebDAV response regex");
     let href_re =
         Regex::new(r"(?is)<[^:>/]*:?href[^>]*>(.*?)</[^:>/]*:?href>").expect("valid href regex");
-    let modified_re = Regex::new(
-        r"(?is)<[^:>/]*:?getlastmodified[^>]*>(.*?)</[^:>/]*:?getlastmodified>",
-    )
-    .expect("valid modified regex");
+    let modified_re =
+        Regex::new(r"(?is)<[^:>/]*:?getlastmodified[^>]*>(.*?)</[^:>/]*:?getlastmodified>")
+            .expect("valid modified regex");
     let size_re =
         Regex::new(r"(?is)<[^:>/]*:?getcontentlength[^>]*>(.*?)</[^:>/]*:?getcontentlength>")
             .expect("valid size regex");

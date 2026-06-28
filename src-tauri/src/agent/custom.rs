@@ -118,7 +118,10 @@ pub fn load_agent(state: &crate::AppState, name: &str) -> Result<AgentDefinition
     definition_from_path(&path, &valid_tool_names())
 }
 
-pub fn resolve_selected(state: &crate::AppState, names: &[String]) -> Result<ResolvedAgents, String> {
+pub fn resolve_selected(
+    state: &crate::AppState,
+    names: &[String],
+) -> Result<ResolvedAgents, String> {
     let mut queue = VecDeque::new();
     for name in names.iter().map(|s| s.trim()).filter(|s| !s.is_empty()) {
         queue.push_back((name.to_string(), 0usize));
@@ -175,12 +178,16 @@ fn min_assign(slot: &mut Option<usize>, value: Option<usize>) {
     }
 }
 
-fn definition_from_path(path: &Path, valid_tools: &HashSet<String>) -> Result<AgentDefinitionInfo, String> {
+fn definition_from_path(
+    path: &Path,
+    valid_tools: &HashSet<String>,
+) -> Result<AgentDefinitionInfo, String> {
     if path.extension().and_then(|s| s.to_str()) != Some("json") {
         return Err("not an agent json".to_string());
     }
     let raw = fs::read_to_string(path).map_err(|e| format!("读取 Agent 清单失败：{e}"))?;
-    let parsed: AgentFile = serde_json::from_str(&raw).map_err(|e| format!("解析 Agent JSON 失败：{e}"))?;
+    let parsed: AgentFile =
+        serde_json::from_str(&raw).map_err(|e| format!("解析 Agent JSON 失败：{e}"))?;
     let name = parsed
         .name
         .filter(|s| !s.trim().is_empty())

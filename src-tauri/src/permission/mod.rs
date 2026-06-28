@@ -248,7 +248,11 @@ pub fn panel_state(state: &crate::AppState) -> PermissionPanelState {
     for rule in load_project_rules(&data_dir).values() {
         rules.push(rule_view(rule));
     }
-    rules.sort_by(|a, b| b.updated_at.cmp(&a.updated_at).then_with(|| a.tool.cmp(&b.tool)));
+    rules.sort_by(|a, b| {
+        b.updated_at
+            .cmp(&a.updated_at)
+            .then_with(|| a.tool.cmp(&b.tool))
+    });
     PermissionPanelState {
         rules,
         audit: load_recent_audit(&data_dir, 80),
