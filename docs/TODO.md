@@ -31,6 +31,7 @@ Demiurge 当前已经从 MVP 进入 Agent 能力打磨阶段。下面把现有 T
 - [x] **Workflow durable run**：`.demiurge/workflow-runs/<run_id>/state.json` 持久化 run snapshot；启动和面板打开时水合 persisted run state；恢复 `stale_running`、取消状态、预算和进度；journal 不可读时 `/workflow resume <run_id>` 可从 durable snapshot 生成恢复 overlay。
 - [x] **Worktree Isolation**：`worktree_create` 工具创建隔离 worktree。
 - [x] **Computer Use 底层能力**：窗口列表、屏幕截图、点击/输入 OCR、以及 OCR 模型下载。
+- [x] **OCR 体验补全**：Settings OCR 面板支持源说明、缺文件清单、下载进度、手动安装提示和 ModelScope 国内镜像文档。
 - [x] **Voice API 预留**：TTS/ASR adapter 接口保留，设置页露出占位。
 - [x] **API Key 安全存储**：LLM、Tavily、Brave、Exa、WebDAV 密钥使用系统凭据管理器，`settings.json` 只保存密钥引用。
 - [x] **设置与备份**：设置页包含 provider、Web Search、OCR、存储占位和 WebDAV 备份；WebDAV 支持连接检查、手动备份、备份列表、删除。
@@ -65,7 +66,7 @@ Demiurge 当前已经从 MVP 进入 Agent 能力打磨阶段。下面把现有 T
 - [x] **设置连接测试**：验证 provider、base_url、model、LLM key、Web Search key 和 WebDAV 连接是否可用。
 - [x] **细粒度上下文可视化**：展示 system/tools/history/output reserve、summary、memory、预算消耗和 prompt section 细节。
 - [x] **WebFetch / WebSearch adapter 去重**：抽取共享解析、清洗和来源处理模块，减少重复代码，让来源质量提示和 provider 边缘行为更一致。
-- [ ] **OCR 体验补全**：补齐模型源选择、下载进度、缺模型引导和国内镜像文档。
+- [x] **OCR 体验补全**：补齐模型源选择、下载进度、缺模型引导和国内镜像文档。
 - [ ] **角色包头像与导入器**：读取 `manifest.avatar` 替换默认头像；创建拖拽 zip 导入器，解压到 `packs/` 并校验 manifest，避免提交具体受版权保护的角色资产、语音/美术资产或人格设定。
 - [x] **更多内置工具**：增加 `list_dir`、`http_get`、`clipboard`、包脚本等 typed tools，并配置合适权限分级；继续优先 typed tools，shell 保持后置和强确认。
 - [ ] **Skills 支持**：实现 Markdown skills、slash command、pack-scoped/global skill directories、自动推荐、`SKILL.md` context injection、declared tool needs、required_permissions 和 references。

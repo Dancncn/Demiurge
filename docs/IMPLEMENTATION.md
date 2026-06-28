@@ -83,6 +83,7 @@ Demiurge/
 │  ├─ TODO.md
 │  ├─ demiurge-mvp-design.md
 │  ├─ goal-continuous-driving.md
+│  ├─ ocr-models.md
 │  ├─ ultracode-agent-orchestration.md
 │  └─ workflow-json-dsl.md
 └─ packs/
@@ -96,7 +97,7 @@ Demiurge/
 | `lib.rs` | Tauri command 注册、全局 `AppState`、应用初始化、`send` 分发和上下文面板聚合 | `run()` / `send()` / `context_panel_state()` |
 | `connection_tests.rs` | Settings 连接测试；用当前表单设置验证 LLM Provider、Web Search 和 WebDAV 以外的网络 key，不要求先保存密钥 | `test_provider()` / `test_web_search()` |
 | `credentials.rs` | keyring 凭据读写，避免 LLM/Web Search/WebDAV/MCP env 密钥落入 settings 明文 | `hydrate_or_migrate_settings()` / `save_mcp_env_secrets()` |
-| `ocr.rs` | OCR 模型路径、模型源、缺模型检查、OCR 推理入口 | `ensure_models()` |
+| `ocr.rs` | OCR 模型路径、ModelScope/Hugging Face 源、下载进度事件、缺模型检查、手动安装提示和 OCR 推理入口 | `model_status()` / `download_models()` / `recognize_rgba()` |
 | `voice.rs` | TTS/ASR command surface 预留，设置可见但后端未接入 | `voice_status()` |
 | `agent/session_engine.rs` | turn runtime state、入口互斥、中断标记、统一 agent event envelope 和会话写入封装 | `begin_turn()` / `finish_turn()` / `TurnEventEmitter` / `SessionTurnStore` |
 | `agent/runner.rs` | Agent loop，处理模型流、tool calls、tool results、最终回答 | `run_turn()` / `run_turn_with_options()` |
@@ -141,7 +142,7 @@ Demiurge/
 | `components/Markdown.tsx` | GFM、代码块、KaTeX 渲染 |
 | `components/ToolCard.tsx` | tool-start/tool-end 展示，包含 MCP tool/resource 进度摘要 |
 | `components/ConfirmDialog.tsx` | 敏感工具确认，支持 once/session/project scope |
-| `components/SettingsDialog.tsx` | provider、Web Search、MCP server、OCR、语音、WebDAV、权限、记忆审计和 Context 可视化设置，以及 Provider/Web Search/WebDAV 连接测试 |
+| `components/SettingsDialog.tsx` | provider、Web Search、MCP server、OCR 模型源/下载进度/缺模型引导、语音、WebDAV、权限、记忆审计和 Context 可视化设置，以及 Provider/Web Search/WebDAV 连接测试 |
 | `components/WorkflowsPanel.tsx` | workflow 定义、run/stop、agent、phase、log 的 live 状态 |
 
 ## 运行数据目录
