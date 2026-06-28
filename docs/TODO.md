@@ -13,6 +13,7 @@ Demiurge 当前已经从 MVP 进入 Agent 能力打磨阶段。下面把现有 T
 - [x] **文件沙箱**：读写限定沙箱目录、路径校验 + canonicalize 防逃逸。
 - [x] **编辑工具**：`read_file`、`write_file`、`edit_file`、`multi_edit`、`apply_patch`、`undo_edit`。
 - [x] **搜索与状态工具**：`glob`、`grep`、`git_status`、`web_fetch`。
+- [x] **更多内置 typed tools**：`list_dir`、`http_get`、`clipboard`、`package_scripts` 已接入核心工具；只读/外部/特权权限分级固定，`clipboard` 与 `shell` 仍需确认，包脚本工具只生成建议命令、不直接执行。
 - [x] **Shell 工具**：确认弹窗、沙箱 cwd、超时、输出截断、执行前预览。
 - [x] **Shell / 进程隔离加强**：shell policy state 可视化展示 env allowlist、strict deny 风险和命令模式；执行层使用独立进程组/进程树并在超时时终止整棵进程树；新增 `sandboxed` isolation，在 macOS 走 `sandbox-exec`、Linux/WSL 走 `bubblewrap`，不可用时 fail closed；补齐联网、依赖安装、外部执行、提权和破坏性命令策略测试。
 - [x] **Web Search / Fetch**：Bing、DuckDuckGo fallback、Tavily、Brave、Exa adapter，结果过滤、缓存、context cap、Sources 提醒；`web_fetch` 支持 direct 抓取与 Exa `livecrawl` 抓取。
@@ -66,7 +67,7 @@ Demiurge 当前已经从 MVP 进入 Agent 能力打磨阶段。下面把现有 T
 - [x] **WebFetch / WebSearch adapter 去重**：抽取共享解析、清洗和来源处理模块，减少重复代码，让来源质量提示和 provider 边缘行为更一致。
 - [ ] **OCR 体验补全**：补齐模型源选择、下载进度、缺模型引导和国内镜像文档。
 - [ ] **角色包头像与导入器**：读取 `manifest.avatar` 替换默认头像；创建拖拽 zip 导入器，解压到 `packs/` 并校验 manifest，避免提交具体受版权保护的角色资产、语音/美术资产或人格设定。
-- [ ] **更多内置工具**：增加 `list_dir`、`http_get`、`clipboard`、包脚本等 typed tools，并配置合适权限分级；继续优先 typed tools，shell 保持后置和强确认。
+- [x] **更多内置工具**：增加 `list_dir`、`http_get`、`clipboard`、包脚本等 typed tools，并配置合适权限分级；继续优先 typed tools，shell 保持后置和强确认。
 - [ ] **Skills 支持**：实现 Markdown skills、slash command、pack-scoped/global skill directories、自动推荐、`SKILL.md` context injection、declared tool needs、required_permissions 和 references。
 - [ ] **记忆分层与手动维护**：把 memory 分为 user/project/session/pack scopes；先做 read-only loading 和手动编辑，再考虑自动总结/抽取增强。
 - [ ] **Provider / adapter 扩展**：在能力画像基础上继续规范 Anthropic、OpenAI-compatible、Gemini、本地模型适配器、schema dialect adaptation 与 streaming normalization。
