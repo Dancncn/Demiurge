@@ -57,7 +57,10 @@ fn url_scheme(t: &str) -> Option<&str> {
         return None;
     }
     let mut chars = scheme.chars();
-    let first_ok = chars.next().map(|c| c.is_ascii_alphabetic()).unwrap_or(false);
+    let first_ok = chars
+        .next()
+        .map(|c| c.is_ascii_alphabetic())
+        .unwrap_or(false);
     let rest_ok = scheme
         .chars()
         .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'));

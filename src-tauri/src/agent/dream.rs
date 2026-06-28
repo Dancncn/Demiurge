@@ -39,7 +39,13 @@ pub async fn run_manual_dream(
     let memory_path = sandbox_dir.join(".demiurge").join("memory.md");
     let current_memory = fs::read_to_string(&memory_path).unwrap_or_default();
     let session_snapshot = current_session_snapshot(state, &sid);
-    let source = build_source_bundle(&sandbox_dir, &packs_dir, &settings, &current_memory, &session_snapshot);
+    let source = build_source_bundle(
+        &sandbox_dir,
+        &packs_dir,
+        &settings,
+        &current_memory,
+        &session_snapshot,
+    );
 
     if source.trim().is_empty() {
         emit_delta(app, &mut visible, "没有找到可整理的记忆材料。");
@@ -90,12 +96,20 @@ pub async fn run_manual_dream(
 
     let next_memory = normalize_memory_output(&turn.content);
     if next_memory.trim().is_empty() {
-        emit_delta(app, &mut visible, "模型没有输出可用的记忆内容，已跳过写入。");
+        emit_delta(
+            app,
+            &mut visible,
+            "模型没有输出可用的记忆内容，已跳过写入。",
+        );
         finish(app, state, &sid, visible);
         return Ok(());
     }
     if next_memory.len() > MAX_OUTPUT_BYTES {
-        emit_delta(app, &mut visible, "整理后的记忆超过 32 KiB，已跳过写入，避免污染上下文。");
+        emit_delta(
+            app,
+            &mut visible,
+            "整理后的记忆超过 32 KiB，已跳过写入，避免污染上下文。",
+        );
         finish(app, state, &sid, visible);
         return Ok(());
     }
@@ -214,7 +228,10 @@ fn build_source_bundle(
     let mut parts = Vec::new();
 
     if !current_memory.trim().is_empty() {
-        parts.push(format!("# 当前 .demiurge/memory.md\n{}", current_memory.trim()));
+        parts.push(format!(
+            "# 当前 .demiurge/memory.md\n{}",
+            current_memory.trim()
+        ));
     }
 
     for (label, path) in [

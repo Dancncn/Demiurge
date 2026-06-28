@@ -28,7 +28,11 @@ pub fn run(state: &crate::AppState, _args: Value) -> Result<String, String> {
         if stderr.contains("not a git repository") || stderr.contains("不是 git 仓库") {
             return Ok("沙盒目录当前不是 Git 仓库".to_string());
         }
-        return Err(if stderr.is_empty() { "git status 返回非零状态".to_string() } else { stderr });
+        return Err(if stderr.is_empty() {
+            "git status 返回非零状态".to_string()
+        } else {
+            stderr
+        });
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();

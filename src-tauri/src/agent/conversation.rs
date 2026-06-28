@@ -37,13 +37,25 @@ pub struct Message {
 
 impl Message {
     pub fn user(text: impl Into<String>) -> Self {
-        Message { role: "user".into(), content: Some(text.into()), ..Default::default() }
+        Message {
+            role: "user".into(),
+            content: Some(text.into()),
+            ..Default::default()
+        }
     }
     pub fn system(text: impl Into<String>) -> Self {
-        Message { role: "system".into(), content: Some(text.into()), ..Default::default() }
+        Message {
+            role: "system".into(),
+            content: Some(text.into()),
+            ..Default::default()
+        }
     }
     pub fn assistant_text(text: impl Into<String>) -> Self {
-        Message { role: "assistant".into(), content: Some(text.into()), ..Default::default() }
+        Message {
+            role: "assistant".into(),
+            content: Some(text.into()),
+            ..Default::default()
+        }
     }
     pub fn assistant_tools(content: Option<String>, calls: Vec<ToolCall>) -> Self {
         Message {
@@ -53,7 +65,11 @@ impl Message {
             ..Default::default()
         }
     }
-    pub fn tool_result(call_id: impl Into<String>, name: impl Into<String>, result: impl Into<String>) -> Self {
+    pub fn tool_result(
+        call_id: impl Into<String>,
+        name: impl Into<String>,
+        result: impl Into<String>,
+    ) -> Self {
         Message {
             role: "tool".into(),
             content: Some(result.into()),
