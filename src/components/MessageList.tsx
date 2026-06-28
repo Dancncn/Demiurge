@@ -2,7 +2,7 @@ import { memo, useEffect, useRef, useState } from "react";
 import type { DisplayItem } from "../lib/types";
 import { Markdown } from "./Markdown";
 import ToolCard from "./ToolCard";
-import { CheckIcon, CopyIcon } from "./Icons";
+import { CheckIcon, CopyIcon, RotateCwIcon } from "./Icons";
 
 const AVATAR = "/demiurge.png";
 
@@ -35,10 +35,18 @@ const AssistantMessage = memo(function AssistantMessage({
   text,
   streaming,
   error,
+  errorTitle,
+  errorHint,
+  retryText,
+  onRetry,
 }: {
   text: string;
   streaming: boolean;
   error?: boolean;
+  errorTitle?: string;
+  errorHint?: string;
+  retryText?: string;
+  onRetry?: (text: string) => void;
 }) {
   const [copied, setCopied] = useState(false);
   async function copy() {
@@ -57,7 +65,21 @@ const AssistantMessage = memo(function AssistantMessage({
       <div className="min-w-0 max-w-[82%]">
         <div className="py-0.5 text-[14px] leading-[1.6]">
           {error ? (
-            <div className="rounded-lg border border-[#fde68a] bg-[#fffbeb] px-4 py-3 text-[13px] text-[#92400e]">{text}</div>
+            <div className="rounded-lg border border-[#fde68a] bg-[#fffbeb] px-4 py-3 text-[13px] text-[#92400e]">
+              <div className="font-semibold text-[#7a3b00]">{errorTitle || "Request failed"}</div>
+              <div className="mt-1 whitespace-pre-wrap">{text}</div>
+              {errorHint && <div className="mt-2 text-[#8a5a00]">{errorHint}</div>}
+              {retryText && onRetry && (
+                <button
+                  type="button"
+                  onClick={() => onRetry(retryText)}
+                  className="mt-3 inline-flex h-8 items-center gap-2 rounded-md border border-[#f2d7a5] bg-white px-2.5 text-xs font-medium text-[#7a3b00] transition hover:bg-[#fff8e8]"
+                >
+                  <RotateCwIcon size={14} />
+                  Retry
+                </button>
+              )}
+            </div>
           ) : (
             <Markdown text={text} streaming={streaming} />
           )}
@@ -85,9 +107,10 @@ type Props = {
   greeting: string;
   suggestions: string[];
   onSuggestionClick: (text: string) => void;
+  onRetry: (text: string) => void;
 };
 
-export function MessageList({ items, thinking, greeting, suggestions, onSuggestionClick }: Props) {
+export function MessageList({ items, thinking, greeting, suggestions, onSuggestionClick, onRetry }: Props) {
   const bottomRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
@@ -127,7 +150,16 @@ export function MessageList({ items, thinking, greeting, suggestions, onSuggesti
               item.kind === "user" ? (
                 <UserMessage key={item.id} text={item.text} />
               ) : item.kind === "assistant" ? (
-                <AssistantMessage key={item.id} text={item.text} streaming={item.streaming} error={item.error} />
+                <AssistantMessage
+                  key={item.id}
+                  text={item.text}
+                  streaming={item.streaming}
+                  error={item.error}
+                  errorTitle={item.errorTitle}
+                  errorHint={item.errorHint}
+                  retryText={item.retryText}
+                  onRetry={onRetry}
+                />
               ) : (
                 <ToolCard
                   key={item.id}
@@ -138,6 +170,9 @@ export function MessageList({ items, thinking, greeting, suggestions, onSuggesti
                   preview={item.preview}
                   description={item.description}
                   risk={item.risk}
+                  duration_ms={item.duration_ms}
+                  error_hint={item.error_hint}
+                  source_quality={item.source_quality}
                 />
               ),
             )}

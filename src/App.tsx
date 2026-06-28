@@ -4,6 +4,7 @@ import { getCurrentWindow, PhysicalSize } from "@tauri-apps/api/window";
 import * as api from "./lib/api";
 import type {
   AgentPanelState,
+  AssistantErrorEvent,
   ConfirmRequestEvent,
   DisplayItem,
   GoalPanelState,
@@ -33,6 +34,36 @@ const SUGGESTIONS = [
 ];
 
 const DEFAULT_WINDOW_SIZE = { width: 1811, height: 1213 };
+
+function friendlyAssistantError(err: unknown, event?: AssistantErrorEvent) {
+  const raw = event?.message || String(err);
+  const lower = raw.toLowerCase();
+  let title = "Request failed";
+  let hint = event?.hint || "Check the provider settings and try again.";
+
+  if (event?.kind === "llm" || lower.includes("llm") || lower.includes("model")) {
+    title = "Model request failed";
+    hint = event?.hint || "Verify the model name, base URL, API key, and provider capability settings.";
+  }
+  if (lower.includes("401") || lower.includes("403") || lower.includes("unauthorized") || lower.includes("api key")) {
+    title = "Provider authentication failed";
+    hint = event?.hint || "Re-save the provider API key in Settings, then retry the same request.";
+  } else if (lower.includes("timeout") || lower.includes("timed out")) {
+    title = "Request timed out";
+    hint = event?.hint || "The provider or network was slow. Retry once; if it repeats, lower context size or switch endpoint.";
+  } else if (
+    lower.includes("network") ||
+    lower.includes("connection") ||
+    lower.includes("dns") ||
+    lower.includes("econn") ||
+    lower.includes("fetch")
+  ) {
+    title = "Network request failed";
+    hint = event?.hint || "Check the endpoint and local network path. If you use a proxy, confirm the app can reach it.";
+  }
+
+  return { title, message: raw.replace(/^Error:\s*/i, ""), hint, retryable: event?.retryable ?? true };
+}
 
 function buildHistory(msgs: Message[]): DisplayItem[] {
   const out: DisplayItem[] = [];
@@ -110,6 +141,8 @@ export default function App() {
   const genId = () => `it_${++seq.current}`;
   const curAssistantId = useRef<string | null>(null);
   const toolItemIds = useRef<Map<string, string>>(new Map());
+  const lastRetryText = useRef<string>("");
+  const assistantErrorDelivered = useRef(false);
   const packMenuRef = useRef<HTMLDivElement | null>(null);
   const agentMenuRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -222,6 +255,26 @@ export default function App() {
           setBusy(false);
           void refreshGoalPanel();
         },
+        onAssistantError: (e) => {
+          finalizeAssistant();
+          assistantErrorDelivered.current = true;
+          const friendly = friendlyAssistantError(e.message, e);
+          setItems((p) => [
+            ...p,
+            {
+              id: genId(),
+              kind: "assistant",
+              text: friendly.message,
+              streaming: false,
+              error: true,
+              errorTitle: friendly.title,
+              errorHint: friendly.hint,
+              retryText: friendly.retryable ? lastRetryText.current : undefined,
+            },
+          ]);
+          setBusy(false);
+          void refreshGoalPanel();
+        },
         onAssistantInterrupted: () => {
           finalizeAssistant();
           setBusy(false);
@@ -253,7 +306,14 @@ export default function App() {
           setItems((p) =>
             p.map((it) =>
               it.kind === "tool" && (it.id === id || it.tool_call_id === e.tool_call_id)
-                ? { ...it, status: e.denied ? "denied" : e.ok ? "done" : "failed", result: e.result }
+                ? {
+                    ...it,
+                    status: e.denied ? "denied" : e.ok ? "done" : "failed",
+                    result: e.result,
+                    duration_ms: e.duration_ms,
+                    error_hint: e.error_hint,
+                    source_quality: e.source_quality,
+                  }
                 : it,
             ),
           );
@@ -311,11 +371,13 @@ export default function App() {
     if ((!text && !attachmentPrompt) || busy) return false;
     setInput("");
     setActiveView("chat");
+    assistantErrorDelivered.current = false;
     const uid = genId();
     setItems((p) => [...p, { id: uid, kind: "user", text: buildUserDisplayText(text, attachments) }]);
     setBusy(true);
     try {
       const prompt = `${text || "Please review the attached files."}${attachmentPrompt}`;
+      lastRetryText.current = prompt;
       if (selectedAgentNames.length) {
         await api.sendWithAgents(prompt, selectedAgentNames);
       } else {
@@ -327,8 +389,23 @@ export default function App() {
         setItems((p) => p.map((it) => (it.id === id && it.kind === "assistant" ? { ...it, streaming: false } : it)));
         curAssistantId.current = null;
       }
-      const nid = genId();
-      setItems((p) => [...p, { id: nid, kind: "assistant", text: `Warning: ${String(err)}`, streaming: false, error: true }]);
+      if (!assistantErrorDelivered.current) {
+        const friendly = friendlyAssistantError(err);
+        const nid = genId();
+        setItems((p) => [
+          ...p,
+          {
+            id: nid,
+            kind: "assistant",
+            text: friendly.message,
+            streaming: false,
+            error: true,
+            errorTitle: friendly.title,
+            errorHint: friendly.hint,
+            retryText: friendly.retryable ? lastRetryText.current : undefined,
+          },
+        ]);
+      }
     } finally {
       setBusy(false);
       void refreshSessions();
@@ -634,6 +711,7 @@ export default function App() {
                 greeting="How can I help?"
                 suggestions={SUGGESTIONS}
                 onSuggestionClick={(t) => void handleSend(t)}
+                onRetry={(t) => void handleSend(t)}
               />
 
               <Composer

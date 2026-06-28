@@ -4,6 +4,7 @@ import type {
   AgentPanelState,
   AgentEditorFile,
   AgentValidationResult,
+  AssistantErrorEvent,
   ConfirmRequestEvent,
   ContextPanelState,
   GoalPanelState,
@@ -111,6 +112,7 @@ export interface AgentEventHandlers {
   onAssistantStart: () => void;
   onAssistantDelta: (text: string) => void;
   onAssistantDone: (text: string) => void;
+  onAssistantError: (e: AssistantErrorEvent) => void;
   onAssistantInterrupted: () => void;
   onToolStart: (e: ToolStartEvent) => void;
   onToolEnd: (e: ToolEndEvent) => void;
@@ -124,6 +126,7 @@ export async function listenAgentEvents(h: AgentEventHandlers): Promise<Unlisten
     listen("assistant-start", () => h.onAssistantStart()),
     listen<string>("assistant-delta", (e) => h.onAssistantDelta(e.payload)),
     listen<string>("assistant-done", (e) => h.onAssistantDone(e.payload)),
+    listen<AssistantErrorEvent>("assistant-error", (e) => h.onAssistantError(e.payload)),
     listen("assistant-interrupted", () => h.onAssistantInterrupted()),
     listen<ToolStartEvent>("tool-start", (e) => h.onToolStart(e.payload)),
     listen<ToolEndEvent>("tool-end", (e) => h.onToolEnd(e.payload)),

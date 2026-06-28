@@ -1,5 +1,5 @@
-import { useState } from "react";
-import type { ToolRisk } from "../lib/types";
+import { useEffect, useState } from "react";
+import type { ToolRisk, ToolSourceQuality } from "../lib/types";
 import DiffPreview from "./DiffPreview";
 import { WrenchIcon } from "./Icons";
 
@@ -11,6 +11,9 @@ interface Props {
   preview?: string;
   description?: string;
   risk?: ToolRisk;
+  duration_ms?: number;
+  error_hint?: string;
+  source_quality?: ToolSourceQuality;
 }
 
 function badge(status: Props["status"]) {
@@ -64,17 +67,50 @@ function progressSummary(name: string, status: Props["status"], args: unknown, r
   return null;
 }
 
-export default function ToolCard({ name, args, status, result, preview, description, risk }: Props) {
+function formatDuration(ms?: number) {
+  if (typeof ms !== "number" || ms < 0) return null;
+  if (ms < 1000) return `${ms} ms`;
+  return `${(ms / 1000).toFixed(ms < 10_000 ? 1 : 0)} s`;
+}
+
+function qualityClass(level: ToolSourceQuality["level"]) {
+  switch (level) {
+    case "strong":
+      return "border-[#bfe3cf] bg-[#eef9f3] text-[#1f7a4d]";
+    case "limited":
+      return "border-[#f2d7a5] bg-[#fff8e8] text-[#8a5a00]";
+    case "none":
+      return "border-[#f1b8b8] bg-[#fff1f1] text-[#b42318]";
+  }
+}
+
+export default function ToolCard({
+  name,
+  args,
+  status,
+  result,
+  preview,
+  description,
+  risk,
+  duration_ms,
+  error_hint,
+  source_quality,
+}: Props) {
   const [open, setOpen] = useState(status === "failed");
   const b = badge(status);
   const riskText = riskLabel(risk);
   const progressText = progressSummary(name, status, args, result);
+  const durationText = formatDuration(duration_ms);
   let argsText = "";
   try {
     argsText = JSON.stringify(args, null, 2);
   } catch {
     argsText = String(args);
   }
+
+  useEffect(() => {
+    if (status === "failed") setOpen(true);
+  }, [status]);
 
   return (
     <div className="cf-message-in rounded-lg border border-[#e2e5ea] bg-[#fbfcfd] text-sm text-[#4f5661]">
@@ -87,6 +123,7 @@ export default function ToolCard({ name, args, status, result, preview, descript
         <span className="font-medium text-[#202124]">{name}</span>
         <span className={`rounded-full px-2 py-0.5 text-xs ${b.cls}`}>{b.label}</span>
         {riskText && <span className="rounded-full bg-white px-2 py-0.5 text-xs text-[#6f7782]">{riskText}</span>}
+        {durationText && <span className="rounded-full bg-white px-2 py-0.5 text-xs text-[#6f7782]">{durationText}</span>}
         {status === "running" && (
           <span className="cf-dots shrink-0 text-[#b4b4b4]">
             <span />
@@ -113,6 +150,19 @@ export default function ToolCard({ name, args, status, result, preview, descript
             />
           </div>
           <div className="mt-1.5">{progressText}</div>
+          {source_quality && (
+            <div className={`mt-2 rounded-md border px-2.5 py-2 ${qualityClass(source_quality.level)}`}>
+              <div className="font-medium">
+                Source quality: {source_quality.level} / {source_quality.source_count} links
+              </div>
+              <div className="mt-0.5">{source_quality.hint}</div>
+            </div>
+          )}
+          {error_hint && (
+            <div className="mt-2 rounded-md border border-[#f2d7a5] bg-[#fff8e8] px-2.5 py-2 text-[#8a5a00]">
+              {error_hint}
+            </div>
+          )}
         </div>
       )}
 

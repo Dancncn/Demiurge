@@ -182,6 +182,8 @@ export interface WorkflowRunProgress {
   updated_at: number;
   error?: string;
   budget: TokenBudgetState;
+  steps_total: number;
+  steps_done: number;
 }
 
 export interface WorkflowPanelState {
@@ -379,6 +381,15 @@ export interface ToolEndEvent {
   ok: boolean;
   denied?: boolean;
   result: string;
+  duration_ms?: number;
+  error_hint?: string;
+  source_quality?: ToolSourceQuality;
+}
+
+export interface ToolSourceQuality {
+  level: "strong" | "limited" | "none";
+  source_count: number;
+  hint: string;
 }
 export interface ConfirmRequestEvent {
   id: string;
@@ -403,10 +414,26 @@ export interface GoalProgressEvent {
   token_budget?: number;
 }
 
+export interface AssistantErrorEvent {
+  kind: "llm" | "network" | "tool" | "workflow" | "unknown";
+  message: string;
+  hint: string;
+  retryable: boolean;
+}
+
 // ---- 前端聊天展示项 ----
 export type DisplayItem =
   | { id: string; kind: "user"; text: string }
-  | { id: string; kind: "assistant"; text: string; streaming: boolean; error?: boolean }
+  | {
+      id: string;
+      kind: "assistant";
+      text: string;
+      streaming: boolean;
+      error?: boolean;
+      errorTitle?: string;
+      errorHint?: string;
+      retryText?: string;
+    }
   | {
       id: string;
       kind: "tool";
@@ -419,4 +446,7 @@ export type DisplayItem =
       description?: string;
       risk?: ToolRisk;
       permission_effect?: PermissionEffect;
+      duration_ms?: number;
+      error_hint?: string;
+      source_quality?: ToolSourceQuality;
     };

@@ -45,6 +45,8 @@ pub struct WorkflowRunProgress {
     pub updated_at: u64,
     pub error: Option<String>,
     pub budget: budget::TokenBudgetState,
+    pub steps_total: usize,
+    pub steps_done: usize,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
@@ -132,6 +134,8 @@ pub fn panel_state(state: &crate::AppState) -> WorkflowPanelState {
             updated_at: info.updated_at,
             error: None,
             budget: budget::TokenBudgetState::default(),
+            steps_total: 0,
+            steps_done: 0,
         });
     }
     runs.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
@@ -195,6 +199,8 @@ pub fn launch(app: &AppHandle, state: &crate::AppState, name: &str) -> Result<St
         updated_at: now,
         error: None,
         budget: budget::TokenBudgetState::default(),
+        steps_total: count_steps(&workflow.steps),
+        steps_done: 0,
     };
     state.workflow_runs.lock().unwrap().push(progress);
     state
@@ -359,6 +365,7 @@ fn run_step<'a>(
                     workflow_journal::append(state, run_id, "budget", json!({ "total": total }));
             }
         }
+        mark_step_done(app, state, run_id);
         Ok(())
     })
 }
@@ -641,6 +648,31 @@ fn set_phase(app: &AppHandle, state: &crate::AppState, run_id: &str, phase: Opti
     }
     drop(runs);
     emit_update(app, state);
+}
+
+fn mark_step_done(app: &AppHandle, state: &crate::AppState, run_id: &str) {
+    let mut runs = state.workflow_runs.lock().unwrap();
+    if let Some(run) = runs.iter_mut().find(|run| run.run_id == run_id) {
+        run.steps_done = run.steps_done.saturating_add(1).min(run.steps_total);
+        run.updated_at = store::now_millis();
+    }
+    drop(runs);
+    emit_update(app, state);
+}
+
+fn count_steps(steps: &[WorkflowStep]) -> usize {
+    steps
+        .iter()
+        .map(|step| match step {
+            WorkflowStep::Log { .. } | WorkflowStep::Agent { .. } | WorkflowStep::Budget { .. } => {
+                1
+            }
+            WorkflowStep::Phase { steps, .. } => 1 + count_steps(steps),
+            WorkflowStep::Parallel { items } | WorkflowStep::Pipeline { items } => {
+                1 + count_steps(items)
+            }
+        })
+        .sum()
 }
 
 fn push_log(app: &AppHandle, state: &crate::AppState, run_id: &str, message: String) {

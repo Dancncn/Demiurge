@@ -61,6 +61,11 @@ export default function GoalBar({ goal, busy, progress, onAction }: GoalBarProps
   if (!goal) return null;
 
   const statusTone = STATUS_TONES[goal.status] ?? STATUS_TONES.active;
+  const tokenPct =
+    typeof goal.token_budget === "number" && goal.token_budget > 0
+      ? Math.min(100, Math.round((goal.tokens_used / goal.token_budget) * 100))
+      : null;
+  const turnPct = goal.max_turns > 0 ? Math.min(100, Math.round((goal.turns_executed / goal.max_turns) * 100)) : 0;
   const detail =
     goal.status === "blocked" && goal.last_block_reason
       ? goal.last_block_reason
@@ -88,6 +93,14 @@ export default function GoalBar({ goal, busy, progress, onAction }: GoalBarProps
           <span className="min-w-0 truncate" title={detail}>
             {detail}
           </span>
+        </div>
+        <div className="mt-1 grid h-1.5 grid-cols-2 gap-1">
+          <div className="overflow-hidden rounded-full bg-[#eef1f5]" title={tokenPct === null ? "Token budget is unlimited" : `Token budget ${tokenPct}%`}>
+            <div className="h-full rounded-full bg-[#10a37f] transition-all" style={{ width: `${tokenPct ?? 100}%` }} />
+          </div>
+          <div className="overflow-hidden rounded-full bg-[#eef1f5]" title={`Continuation turns ${turnPct}%`}>
+            <div className="h-full rounded-full bg-[#0b57d0] transition-all" style={{ width: `${turnPct}%` }} />
+          </div>
         </div>
       </div>
 
