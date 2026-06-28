@@ -36,7 +36,10 @@ function buildHistory(msgs: Message[]): DisplayItem[] {
   const id = () => `h_${++seq}`;
   for (const m of msgs) {
     if (m.role === "user") {
-      out.push({ id: id(), kind: "user", text: m.content ?? "" });
+      const text = m.content ?? "";
+      if (!text.startsWith("[Goal ")) {
+        out.push({ id: id(), kind: "user", text });
+      }
     } else if (m.role === "assistant") {
       if (m.content) out.push({ id: id(), kind: "assistant", text: m.content, streaming: false });
       for (const tc of m.tool_calls ?? []) {

@@ -17,6 +17,7 @@ Demiurge 的 Ultracode 集成采用渐进式落地：先提供可运行的只读
 - Workflow JSON DSL：沙盒 `.demiurge/workflows/*.json` 可定义 `log`、`phase`、`agent`、`parallel`、`pipeline`、`budget` step，由 Rust 原生运行时执行。
 - Workflows live panel：顶部 `Workflows` 入口可查看定义、启动 workflow、实时查看 run/agent/log 状态，并支持 stop/resume。
 - `worktree_create`：在沙盒 Git 仓库下创建隔离 worktree，用于大改动或实验分支。
+- Goal 持续驱动：`/goal` 可把长任务持续推进；普通 `/ultracode`、workflow 或手动 Agent 回合结束后，若 goal 仍 active，会继续自动调度下一轮。
 
 ## 使用方式
 
@@ -30,7 +31,7 @@ Demiurge 的 Ultracode 集成采用渐进式落地：先提供可运行的只读
 
 ## 上下文工程优化
 
-参考 claude-code-main 中 Ultracode 与 fork-subagent 的设计，本次落地了三条低风险优化：
+参考 Ultracode 与 fork-subagent 的设计，本次落地了三条低风险优化：
 
 1. 编排提示临时注入：`/ultracode` 的规则不进入长期会话历史，避免后续普通对话被大型 workflow 提示污染。
 2. 子 Agent 继承摘要而非全量历史：默认 `brief` 模式只传会话摘要和少量最近消息，必要时可用 `recent` 传更多近期上下文。
@@ -48,4 +49,4 @@ Demiurge 的 Ultracode 集成采用渐进式落地：先提供可运行的只读
 
 ## 当前边界
 
-当前版本仍不是完整的 Claude Code workflow runtime。它已经有 fork-style 子 Agent、deferred tools、上下文折叠、journal/resume、Rust 原生 JSON workflow DSL、live panel 和 worktree 创建骨架；但还没有 JavaScript workflow DSL、per-agent 硬预算追踪或跨进程 live 进度恢复。主 Agent 仍是唯一做最终判断和答复的角色。
+当前版本仍不是完整的通用 workflow runtime。它已经有 fork-style 子 Agent、deferred tools、上下文折叠、journal/resume、Rust 原生 JSON workflow DSL、live panel、worktree 创建和 Goal 持续驱动骨架；但还没有 JavaScript workflow DSL、后台 LocalAgentTask 式长任务、coordinator/team/swarm/mailbox、per-agent 硬预算追踪或跨进程 live 进度恢复。主 Agent 仍是唯一做最终判断和答复的角色。

@@ -12,6 +12,7 @@ mod edit_file;
 mod execute_tool;
 mod git_status;
 mod glob;
+mod goal_tool;
 mod grep;
 mod open_path;
 mod read_file;
@@ -117,6 +118,7 @@ pub const CORE_TOOL_NAMES: &[&str] = &[
     "agent_spawn",
     "context_inspect",
     "context_collapse",
+    "goal",
     "tool_search",
     "execute_tool",
     "worktree_create",
@@ -353,7 +355,7 @@ pub fn registry() -> Vec<ToolDefinition> {
                     },
                     "num_results": { "type": "integer", "description": "可选：最多返回多少条结果，默认 8，最大 20。" },
                     "context_max_characters": { "type": "integer", "description": "可选：搜索结果输出的最大字符数，默认 10000，最大 50000。" },
-                    "source": { "type": "string", "description": "可选：搜索后端，auto、bing 或 duckduckgo。默认 auto。" },
+                    "source": { "type": "string", "description": "可选：搜索后端，auto、bing、duckduckgo、tavily、brave 或 exa。默认 auto；也可用 WEB_SEARCH_ADAPTER 环境变量指定。" },
                     "livecrawl": { "type": "string", "description": "兼容字段，当前保留给后续深度抓取实现。" },
                     "search_type": { "type": "string", "description": "兼容字段，可传 auto、fast、deep；当前实现按结果页搜索处理。" }
                 },
@@ -398,6 +400,33 @@ pub fn registry() -> Vec<ToolDefinition> {
                 "type": "object",
                 "properties": {
                     "keep_recent": { "type": "integer", "description": "可选：保留最近多少条消息，默认 12，最小 2。" }
+                }
+            }),
+        },
+        ToolDefinition {
+            name: "goal",
+            description: "读取或更新当前会话的持续目标。模型只能读取状态，或在完成审计后标记 complete，或在同一阻塞连续出现 3 次后标记 blocked。",
+            risk: ToolRisk::Mutating,
+            concurrency: ToolConcurrency::ParallelSafe,
+            permission: PermissionPolicy::allow("只更新当前会话的 goal 状态，不访问外部资源。"),
+            output_policy: ToolOutputPolicy::Inline,
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["get", "update"],
+                        "description": "get 读取当前 goal；update 标记 complete 或 blocked。若提供 status，可省略并默认 update。"
+                    },
+                    "status": {
+                        "type": "string",
+                        "enum": ["complete", "blocked"],
+                        "description": "update 时必填。只能标记 complete 或 blocked。"
+                    },
+                    "reason": {
+                        "type": "string",
+                        "description": "update 时说明完成证据或阻塞原因。"
+                    }
                 }
             }),
         },
@@ -662,6 +691,7 @@ pub async fn execute(state: &crate::AppState, name: &str, args: Value) -> Result
         "agent_spawn" => agent_spawn::run(state, args).await,
         "context_inspect" => context_tools::inspect(state),
         "context_collapse" => context_tools::collapse(state, args).await,
+        "goal" => goal_tool::run(state, args),
         "tool_search" => tool_search::run(args),
         "execute_tool" => execute_tool::run(state, args).await,
         "worktree_create" => worktree::create(state, args),

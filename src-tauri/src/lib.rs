@@ -109,11 +109,41 @@ async fn send(app: AppHandle, state: State<'_, AppState>, text: String) -> Resul
         return Err("正在处理上一条消息，请稍候。".to_string());
     }
     let trimmed = text.trim();
+    let mut should_drive_goal = false;
     let res = if trimmed == "/dream" || trimmed.starts_with("/dream ") {
+        should_drive_goal = true;
         agent::dream::run_manual_dream(&app, st, text).await
     } else if trimmed == "/compact" || trimmed.starts_with("/compact ") {
+        should_drive_goal = true;
         agent::collapse::run_manual_compact(&app, st, text).await
+    } else if trimmed == "/goal" || trimmed.starts_with("/goal ") {
+        match agent::goal::handle_slash(st, trimmed) {
+            Ok(agent::goal::GoalSlashOutcome::Respond(body)) => {
+                let _ = app.emit("assistant-done", body);
+                Ok(())
+            }
+            Ok(agent::goal::GoalSlashOutcome::Query {
+                stored_user_text,
+                system_overlay,
+                ..
+            }) => {
+                should_drive_goal = true;
+                agent::run_turn_with_options(
+                    &app,
+                    st,
+                    text,
+                    agent::TurnOptions {
+                        system_overlay: Some(system_overlay),
+                        stored_user_text: Some(stored_user_text),
+                        workflow_run_id: None,
+                    },
+                )
+                .await
+            }
+            Err(e) => Err(e),
+        }
     } else if trimmed == "/workflows" {
+        should_drive_goal = true;
         let runs = agent::workflow_journal::list(st);
         let body = if runs.is_empty() {
             "暂无 workflow journal。使用 /ultracode <任务> 会自动创建 run。".to_string()
@@ -135,6 +165,7 @@ async fn send(app: AppHandle, state: State<'_, AppState>, text: String) -> Resul
             .trim()
             .to_string();
         let overlay = agent::workflow_journal::resume_overlay(st, &run_id)?;
+        should_drive_goal = true;
         agent::run_turn_with_options(
             &app,
             st,
@@ -147,6 +178,7 @@ async fn send(app: AppHandle, state: State<'_, AppState>, text: String) -> Resul
         )
         .await
     } else if trimmed == "/ultracode" || trimmed.starts_with("/ultracode ") {
+        should_drive_goal = true;
         let task = trimmed
             .strip_prefix("/ultracode")
             .unwrap_or("")
@@ -166,7 +198,13 @@ async fn send(app: AppHandle, state: State<'_, AppState>, text: String) -> Resul
         )
         .await
     } else {
+        should_drive_goal = true;
         agent::run_turn(&app, st, text).await
+    };
+    let res = if res.is_ok() && should_drive_goal && !st.cancel.load(Ordering::Relaxed) {
+        agent::goal::drive_after_turn(&app, st).await
+    } else {
+        res
     };
     st.busy.store(false, Ordering::SeqCst);
     res

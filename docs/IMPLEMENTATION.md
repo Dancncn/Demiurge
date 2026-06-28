@@ -1,129 +1,337 @@
-# 实现说明（给协作者）
+# 实现说明
 
-面向想读懂 / 扩展代码的人。设计动机见 [demiurge-mvp-design.md](./demiurge-mvp-design.md)，待办见 [TODO.md](./TODO.md)。
+本文面向协作者，说明 Demiurge 的项目结构、核心数据流、后端模块、前端模块、安全边界和扩展方式。路线图见 [TODO.md](./TODO.md)，设计背景见 [demiurge-mvp-design.md](./demiurge-mvp-design.md)。
 
 ## 总览
 
-```
-React UI (webview)  ──invoke 命令──▶  Rust 内核 (Tauri)  ──HTTP 流──▶  LLM 端点
-       ▲                                    │
-       └──────── emit 事件（流式/工具/确认）──┘
+Demiurge 是一个 Tauri 桌面应用。前端负责展示和交互，Rust 后端负责 Agent 循环、上下文工程、工具执行、权限控制、持久化和 provider 适配。
+
+```text
+React UI
+  ├─ invoke: send / settings / sessions / workflow commands
+  └─ listen: assistant/tool/confirm/workflow events
+        │
+        ▼
+Rust AppState
+  ├─ agent runner
+  ├─ prompt/context/memory/goal
+  ├─ tool registry + permission gate
+  ├─ provider adapters
+  └─ session/settings/keyring persistence
+        │
+        ▼
+LLM endpoint / local tools / OS integrations
 ```
 
-- **后端 = Rust**，承载全部 agent 逻辑；**前端 = React**，只做展示与交互。
-- 二者通过 **Tauri 命令**（前端→后端，请求/响应）与 **Tauri 事件**（后端→前端，单向推送）通信。
+一次普通对话回合：
 
-## Rust 内核（`src-tauri/src/`）
+```text
+用户输入
+  -> lib.rs::send
+  -> agent::run_turn_with_options
+  -> prompt::build + budget::history_budget + context trimming
+  -> llm::stream_completion
+  -> optional tool_calls
+  -> permission check + tool execution
+  -> tool results fed back to model
+  -> final assistant answer
+  -> memory extraction
+  -> optional goal continuation
+```
+
+## 项目结构
+
+```text
+Demiurge/
+├─ README.md
+├─ package.json
+├─ vite.config.ts
+├─ src/
+│  ├─ App.tsx
+│  ├─ main.tsx
+│  ├─ style.css
+│  ├─ components/
+│  │  ├─ Composer.tsx
+│  │  ├─ ConfirmDialog.tsx
+│  │  ├─ Markdown.tsx
+│  │  ├─ MessageList.tsx
+│  │  ├─ SettingsDialog.tsx
+│  │  ├─ Sidebar.tsx
+│  │  ├─ ToolCard.tsx
+│  │  └─ WorkflowsPanel.tsx
+│  └─ lib/
+│     ├─ api.ts
+│     └─ types.ts
+├─ src-tauri/
+│  ├─ Cargo.toml
+│  └─ src/
+│     ├─ lib.rs
+│     ├─ main.rs
+│     ├─ credentials.rs
+│     ├─ ocr.rs
+│     ├─ voice.rs
+│     ├─ agent/
+│     ├─ llm/
+│     ├─ pack/
+│     ├─ permission/
+│     ├─ store/
+│     └─ tools/
+├─ docs/
+│  ├─ IMPLEMENTATION.md
+│  ├─ TODO.md
+│  ├─ demiurge-mvp-design.md
+│  ├─ goal-continuous-driving.md
+│  ├─ ultracode-agent-orchestration.md
+│  └─ workflow-json-dsl.md
+└─ packs/
+   └─ default/
+```
+
+## Rust 后端模块
 
 | 模块 | 职责 | 关键入口 |
 |---|---|---|
-| `lib.rs` | 全局状态 `AppState`、命令注册、Tauri builder、`setup()` 初始化路径/持久化 | `run()` |
-| `agent/runner.rs` | **Agent 循环**：调 LLM → 执行工具 → 喂回 → 重复 | `run_turn()` |
-| `agent/conversation.rs` | OpenAI 兼容消息结构（role / tool_calls / tool_result） | `Message` |
-| `agent/budget.rs` | 轻量 token-aware budget：估算 system/tools/history/output reserve，占用并给历史分配预算 | `history_budget()` |
-| `agent/context.rs` | 对话历史裁剪（先截老工具输出，再丢更老回合，并返回可摘要的旧消息） | `trim_collect_removed_by_tokens()` |
-| `agent/summary.rs` | 会话 rolling summary：把被裁剪的旧消息压缩成短期会话摘要 | `update_session_summary()` |
-| `agent/collapse.rs` | 上下文折叠：检查上下文压力，手动/工具触发压缩旧消息并保留最近消息 | `inspect()` / `compact_active_session()` |
-| `agent/memory.rs` | 自动长期记忆提取：保守提取用户偏好/项目约束并追加到沙盒 `.demiurge/memory.md` | `extract_and_update()` |
-| `agent/prompt.rs` | Phase 2 prompt section builder：engine/persona/project/environment/session summary/memory 分区 | `build()` |
-| `agent/persona.rs` | 引擎基础指令片段 | `engine_base()` |
-| `agent/workflow_journal.rs` | Ultracode workflow journal：记录 `/ultracode` run 事件并生成 resume overlay | `append()` / `resume_overlay()` |
-| `agent/workflow_runtime.rs` | Rust 原生 workflow JSON DSL：加载 `.demiurge/workflows/*.json`，执行 `agent` / `parallel` / `pipeline` / `phase` / `budget`，并向前端推送 live panel 状态 | `panel_state()` / `launch()` / `run_launched()` / `stop()` |
-| `llm/mod.rs` | Provider adapter 分发入口；统一 `AssistantTurn` / `ProviderProfile`，按设置分发到 OpenAI-compatible / local / Anthropic / Gemini | `stream_completion()` |
-| `llm/openai.rs` / `local.rs` / `anthropic.rs` / `gemini.rs` | 各 provider 的请求构造、SSE 解析、工具调用格式转换 | `stream_completion()` |
-| `tools/mod.rs` | 工具注册表 + metadata（risk/concurrency/permission/output policy）+ 统一执行入口 + 沙盒路径解析 | `registry()` / `execute()` |
-| `tools/*.rs` | 各内置工具实现 | `open_path` / `read_file` / `write_file` / `edit_file` / `multi_edit` / `apply_patch` / `undo_edit` / `shell` / `web_search` / `agent_spawn` / `system_info` / `glob` / `grep` / `git_status` / screen/OCR 工具 |
-| `permission/mod.rs` | confirm 工具的前端确认往返（oneshot 通道） | `confirm()` |
-| `pack/mod.rs` | 角色包清单加载、首启动落地默认包 | `load_pack()` / `ensure_default()` |
-| `store/mod.rs` | 设置 / 多会话 JSON 落盘（含旧版迁移） | `Settings` / `Session` / `SessionStore` |
+| `lib.rs` | Tauri command 注册、全局 `AppState`、应用初始化、`send` 分发 | `run()` / `send()` |
+| `credentials.rs` | keyring 凭据读写，避免 LLM key 落入 settings 明文 | `load_api_key()` / `save_api_key()` |
+| `ocr.rs` | OCR 模型路径、模型源、缺模型检查、OCR 推理入口 | `ensure_models()` |
+| `voice.rs` | TTS/ASR adapter 预留接口 | adapter traits |
+| `agent/runner.rs` | Agent loop，处理模型流、tool calls、tool results、最终回答 | `run_turn()` / `run_turn_with_options()` |
+| `agent/conversation.rs` | 内部消息结构和 tool call/result 表示 | `Message` / `ToolCall` |
+| `agent/prompt.rs` | system prompt 分区组装 | `build()` |
+| `agent/budget.rs` | 启发式 token 预算和 history budget | `history_budget()` |
+| `agent/context.rs` | 历史裁剪，保留最近上下文并返回可摘要旧消息 | `trim_collect_removed_by_tokens()` |
+| `agent/summary.rs` | rolling summary 更新 | `update_session_summary()` |
+| `agent/memory.rs` | 长期记忆提取并写入 `.demiurge/memory.md` | `extract_and_update()` |
+| `agent/dream.rs` | `/dream` 记忆整理 | `handle_slash()` |
+| `agent/collapse.rs` | `/compact` 与上下文折叠工具 | `inspect()` / `compact_active_session()` |
+| `agent/goal.rs` | `/goal`、持续目标状态、预算、续跑和阻塞判定 | `handle_slash()` / `drive_after_turn()` |
+| `agent/subagent.rs` | 只读子 Agent、fork/recent/brief context | `run()` |
+| `agent/ultracode.rs` | `/ultracode` 临时编排 overlay | `handle_slash()` |
+| `agent/workflow_journal.rs` | workflow JSONL journal 和 resume overlay | `append()` / `resume_overlay()` |
+| `agent/workflow_runtime.rs` | JSON workflow DSL 执行与 live panel 状态 | `launch()` / `run_launched()` |
+| `llm/*` | OpenAI-compatible/local/Anthropic/Gemini provider adapters | `stream_completion()` |
+| `tools/mod.rs` | 工具注册表、schema 输出、权限 metadata、统一执行入口 | `registry()` / `execute()` |
+| `permission/mod.rs` | confirm 工具的前后端确认往返 | `confirm()` |
+| `pack/mod.rs` | 角色包加载和默认包落地 | `load_pack()` |
+| `store/mod.rs` | settings、sessions、权限规则等持久化 | `Settings` / `SessionStore` |
 
-数据目录（Tauri `app_data_dir`）下：`settings.json`、`sessions.json`（多会话 + 活动会话 + 每会话 rolling summary）、`sandbox/`、`packs/`。
-（旧版单会话 `conversation.json` 在首次启动时会自动迁移成一条会话。）
+## 前端模块
 
-### Agent 循环（`run_turn`）
-1. 追加用户消息、持久化。
-2. 通过 `agent/prompt.rs` 拼分区化 system prompt（引擎规则、角色人格、项目指令、运行环境、会话摘要、只读 memory），再由 `agent/budget.rs` 估算 system/tools/output reserve 占用并按剩余 token 预算裁剪历史，随后流式调 LLM；正文增量通过 `assistant-delta` 事件实时推给前端。
-3. 若返回 `tool_calls`：把带 tool_calls 的 assistant 消息入历史，逐个工具——
-   - `emit tool-start` → 权限门（auto 直接放行 / confirm 走前端确认）→ 执行 → `emit tool-end`；
-   - 把结果作为 `tool` 消息喂回（**每个 tool_call 都必须有对应结果**，否则下一轮 400）。
-   - 然后回到第 2 步，让模型基于结果继续。
-4. 无 tool_calls → 最终答复，`emit assistant-done`，随后由 `agent/memory.rs` 尝试把本轮稳定偏好/项目约束追加到沙盒 `.demiurge/memory.md`（失败不影响答复）。
-5. 全程检查 `cancel` 标志；用户中断会唤醒待确认项并尽快收尾。
+| 模块 | 职责 |
+|---|---|
+| `src/App.tsx` | 主状态编排，订阅后端事件，维护消息流、设置、会话和 workflow panel |
+| `src/lib/api.ts` | Tauri invoke/event 的 typed wrapper |
+| `src/lib/types.ts` | 前后端共享 TypeScript 类型 |
+| `components/Sidebar.tsx` | 会话列表、角色包选择、基础入口 |
+| `components/Composer.tsx` | 输入框、中断/发送状态 |
+| `components/MessageList.tsx` | 用户消息、助手消息、工具卡片渲染 |
+| `components/Markdown.tsx` | GFM、代码块、KaTeX 渲染 |
+| `components/ToolCard.tsx` | tool-start/tool-end 展示 |
+| `components/ConfirmDialog.tsx` | 敏感工具确认 |
+| `components/SettingsDialog.tsx` | provider、model、base_url、key 设置 |
+| `components/WorkflowsPanel.tsx` | workflow 定义、run、agent、log 的 live 状态 |
 
-### Provider Adapter
+## 运行数据目录
 
-`llm/mod.rs` 保持统一入口 `stream_completion()`，调用方继续传入 Demiurge 内部的 `Message` / `ToolCall` 历史和当前 provider 方言的工具 schema。模块内部根据 `Settings.provider` 分发：
+应用数据目录由 Tauri `app_data_dir` 决定。主要内容：
 
-- `open_ai_compatible`：调用 `{base_url}/chat/completions`，沿用 OpenAI-compatible `messages` / `tools` / `tool_calls` 格式，支持 DeepSeek 等兼容端点。
-- `local`：复用 OpenAI-compatible adapter，但允许 API Key 为空，适配 LM Studio / Ollama OpenAI-compatible / vLLM 等本地服务。
-- `anthropic`：调用 Anthropic Messages API `{base_url}/messages`，把内部 `system`、assistant `tool_calls` 和 `tool` result 转换为 Anthropic `system`、`tool_use`、`tool_result` content blocks，并解析 `text_delta` / `input_json_delta` 流。
-- `gemini`：调用 Google AI Studio REST `models/{model}:streamGenerateContent?alt=sse`，把内部消息转换为 `systemInstruction` / `contents` / `functionCall` / `functionResponse`，并解析 SSE 中的 `text` 与 `functionCall` parts。
+```text
+app_data_dir/
+├─ settings.json                 # 非密钥设置
+├─ sessions.json                 # 多会话、active session、rolling summary、goal state
+├─ permissions.json              # 项目级权限规则
+├─ permission_audit.jsonl        # 轻量权限审计
+├─ sandbox/                      # 文件工具可访问的工作区
+├─ packs/                        # 用户角色包
+├─ ocr-models/                   # OCR 模型
+└─ sandbox/.demiurge/
+   ├─ memory.md                  # 自动长期记忆
+   ├─ workflows/*.json           # workflow 定义
+   ├─ workflow-runs/*/journal.jsonl
+   └─ screenshots/               # 截图和 OCR 中间文件
+```
 
-工具 schema 由 `tools::main_schemas_json_for(profile.tool_schema_dialect)` 生成：OpenAI-compatible/local 使用 OpenAI function tools；Anthropic 使用 `input_schema`；Gemini 使用 `function_declarations`。主 schema 只包含 core tools；低频工具（screen/OCR/open_path 等）留在 deferred pool，通过 `tool_search` 发现、`execute_tool` 代理执行，保持 tools JSON 稳定。历史消息仍以统一 `Message` / `ToolCall` 结构持久化，不保存厂商原生格式。
+API Key 存在系统凭据管理器中，不写入 `settings.json`。Web Search 外部 adapter key 当前通过环境变量读取。
 
-### Project Context / Memory 首阶段
+## Agent 循环
 
-`agent/prompt.rs` 负责把 system prompt 拆成清晰分区：
+1. `send` 捕获当前 active session id，避免用户中途切换会话导致写入串台。
+2. slash command 先分流，例如 `/goal`、`/compact`、`/dream`、`/ultracode`、workflow 命令。
+3. 普通回合调用 `run_turn_with_options`，把用户消息写入 session。
+4. `prompt::build` 组装 engine、persona、project instructions、environment、goal、summary、memory。
+5. `budget` 和 `context` 按预算裁剪历史。
+6. provider adapter 发起流式请求。
+7. 如果模型返回 tool calls，后端执行工具并把 tool result 写回历史，再进入下一轮模型请求。
+8. 如果模型给出最终回答，触发 `assistant-done`，随后尝试记忆提取。
+9. 如果当前 session 有 active goal，则 `goal::drive_after_turn` 继续调度下一轮，直到目标完成、暂停、阻塞、预算限制、max turns 或中断。
 
-- **引擎规则**：来自 `agent/persona.rs`，描述工具、权限、沙盒和输出约束。
-- **角色设定**：来自当前角色包 `persona.md`。
-- **项目指令**：从沙盒根读取 `DEMIURGE.md` 和 `CLAUDE.md`（可同时存在，单文件 32 KiB 上限）。
-- **运行环境**：包含当前 Unix 毫秒时间戳、沙盒工作区路径、当前角色包 id、`git status --short --branch` 摘要（非 git 目录自动降级）。
-- **会话摘要**：每个 `Session` 可持有一段 rolling summary；当历史超出 token-aware history budget 并被裁剪时，`agent/summary.rs` 会把被移除的旧消息与已有摘要合并成新的短期会话摘要。
-- **记忆**：只读加载沙盒根 `memory.md`、沙盒根 `.demiurge/memory.md`、当前角色包 `memory.md`（可选，单文件 32 KiB 上限）；自动记忆提取只会追加写入沙盒 `.demiurge/memory.md`，不写角色包。
+## 上下文工程
 
-这些 project/memory/environment/summary section 总体再做字符上限截断，避免挤占对话历史预算。`agent/budget.rs` 用启发式 token 估算把 system prompt、工具 schema、历史消息和输出预留纳入同一预算；`agent/context.rs` 按预算裁剪历史并返回被移除的旧消息；`agent/summary.rs` 只维护当前会话的短期摘要。`agent/memory.rs` 在最终答复后保守提取长期有用信息，写入本地 Markdown memory，不做向量库/RAG。
+system prompt 由多个 section 组成：
 
-### 前后端事件协议
-后端 emit（`src-tauri` → 前端 `src/lib/api.ts` 监听）：
+- 引擎规则：工具、安全、输出约束。
+- 角色设定：当前角色包 `persona.md`。
+- 项目指令：沙盒根 `DEMIURGE.md` / `CLAUDE.md`。
+- 运行环境：时间戳、沙盒路径、角色包 id、git status 摘要。
+- 当前目标：goal objective、status、budget、tokens used、active time。
+- 会话摘要：rolling summary。
+- 记忆：沙盒 memory、角色包 memory。
 
-| 事件 | 载荷 | 含义 |
-|---|---|---|
-| `assistant-start` | — | 一次 LLM 调用开始 |
-| `assistant-delta` | `string` | 正文增量 token |
-| `assistant-done` | `string` | 最终答复（完整正文） |
-| `assistant-interrupted` | — | 本轮被用户中断 |
-| `tool-start` | `{tool_call_id, name, args, description?, risk?, permission_effect?, concurrency?}` | 工具开始执行；前端用 `tool_call_id` 关联卡片 |
-| `tool-end` | `{tool_call_id, name, ok, result}` | 工具结束（ok=是否放行） |
-| `tool-confirm-request` | `{id, tool, args, description?, risk?, effect?, scope?, reason?, summary?, preview?}` | 请前端弹确认框；`preview` 可携带 diff/shell 等执行前预览；前端回 `respond_confirm(id, allow, scope)` |
-| `workflow-updated` | `WorkflowPanelState` | workflow 定义、run、agent 状态或日志变化；`WorkflowsPanel` 用它刷新 live 状态 |
+上下文压力处理：
 
-前端命令（`invoke`）：`send` / `interrupt` / `respond_confirm(id, allow, scope)` / `get_settings` / `save_settings` / `list_packs` / `list_sessions` / `get_history` / `new_session` / `select_session` / `delete_session` / `open_sandbox` / `workflow_panel_state` / `workflow_run` / `workflow_stop`。
-Agent 循环在开始时**捕获活动会话 id**，整轮写入都落到这一段对话——即便用户中途切换会话也不会串台。
+- 先压缩或截断老工具输出。
+- 再裁剪更旧对话。
+- 被裁剪的旧消息会进入 rolling summary。
+- `/compact` 可以手动触发。
+- `context_inspect` / `context_collapse` 可以由模型触发。
 
-## 安全模型要点
-- **沙盒**：`read_file` / `write_file` 限定在 `app_data_dir/sandbox`。路径先做词法 `..` 折叠并 `starts_with` 校验，
-  再对「目标最近存在的祖先」做 `canonicalize` 二次校验，挡住 junction / 符号链接逃逸。
-- **文件工具**：`read_file` / `write_file` / `edit_file` / `multi_edit` / `apply_patch` / `undo_edit` 限定在沙盒目录；`edit_file` 只修改已有 UTF-8 文本文件，默认要求 `old_string` 唯一，执行前在确认弹窗展示 diff preview，成功后把编辑前后内容记录到进程内 undo 栈；`multi_edit` 对多个精确替换先做全量预检并展示聚合 diff，确认后按文件写入并为每个被修改文件记录 undo；`apply_patch` 使用结构化行 hunk，只在指定行完整匹配 `old_lines` 时应用，预检全通过后展示聚合 diff 并记录 undo；`undo_edit` 只能撤销最近一次 `edit_file` / `multi_edit` / `apply_patch` 写入记录，执行前同样确认并校验目标文件当前内容未偏离记录。
-- **搜索工具**：`glob` / `grep` 只遍历沙盒内文件，拒绝绝对路径与 `..` 越界输入，并对返回条数、单文件大小和行长度设上限。
-- **Web Search**：`web_search` 默认使用 Bing 结果页抽取，DuckDuckGo Instant Answer 作为 fallback；支持 `allowed_domains` / `blocked_domains`、`num_results`、`context_max_characters` 和 `source`。工具结果始终附来源链接和 Sources 提醒，模型使用联网信息答复时必须在末尾列出 markdown sources。
-- **Deferred Tools**：`tool_search` 搜索未直接加载的低频工具，`execute_tool` 代理执行。这样主工具 schema 在会话中更稳定，减少固定上下文成本；代理执行仍走确认门。
-- **Context Collapse**：`/compact`、`context_inspect`、`context_collapse` 共用 `agent/collapse.rs`，把旧消息压入会话 rolling summary，并避免留下孤儿 `tool` 消息。
-- **Fork Subagent**：`agent_spawn` 的 `context_mode=fork` 会继承父会话消息，并用固定 placeholder 修复当前未完成 tool call 的配对；子 Agent 仍只能执行只读工具，非只读调用会被拒绝。
-- **Workflow Runtime / Journal / Worktree**：`/ultracode` run 会写 `.demiurge/workflow-runs/<run_id>/journal.jsonl`，`/workflows` 列 run，`/workflow resume <run_id>` 用 journal 生成恢复 overlay；`.demiurge/workflows/*.json` 由 `agent/workflow_runtime.rs` 执行，支持 `log` / `phase` / `agent` / `parallel` / `pipeline` / `budget` step，运行状态经 `workflow-updated` 推给 Workflows 面板；`worktree_create` 可在沙盒 Git 仓库下创建隔离 worktree。
-- **shell**：标为 confirm + serial，只能在沙盒内的工作目录启动短时 shell 进程；执行前展示命令/cwd/超时，运行时限制超时与输出长度。
-- **open_path**：标为 confirm（执行前用户确认），并拒绝 UNC 路径与非安全 URL 协议（只放行 http/https/file/mailto）。
-- **权限门**：confirm 类工具经 `oneshot` 通道等待前端裁决；确认弹窗支持「仅本次 / 本会话 / 本项目」allow/deny。`Session` 规则只存在内存中，`Project` 规则保存到 app data 的 `permissions.json`，每次默认放行、命中规则或用户裁决都会向 `permission_audit.jsonl` 追加轻量审计记录（不写完整工具参数）。`interrupt` 会立即唤醒所有待确认项按拒绝处理。
-- **项目上下文 / 记忆**：`DEMIURGE.md` / `CLAUDE.md` / memory 文件只从沙盒或当前角色包目录加载，单文件大小受限；读取失败不会中断 Agent 回合。自动记忆提取只追加写入沙盒 `.demiurge/memory.md`，且提取失败会静默跳过。
-- **API Key**：MVP 以明文存 `settings.json`（仅本机）。后续可改 Windows 凭据管理器（keyring）。
+## 工具系统
 
-## 前端（`src/`）
-- `App.tsx`：编排——持有状态、注册事件、渲染布局。把后端事件流翻译成展示项 `DisplayItem[]`。
-- `components/`：`Sidebar` / `Composer` / `MessageList`（含用户气泡、助手消息、思考态）/ `Markdown`（GFM + KaTeX + 代码块复制 + 流式防闪烁）/ `ToolCard` / `ConfirmDialog` / `SettingsDialog` / `WorkflowsPanel` / `Icons`。
-- `lib/api.ts`：Tauri 命令 + 事件订阅的类型化封装。`lib/types.ts`：与 Rust 对应的类型。
-- 视觉为 ChatGPT 风浅色主题（`src/style.css`）。
+工具定义集中在 `tools/mod.rs`：
 
-## 构建
-- 标准流程：`npm install` → `npm run tauri dev` / `npm run tauri build`。克隆即可独立编译，无需额外配置。
-- （本地可选加速）`src-tauri/.cargo/config.toml` 可把 `target-dir` 指向另一个 Tauri 项目的 target，
-  复用其已编译依赖树省一次冷编译。该文件含绝对路径、**仅本机有效，已加入 `.gitignore` 不入库**——
-  公开仓库的克隆者走标准独立编译，不受影响。
-- crate 源码本就全局缓存在 `~/.cargo/registry`，跨项目共享；只有「已编译产物」需共享 target-dir 才能复用。
+- `name`
+- `description`
+- `parameters`
+- `risk`
+- `concurrency`
+- `permission`
+- `output_policy`
 
-## 如何扩展
+主 schema 只放 core tools。截图、OCR、open_path 等低频工具留在 deferred pool，通过 `tool_search` 发现，再由 `execute_tool` 代理执行。这样可以减少固定 tools JSON 对上下文的占用。
 
-**加一个工具**：在 `tools/mod.rs` 的 `registry()` 加一项（名称/描述/JSON Schema，并补齐 `ToolRisk` / `ToolConcurrency` / `PermissionPolicy` / `ToolOutputPolicy`），在 `execute()` 加一条分支，新建 `tools/<name>.rs` 实现。confirm 类会自动走确认门。
+当前核心工具：
 
-**加一个角色包**：在数据目录 `packs/<id>/` 放 `manifest.json` + `persona.md`（见设计文档格式），在应用里选择即可。
+- 文件：`read_file`、`write_file`、`edit_file`、`multi_edit`、`apply_patch`、`undo_edit`
+- 搜索导航：`glob`、`grep`、`git_status`
+- 执行：`shell`
+- 联网：`web_search`
+- 多 Agent：`agent_spawn`
+- 上下文：`context_inspect`、`context_collapse`
+- 目标：`goal`
+- deferred：`open_path`、screen capture、OCR
+- workflow/worktree：`worktree_create`
 
-**换 LLM 端点**：设置里先选 `provider`，再填写对应的 `base_url` + `model` + `api_key`。OpenAI-compatible 适合 DeepSeek 等兼容端点；local 适合 LM Studio / Ollama OpenAI-compatible / vLLM 且 API Key 可为空；Anthropic 默认可用 `https://api.anthropic.com/v1`；Gemini 默认可用 `https://generativelanguage.googleapis.com/v1beta`。
+## 安全模型
+
+- 文件工具只能访问沙盒目录。
+- 路径先做词法校验，再对最近存在祖先做 canonicalize，防止符号链接和 junction 逃逸。
+- 写入、shell、open_path、截图/OCR 等操作走确认门。
+- confirm 支持 once/session/project scope。
+- `interrupt` 会唤醒所有待确认项并按拒绝处理。
+- shell 限制 cwd、timeout 和 output cap。
+- 子 Agent 只暴露只读工具。
+- 权限审计不写完整敏感参数。
+
+## Goal 持续驱动
+
+Goal state 存在当前 session 中。用户通过 `/goal <objective>` 设置目标，可附带 token budget，例如 `/goal 修复构建 +500k`。
+
+状态包括：
+
+- `active`
+- `paused`
+- `blocked`
+- `budget_limited`
+- `usage_limited`
+- `max_turns`
+- `complete`
+
+模型只能通过 `goal` 工具读取状态、标记 complete，或报告 blocked。相同阻塞原因连续出现 3 次后才会真正进入 blocked。
+
+## Workflow JSON DSL
+
+workflow 定义放在沙盒 `.demiurge/workflows/*.json`。运行时支持：
+
+- `log`
+- `phase`
+- `agent`
+- `parallel`
+- `pipeline`
+- `budget`
+
+运行状态通过 `workflow-updated` 推送到前端。journal 写入 `.demiurge/workflow-runs/<run_id>/journal.jsonl`，可通过 `/workflow resume <run_id>` 生成恢复 overlay。
+
+## Web Search
+
+`web_search` 参数支持：
+
+- `query`
+- `allowed_domains`
+- `blocked_domains`
+- `num_results`
+- `context_max_characters`
+- `source`
+- `livecrawl`
+- `search_type`
+
+`source` 可选：
+
+- `auto`
+- `bing`
+- `duckduckgo`
+- `tavily`
+- `brave`
+- `exa`
+
+外部 adapter 环境变量：
+
+- `WEB_SEARCH_ADAPTER`
+- `TAVILY_SEARCH_URL` / `TAVILY_ENDPOINT_URL` / `TAVILY_API_KEY`
+- `BRAVE_SEARCH_API_KEY` / `BRAVE_API_KEY`
+- `EXA_MCP_URL` / `EXA_API_KEY`
+
+## 扩展方式
+
+### 新增工具
+
+1. 在 `src-tauri/src/tools/<name>.rs` 实现工具逻辑。
+2. 在 `tools/mod.rs` 增加 `mod <name>;`。
+3. 在 `registry()` 注册 tool definition。
+4. 在 `execute()` 增加分支。
+5. 按风险选择 `PermissionPolicy::allow` 或 `PermissionPolicy::ask`。
+6. 为解析和安全边界添加单元测试。
+
+### 新增 provider
+
+1. 在 `src-tauri/src/llm/` 增加 adapter。
+2. 实现请求体构造、SSE/stream 解析、tool call 转换。
+3. 在 `llm/mod.rs` 增加 provider kind 和 dispatch。
+4. 在设置 UI 和 `store::Settings` 中补字段或默认值。
+
+### 新增角色包
+
+在应用数据目录 `packs/<id>/` 下放：
+
+```text
+manifest.json
+persona.md
+memory.md        # 可选
+```
+
+`manifest.json` 至少包含 `id`、`name`、`persona`。
+
+## 构建与验证
+
+开发运行：
+
+```bash
+npm run tauri dev
+```
+
+前端构建：
+
+```bash
+npm run build
+```
+
+Rust 测试：
+
+```bash
+cargo test --manifest-path src-tauri/Cargo.toml
+```
+
+Tauri 打包：
+
+```bash
+npm run tauri build
+```

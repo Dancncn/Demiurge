@@ -2,7 +2,7 @@
 //! 默认使用 Bing HTML 结果页，DuckDuckGo Instant Answer 作为 fallback。
 use regex::Regex;
 use serde::Deserialize;
-use serde_json::Value;
+use serde_json::{json, Value};
 
 const DEFAULT_NUM_RESULTS: usize = 8;
 const MAX_NUM_RESULTS: usize = 20;
@@ -17,9 +17,7 @@ struct Args {
     num_results: Option<usize>,
     context_max_characters: Option<usize>,
     source: Option<String>,
-    #[allow(dead_code)]
     livecrawl: Option<String>,
-    #[allow(dead_code)]
     search_type: Option<String>,
 }
 
@@ -35,6 +33,9 @@ enum Adapter {
     Auto,
     Bing,
     DuckDuckGo,
+    Tavily,
+    Brave,
+    Exa,
 }
 
 impl Adapter {
@@ -42,6 +43,9 @@ impl Adapter {
         match value.unwrap_or("").trim().to_ascii_lowercase().as_str() {
             "bing" => Adapter::Bing,
             "duckduckgo" | "ddg" => Adapter::DuckDuckGo,
+            "tavily" => Adapter::Tavily,
+            "brave" => Adapter::Brave,
+            "exa" => Adapter::Exa,
             _ => Adapter::Auto,
         }
     }
@@ -69,21 +73,32 @@ pub async fn run(state: &crate::AppState, args: Value) -> Result<String, String>
         .clamp(1_000, MAX_CONTEXT_MAX_CHARS);
     let env_adapter = std::env::var("WEB_SEARCH_ADAPTER").ok();
     let adapter = Adapter::parse(args.source.as_deref().or(env_adapter.as_deref()));
+    let allowed = args.allowed_domains.as_deref().unwrap_or(&[]);
+    let blocked = args.blocked_domains.as_deref().unwrap_or(&[]);
 
     let mut results = match adapter {
         Adapter::Bing => search_bing(state, query).await?,
         Adapter::DuckDuckGo => search_duckduckgo(state, query).await?,
+        Adapter::Tavily => search_tavily(state, query, limit, allowed, blocked).await?,
+        Adapter::Brave => search_brave(state, query).await?,
+        Adapter::Exa => {
+            search_exa(
+                state,
+                query,
+                limit,
+                args.livecrawl.as_deref(),
+                args.search_type.as_deref(),
+                context_max,
+            )
+            .await?
+        }
         Adapter::Auto => match search_bing(state, query).await {
             Ok(results) if !results.is_empty() => results,
             Ok(_) | Err(_) => search_duckduckgo(state, query).await?,
         },
     };
 
-    results = filter_domains(
-        results,
-        args.allowed_domains.as_deref().unwrap_or(&[]),
-        args.blocked_domains.as_deref().unwrap_or(&[]),
-    );
+    results = filter_domains(results, allowed, blocked);
     dedupe_by_url(&mut results);
     results.truncate(limit);
 
@@ -145,6 +160,137 @@ async fn search_duckduckgo(
         .await
         .map_err(|e| format!("解析 DuckDuckGo 搜索结果失败：{e}"))?;
     Ok(extract_duckduckgo_results(&v))
+}
+
+async fn search_tavily(
+    state: &crate::AppState,
+    query: &str,
+    limit: usize,
+    allowed: &[String],
+    blocked: &[String],
+) -> Result<Vec<SearchResult>, String> {
+    let endpoint = env_first(&["TAVILY_SEARCH_URL", "TAVILY_ENDPOINT_URL"])
+        .unwrap_or_else(|| "https://tavily.claude-code-best.win/search".to_string());
+    let mut body = json!({
+        "query": query,
+        "search_depth": "basic",
+        "max_results": limit,
+    });
+    if !allowed.is_empty() {
+        body["include_domains"] = json!(normalize_domain_list(allowed));
+    }
+    if !blocked.is_empty() {
+        body["exclude_domains"] = json!(normalize_domain_list(blocked));
+    }
+
+    let mut req = state
+        .http
+        .post(endpoint)
+        .header("User-Agent", "Demiurge WebSearch")
+        .json(&body);
+    if let Some(key) = env_first(&["TAVILY_API_KEY"]) {
+        req = req.bearer_auth(key.clone()).header("x-api-key", key);
+    }
+
+    let resp = req
+        .send()
+        .await
+        .map_err(|e| format!("Tavily 搜索请求失败：{e}"))?;
+    let status = resp.status();
+    let text = resp
+        .text()
+        .await
+        .map_err(|e| format!("读取 Tavily 搜索结果失败：{e}"))?;
+    if !status.is_success() {
+        return Err(format!(
+            "Tavily 搜索返回 HTTP {status}: {}",
+            cap_chars(text, 500)
+        ));
+    }
+    let v: Value =
+        serde_json::from_str(&text).map_err(|e| format!("解析 Tavily 搜索结果失败：{e}"))?;
+    Ok(extract_tavily_results(&v))
+}
+
+async fn search_brave(state: &crate::AppState, query: &str) -> Result<Vec<SearchResult>, String> {
+    let key = env_first(&["BRAVE_SEARCH_API_KEY", "BRAVE_API_KEY"])
+        .ok_or_else(|| "Brave 搜索需要设置 BRAVE_SEARCH_API_KEY 或 BRAVE_API_KEY".to_string())?;
+    let resp = state
+        .http
+        .get("https://api.search.brave.com/res/v1/llm/context")
+        .query(&[("q", query)])
+        .header("Accept", "application/json")
+        .header("X-Subscription-Token", key)
+        .send()
+        .await
+        .map_err(|e| format!("Brave 搜索请求失败：{e}"))?;
+    let status = resp.status();
+    let text = resp
+        .text()
+        .await
+        .map_err(|e| format!("读取 Brave 搜索结果失败：{e}"))?;
+    if !status.is_success() {
+        return Err(format!(
+            "Brave 搜索返回 HTTP {status}: {}",
+            cap_chars(text, 500)
+        ));
+    }
+    let v: Value =
+        serde_json::from_str(&text).map_err(|e| format!("解析 Brave 搜索结果失败：{e}"))?;
+    Ok(extract_brave_results(&v))
+}
+
+async fn search_exa(
+    state: &crate::AppState,
+    query: &str,
+    limit: usize,
+    livecrawl: Option<&str>,
+    search_type: Option<&str>,
+    context_max: usize,
+) -> Result<Vec<SearchResult>, String> {
+    let endpoint =
+        env_first(&["EXA_MCP_URL"]).unwrap_or_else(|| "https://mcp.exa.ai/mcp".to_string());
+    let body = json!({
+        "jsonrpc": "2.0",
+        "id": "demiurge-web-search",
+        "method": "tools/call",
+        "params": {
+            "name": "web_search_exa",
+            "arguments": {
+                "query": query,
+                "type": search_type.unwrap_or("auto"),
+                "numResults": limit,
+                "livecrawl": livecrawl.unwrap_or("fallback"),
+                "contextMaxCharacters": context_max,
+            }
+        }
+    });
+
+    let mut req = state
+        .http
+        .post(endpoint)
+        .header("Accept", "application/json, text/event-stream")
+        .json(&body);
+    if let Some(key) = env_first(&["EXA_API_KEY"]) {
+        req = req.bearer_auth(key);
+    }
+
+    let resp = req
+        .send()
+        .await
+        .map_err(|e| format!("Exa 搜索请求失败：{e}"))?;
+    let status = resp.status();
+    let text = resp
+        .text()
+        .await
+        .map_err(|e| format!("读取 Exa 搜索结果失败：{e}"))?;
+    if !status.is_success() {
+        return Err(format!(
+            "Exa 搜索返回 HTTP {status}: {}",
+            cap_chars(text, 500)
+        ));
+    }
+    Ok(extract_exa_results(&text)?)
 }
 
 fn extract_bing_results(html: &str) -> Vec<SearchResult> {
@@ -234,6 +380,52 @@ fn collect_duckduckgo_topic(it: &Value, out: &mut Vec<SearchResult>) {
     }
 }
 
+fn extract_tavily_results(v: &Value) -> Vec<SearchResult> {
+    let mut results = Vec::new();
+    if let Some(items) = v["results"].as_array().or_else(|| v["data"].as_array()) {
+        for it in items {
+            push_result_from_value(it, &mut results);
+        }
+    }
+    results
+}
+
+fn extract_brave_results(v: &Value) -> Vec<SearchResult> {
+    let mut results = Vec::new();
+    for path in [
+        "/grounding/generic",
+        "/grounding/map",
+        "/grounding/poi",
+        "/web/results",
+        "/results",
+    ] {
+        if let Some(node) = v.pointer(path) {
+            collect_result_values(node, &mut results, 0);
+        }
+    }
+    if results.is_empty() {
+        collect_result_values(v, &mut results, 0);
+    }
+    results
+}
+
+fn extract_exa_results(raw: &str) -> Result<Vec<SearchResult>, String> {
+    let mut results = Vec::new();
+    let payloads = parse_json_payloads(raw);
+    if payloads.is_empty() {
+        results.extend(extract_results_from_text(raw));
+    } else {
+        for payload in &payloads {
+            collect_result_values(payload, &mut results, 0);
+            for text in collect_text_segments(payload) {
+                results.extend(extract_results_from_text(&text));
+            }
+        }
+    }
+    dedupe_by_url(&mut results);
+    Ok(results)
+}
+
 fn split_duckduckgo_text(text: &str) -> (String, Option<String>) {
     if let Some((title, rest)) = text.split_once(" - ") {
         (title.trim().to_string(), Some(rest.trim().to_string()))
@@ -241,6 +433,290 @@ fn split_duckduckgo_text(text: &str) -> (String, Option<String>) {
         let title: String = text.chars().take(80).collect();
         (title, Some(text.to_string()))
     }
+}
+
+fn collect_result_values(v: &Value, out: &mut Vec<SearchResult>, depth: usize) {
+    if depth > 8 {
+        return;
+    }
+    match v {
+        Value::Array(items) => {
+            for item in items {
+                collect_result_values(item, out, depth + 1);
+            }
+        }
+        Value::Object(map) => {
+            push_result_from_value(v, out);
+            for value in map.values() {
+                collect_result_values(value, out, depth + 1);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn push_result_from_value(v: &Value, out: &mut Vec<SearchResult>) {
+    let url = first_str(
+        v,
+        &[
+            "url",
+            "link",
+            "href",
+            "website",
+            "sourceUrl",
+            "source_url",
+            "resolved_url",
+        ],
+    );
+    let title = first_str(v, &["title", "name", "heading", "source"]);
+    let snippet = first_text(
+        v,
+        &[
+            "content",
+            "snippet",
+            "description",
+            "summary",
+            "text",
+            "raw_content",
+        ],
+    );
+    push_result(out, title, url, snippet);
+}
+
+fn push_result(
+    out: &mut Vec<SearchResult>,
+    title: Option<&str>,
+    url: Option<&str>,
+    snippet: Option<String>,
+) {
+    let Some(url) = url.map(clean_extracted_url).filter(|s| is_http_url(s)) else {
+        return;
+    };
+    let title = title
+        .map(clean_plain_text)
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| title_from_url(&url));
+    let snippet = snippet
+        .map(|s| clean_plain_text(&s))
+        .filter(|s| !s.is_empty());
+    out.push(SearchResult {
+        title,
+        url,
+        snippet,
+    });
+}
+
+fn first_str<'a>(v: &'a Value, keys: &[&str]) -> Option<&'a str> {
+    keys.iter()
+        .filter_map(|key| v.get(*key).and_then(Value::as_str))
+        .find(|s| !s.trim().is_empty())
+}
+
+fn first_text(v: &Value, keys: &[&str]) -> Option<String> {
+    for key in keys {
+        let Some(value) = v.get(*key) else {
+            continue;
+        };
+        if let Some(s) = value.as_str().filter(|s| !s.trim().is_empty()) {
+            return Some(s.to_string());
+        }
+        if let Some(items) = value.as_array() {
+            let joined = items
+                .iter()
+                .filter_map(Value::as_str)
+                .filter(|s| !s.trim().is_empty())
+                .collect::<Vec<_>>()
+                .join("\n");
+            if !joined.is_empty() {
+                return Some(joined);
+            }
+        }
+    }
+    None
+}
+
+fn parse_json_payloads(raw: &str) -> Vec<Value> {
+    let trimmed = raw.trim();
+    if let Ok(v) = serde_json::from_str::<Value>(trimmed) {
+        return vec![v];
+    }
+
+    let mut values = Vec::new();
+    for line in raw.lines() {
+        let line = line.trim_start();
+        let Some(data) = line.strip_prefix("data:") else {
+            continue;
+        };
+        let data = data.trim();
+        if data.is_empty() || data == "[DONE]" {
+            continue;
+        }
+        if let Ok(v) = serde_json::from_str::<Value>(data) {
+            values.push(v);
+        }
+    }
+    values
+}
+
+fn collect_text_segments(v: &Value) -> Vec<String> {
+    let mut out = Vec::new();
+    collect_text_segments_inner(v, &mut out, 0);
+    out
+}
+
+fn collect_text_segments_inner(v: &Value, out: &mut Vec<String>, depth: usize) {
+    if depth > 8 {
+        return;
+    }
+    match v {
+        Value::Array(items) => {
+            for item in items {
+                collect_text_segments_inner(item, out, depth + 1);
+            }
+        }
+        Value::Object(map) => {
+            for (key, value) in map {
+                let key = key.to_ascii_lowercase();
+                if matches!(
+                    key.as_str(),
+                    "text" | "content" | "markdown" | "answer" | "result"
+                ) {
+                    if let Some(s) = value.as_str().filter(|s| s.contains("http")) {
+                        out.push(s.to_string());
+                    }
+                }
+                collect_text_segments_inner(value, out, depth + 1);
+            }
+        }
+        Value::String(s) if s.contains("http") && s.len() > 20 => out.push(s.to_string()),
+        _ => {}
+    }
+}
+
+fn extract_results_from_text(text: &str) -> Vec<SearchResult> {
+    let mut results = Vec::new();
+    let md_re =
+        Regex::new(r#"\[([^\]\n]{1,200})\]\((https?://[^\s\)]+)\)(?::\s*([^\n]+))?"#).unwrap();
+    for cap in md_re.captures_iter(text) {
+        push_result(
+            &mut results,
+            cap.get(1).map(|m| m.as_str()),
+            cap.get(2).map(|m| m.as_str()),
+            cap.get(3).map(|m| m.as_str().to_string()),
+        );
+    }
+
+    let mut title: Option<String> = None;
+    let mut url: Option<String> = None;
+    let mut snippet = Vec::new();
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if let Some(value) = strip_label(trimmed, &["title"]) {
+            if url.is_some() {
+                push_result(
+                    &mut results,
+                    title.as_deref(),
+                    url.as_deref(),
+                    Some(snippet.join(" ")),
+                );
+                url = None;
+                snippet.clear();
+            }
+            title = Some(value.to_string());
+        } else if let Some(value) = strip_label(trimmed, &["url", "link"]) {
+            if url.is_some() {
+                push_result(
+                    &mut results,
+                    title.as_deref(),
+                    url.as_deref(),
+                    Some(snippet.join(" ")),
+                );
+                snippet.clear();
+            }
+            url = Some(value.to_string());
+        } else if let Some(value) = strip_label(trimmed, &["content", "snippet", "text"]) {
+            snippet.push(value.to_string());
+        } else if url.is_some() && !trimmed.is_empty() {
+            snippet.push(trimmed.to_string());
+        }
+    }
+    if url.is_some() {
+        push_result(
+            &mut results,
+            title.as_deref(),
+            url.as_deref(),
+            Some(snippet.join(" ")),
+        );
+    }
+
+    let url_re = Regex::new(r#"https?://[^\s\)\]\}>,]+"#).unwrap();
+    for cap in url_re.captures_iter(text) {
+        push_result(&mut results, None, cap.get(0).map(|m| m.as_str()), None);
+    }
+    dedupe_by_url(&mut results);
+    results
+}
+
+fn strip_label<'a>(line: &'a str, labels: &[&str]) -> Option<&'a str> {
+    let (label, value) = line.split_once(':')?;
+    let label = label.trim().to_ascii_lowercase();
+    if labels.iter().any(|candidate| *candidate == label) {
+        Some(value.trim()).filter(|s| !s.is_empty())
+    } else {
+        None
+    }
+}
+
+fn env_first(keys: &[&str]) -> Option<String> {
+    keys.iter()
+        .filter_map(|key| std::env::var(key).ok())
+        .map(|value| value.trim().to_string())
+        .find(|value| !value.is_empty())
+}
+
+fn normalize_domain_list(domains: &[String]) -> Vec<String> {
+    domains
+        .iter()
+        .map(|d| {
+            d.trim()
+                .trim_start_matches("https://")
+                .trim_start_matches("http://")
+                .trim_start_matches("www.")
+                .trim_matches('/')
+                .to_ascii_lowercase()
+        })
+        .filter(|d| !d.is_empty())
+        .collect()
+}
+
+fn clean_plain_text(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn clean_extracted_url(url: &str) -> String {
+    url.trim()
+        .trim_matches(|c| matches!(c, ')' | ']' | '}' | '>' | '"' | '\'' | ',' | ';' | '.'))
+        .to_string()
+}
+
+fn is_http_url(url: &str) -> bool {
+    url.starts_with("http://") || url.starts_with("https://")
+}
+
+fn title_from_url(url: &str) -> String {
+    reqwest::Url::parse(url)
+        .ok()
+        .and_then(|u| {
+            u.host_str().map(|host| {
+                let path = u.path().trim_matches('/');
+                if path.is_empty() {
+                    host.to_string()
+                } else {
+                    format!("{host}/{path}")
+                }
+            })
+        })
+        .unwrap_or_else(|| url.to_string())
 }
 
 fn filter_domains(
@@ -445,6 +921,62 @@ mod tests {
         let filtered = filter_domains(results, &[], &[String::from("example.com")]);
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0].title, "A");
+    }
+
+    #[test]
+    fn parses_configured_adapter_names() {
+        assert_eq!(Adapter::parse(Some("tavily")), Adapter::Tavily);
+        assert_eq!(Adapter::parse(Some("brave")), Adapter::Brave);
+        assert_eq!(Adapter::parse(Some("exa")), Adapter::Exa);
+        assert_eq!(Adapter::parse(Some("ddg")), Adapter::DuckDuckGo);
+    }
+
+    #[test]
+    fn extracts_tavily_results() {
+        let value = serde_json::json!({
+            "results": [{
+                "title": "Tavily Result",
+                "url": "https://example.com/tavily",
+                "content": "A Tavily summary."
+            }]
+        });
+        let results = extract_tavily_results(&value);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].title, "Tavily Result");
+        assert_eq!(results[0].snippet.as_deref(), Some("A Tavily summary."));
+    }
+
+    #[test]
+    fn extracts_brave_grounding_results() {
+        let value = serde_json::json!({
+            "grounding": {
+                "generic": [{
+                    "title": "Brave Result",
+                    "url": "https://example.com/brave",
+                    "description": "A Brave grounding snippet."
+                }]
+            }
+        });
+        let results = extract_brave_results(&value);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].url, "https://example.com/brave");
+        assert_eq!(
+            results[0].snippet.as_deref(),
+            Some("A Brave grounding snippet.")
+        );
+    }
+
+    #[test]
+    fn extracts_exa_sse_text_results() {
+        let raw = r#"event: message
+data: {"result":{"content":[{"type":"text","text":"Title: Exa Result\nURL: https://example.com/exa\nContent: An Exa summary."}]}}
+
+data: [DONE]
+"#;
+        let results = extract_exa_results(raw).unwrap();
+        assert!(results.iter().any(|r| r.title == "Exa Result"
+            && r.url == "https://example.com/exa"
+            && r.snippet.as_deref() == Some("An Exa summary.")));
     }
 
     #[test]

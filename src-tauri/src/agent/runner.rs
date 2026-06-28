@@ -6,7 +6,7 @@ use serde_json::json;
 use tauri::{AppHandle, Emitter};
 
 use super::conversation::Message;
-use super::{budget, context, memory, prompt, summary, workflow_journal};
+use super::{budget, context, goal, memory, prompt, summary, workflow_journal};
 use crate::{llm, pack, permission, store, tools};
 use permission::PermissionRequest;
 
@@ -213,6 +213,8 @@ pub async fn run_turn_with_options(
         if turn.tool_calls.is_empty() {
             let assistant_text = turn.content.clone();
             push(Message::assistant_text(assistant_text.clone()));
+            goal::add_estimated_tokens(state, &sid, &original_user_text);
+            goal::add_estimated_tokens(state, &sid, &assistant_text);
             state.persist_sessions();
             if let Some(run_id) = &options.workflow_run_id {
                 let _ = workflow_journal::append(
@@ -368,6 +370,8 @@ pub async fn run_turn_with_options(
                 );
             }
 
+            goal::add_estimated_tokens(state, &sid, &tc.function.arguments);
+            goal::add_estimated_tokens(state, &sid, &truncate_ui(&result));
             push(Message::tool_result(tc.id.clone(), name, result));
         }
 
