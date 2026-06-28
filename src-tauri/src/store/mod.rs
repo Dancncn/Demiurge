@@ -13,6 +13,7 @@ pub const DEFAULT_MAX_CONTEXT_CHARS: usize = 24_000;
 pub const DEFAULT_MAX_INPUT_TOKENS: usize = 32_000;
 pub const DEFAULT_RESERVED_OUTPUT_TOKENS: usize = 4_000;
 pub const DEFAULT_AUTO_MEMORY_ENABLED: bool = true;
+pub const DEFAULT_VOICE_ENABLED: bool = false;
 
 fn default_provider() -> ProviderKind {
     ProviderKind::OpenAiCompatible
@@ -32,6 +33,18 @@ fn default_reserved_output_tokens() -> usize {
 
 fn default_auto_memory_enabled() -> bool {
     DEFAULT_AUTO_MEMORY_ENABLED
+}
+
+fn default_voice_enabled() -> bool {
+    DEFAULT_VOICE_ENABLED
+}
+
+fn default_voice_stt_backend() -> String {
+    "none".to_string()
+}
+
+fn default_voice_tts_backend() -> String {
+    "none".to_string()
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
@@ -61,6 +74,14 @@ pub struct Settings {
     pub reserved_output_tokens: usize,
     #[serde(default = "default_auto_memory_enabled")]
     pub auto_memory_enabled: bool,
+    #[serde(default = "default_voice_enabled")]
+    pub voice_enabled: bool,
+    #[serde(default = "default_voice_stt_backend")]
+    pub voice_stt_backend: String,
+    #[serde(default = "default_voice_tts_backend")]
+    pub voice_tts_backend: String,
+    #[serde(default)]
+    pub voice_id: String,
 }
 
 impl Default for Settings {
@@ -76,6 +97,10 @@ impl Default for Settings {
             max_input_tokens: DEFAULT_MAX_INPUT_TOKENS,
             reserved_output_tokens: DEFAULT_RESERVED_OUTPUT_TOKENS,
             auto_memory_enabled: DEFAULT_AUTO_MEMORY_ENABLED,
+            voice_enabled: DEFAULT_VOICE_ENABLED,
+            voice_stt_backend: default_voice_stt_backend(),
+            voice_tts_backend: default_voice_tts_backend(),
+            voice_id: String::new(),
         }
     }
 }
@@ -224,6 +249,9 @@ mod tests {
         }"#;
         let settings = serde_json::from_str::<Settings>(json).unwrap();
         assert_eq!(settings.provider, ProviderKind::OpenAiCompatible);
+        assert!(!settings.voice_enabled);
+        assert_eq!(settings.voice_stt_backend, "none");
+        assert_eq!(settings.voice_tts_backend, "none");
     }
 }
 

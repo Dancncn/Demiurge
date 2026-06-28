@@ -5,6 +5,7 @@ mod pack;
 mod permission;
 mod store;
 mod tools;
+mod voice;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -99,7 +100,12 @@ async fn send(app: AppHandle, state: State<'_, AppState>, text: String) -> Resul
     if st.busy.swap(true, Ordering::SeqCst) {
         return Err("正在处理上一条消息，请稍候。".to_string());
     }
-    let res = agent::run_turn(&app, st, text).await;
+    let trimmed = text.trim();
+    let res = if trimmed == "/dream" || trimmed.starts_with("/dream ") {
+        agent::dream::run_manual_dream(&app, st, text).await
+    } else {
+        agent::run_turn(&app, st, text).await
+    };
     st.busy.store(false, Ordering::SeqCst);
     res
 }
@@ -263,6 +269,9 @@ pub fn run() {
             select_session,
             delete_session,
             open_sandbox,
+            voice::voice_status,
+            voice::voice_transcribe,
+            voice::voice_synthesize,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

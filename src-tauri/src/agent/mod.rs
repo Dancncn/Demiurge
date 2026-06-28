@@ -2,6 +2,7 @@
 pub mod budget;
 pub mod context;
 pub mod conversation;
+pub mod dream;
 pub mod memory;
 pub mod persona;
 pub mod prompt;

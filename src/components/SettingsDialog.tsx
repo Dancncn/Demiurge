@@ -166,6 +166,50 @@ export default function SettingsDialog({ open, settings, packs, onClose, onSave 
             </span>
           </label>
 
+          <div className="rounded-2xl border border-[#eeeeee] bg-[#fafafa] p-3">
+            <label className="flex items-start gap-3">
+              <input
+                className="mt-1 h-4 w-4 accent-[#10a37f]"
+                type="checkbox"
+                checked={form.voice_enabled}
+                onChange={(e) => set("voice_enabled", e.target.checked)}
+              />
+              <span>
+                <span className="block text-sm font-medium text-[#3f3f3f]">Voice API 预留</span>
+                <span className="mt-1 block text-xs text-[#9a9a9a]">先保存 STT/TTS 后端选择；录音、转写和合成实现后续接入。</span>
+              </span>
+            </label>
+            <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <label className="block">
+                <span className={labelCls}>STT 后端</span>
+                <input
+                  className={inputCls}
+                  value={form.voice_stt_backend}
+                  placeholder="none / whisper / doubao"
+                  onChange={(e) => set("voice_stt_backend", e.target.value)}
+                />
+              </label>
+              <label className="block">
+                <span className={labelCls}>TTS 后端</span>
+                <input
+                  className={inputCls}
+                  value={form.voice_tts_backend}
+                  placeholder="none / GPT-SoVITS / CosyVoice"
+                  onChange={(e) => set("voice_tts_backend", e.target.value)}
+                />
+              </label>
+            </div>
+            <label className="mt-3 block">
+              <span className={labelCls}>Voice ID / 角色音色</span>
+              <input
+                className={inputCls}
+                value={form.voice_id}
+                placeholder="例如 default、角色名或服务端 voice id"
+                onChange={(e) => set("voice_id", e.target.value)}
+              />
+            </label>
+          </div>
+
           <label className="block">
             <span className={labelCls}>上下文上限（字符数，兼容兜底）</span>
             <input
@@ -196,6 +240,9 @@ export default function SettingsDialog({ open, settings, packs, onClose, onSave 
                 max_context_chars: Math.max(2000, form.max_context_chars || 0),
                 max_input_tokens: maxInput,
                 reserved_output_tokens: reserved,
+                voice_stt_backend: form.voice_stt_backend.trim() || "none",
+                voice_tts_backend: form.voice_tts_backend.trim() || "none",
+                voice_id: form.voice_id.trim(),
               });
             }}
           >

@@ -9,6 +9,7 @@ import type {
   Settings,
   ToolEndEvent,
   ToolStartEvent,
+  VoiceStatus,
 } from "./types";
 
 // ---- 命令 ----
@@ -27,6 +28,13 @@ export const listSessions = () => invoke<SessionList>("list_sessions");
 export const newSession = () => invoke<string>("new_session");
 export const selectSession = (id: string) => invoke<void>("select_session", { id });
 export const deleteSession = (id: string) => invoke<string>("delete_session", { id });
+
+// Voice API placeholders. These commands intentionally return a clear
+// "backend not implemented" error until a concrete STT/TTS provider is chosen.
+export const voiceStatus = () => invoke<VoiceStatus>("voice_status");
+export const voiceTranscribe = (audioPath: string) => invoke<string>("voice_transcribe", { audioPath });
+export const voiceSynthesize = (text: string, voiceId?: string) =>
+  invoke<string>("voice_synthesize", { text, voiceId });
 
 // ---- 事件订阅 ----
 export interface AgentEventHandlers {
