@@ -151,6 +151,20 @@ pub const DEFERRED_TOOL_NAMES: &[&str] = &[
     "screen_ocr_window",
 ];
 
+pub const SUBAGENT_READONLY_TOOL_NAMES: &[&str] = &[
+    "read_file",
+    "list_dir",
+    "glob",
+    "grep",
+    "git_status",
+    "system_info",
+    "http_get",
+    "web_fetch",
+    "web_search",
+    "package_scripts",
+    "context_inspect",
+];
+
 pub fn is_deferred_tool(name: &str) -> bool {
     DEFERRED_TOOL_NAMES.contains(&name)
 }
@@ -903,6 +917,10 @@ pub async fn execute_subagent_readonly(
     name: &str,
     args: Value,
 ) -> Result<String, String> {
+    if !SUBAGENT_READONLY_TOOL_NAMES.contains(&name) {
+        return Err(format!("子 Agent 不允许使用工具：{name}"));
+    }
+
     match name {
         "read_file" => read_file::run(state, args),
         "list_dir" => list_dir::run(state, args),
@@ -915,7 +933,7 @@ pub async fn execute_subagent_readonly(
         "web_search" => web_search::run(state, args).await,
         "package_scripts" => package_scripts::run(state, args),
         "context_inspect" => context_tools::inspect(state),
-        other => Err(format!("子 Agent 不允许使用工具：{other}")),
+        other => Err(format!("只读子 Agent 工具未接入执行分支：{other}")),
     }
 }
 
@@ -1243,5 +1261,60 @@ fn canonical_existing_ancestor(p: &Path) -> Result<PathBuf, String> {
             Some(parent) => cur = parent,
             None => return Err("无法解析路径".to_string()),
         }
+    }
+}
+
+#[cfg(test)]
+mod registry_tests {
+    use super::*;
+
+    fn def(name: &str) -> ToolDefinition {
+        registry()
+            .into_iter()
+            .find(|tool| tool.name == name)
+            .unwrap_or_else(|| panic!("missing tool definition for {name}"))
+    }
+
+    #[test]
+    fn typed_tools_have_expected_registry_metadata() {
+        for name in ["list_dir", "http_get", "clipboard", "package_scripts"] {
+            assert!(
+                CORE_TOOL_NAMES.contains(&name),
+                "{name} missing from core tools"
+            );
+        }
+
+        let list_dir = def("list_dir");
+        assert_eq!(list_dir.risk, ToolRisk::ReadOnly);
+        assert_eq!(list_dir.concurrency, ToolConcurrency::ParallelSafe);
+        assert_eq!(list_dir.permission.effect, PermissionEffect::Allow);
+
+        let http_get = def("http_get");
+        assert_eq!(http_get.risk, ToolRisk::External);
+        assert_eq!(http_get.concurrency, ToolConcurrency::ParallelSafe);
+        assert_eq!(http_get.permission.effect, PermissionEffect::Allow);
+
+        let clipboard = def("clipboard");
+        assert_eq!(clipboard.risk, ToolRisk::Privileged);
+        assert_eq!(clipboard.concurrency, ToolConcurrency::SerialOnly);
+        assert_eq!(clipboard.permission.effect, PermissionEffect::Ask);
+
+        let package_scripts = def("package_scripts");
+        assert_eq!(package_scripts.risk, ToolRisk::ReadOnly);
+        assert_eq!(package_scripts.concurrency, ToolConcurrency::ParallelSafe);
+        assert_eq!(package_scripts.permission.effect, PermissionEffect::Allow);
+    }
+
+    #[test]
+    fn shell_and_clipboard_stay_out_of_readonly_subagents() {
+        let shell = def("shell");
+        assert_eq!(shell.risk, ToolRisk::Privileged);
+        assert_eq!(shell.permission.effect, PermissionEffect::Ask);
+
+        assert!(!SUBAGENT_READONLY_TOOL_NAMES.contains(&"shell"));
+        assert!(!SUBAGENT_READONLY_TOOL_NAMES.contains(&"clipboard"));
+        assert!(SUBAGENT_READONLY_TOOL_NAMES.contains(&"list_dir"));
+        assert!(SUBAGENT_READONLY_TOOL_NAMES.contains(&"http_get"));
+        assert!(SUBAGENT_READONLY_TOOL_NAMES.contains(&"package_scripts"));
     }
 }
