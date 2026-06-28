@@ -575,6 +575,7 @@ export default function SettingsDialog({
   const [memoryState, setMemoryState] = useState<MemoryPanelState | null>(null);
   const [memoryBusy, setMemoryBusy] = useState(false);
   const [memoryError, setMemoryError] = useState("");
+  const [memoryDrafts, setMemoryDrafts] = useState<Record<string, { kind: string; text: string }>>({});
   const [webdavBusy, setWebdavBusy] = useState(false);
   const [webdavStatus, setWebdavStatus] = useState("");
   const [webdavFiles, setWebdavFiles] = useState<WebDavBackupFile[]>([]);
@@ -593,6 +594,7 @@ export default function SettingsDialog({
       setWebdavFiles([]);
       setMcpError("");
       setPackImportStatus("");
+      setMemoryDrafts({});
     }
   }, [open, settings, agentPanel]);
 
@@ -1801,15 +1803,15 @@ export default function SettingsDialog({
                     <ToggleRow
                       checked={form.auto_memory_enabled}
                       title="Automatic long-term memory extraction"
-                      description="Extract durable user preferences and project constraints into sandbox/.demiurge/memory.md."
+                      description="Extract durable user preferences and project constraints into the project memory scope."
                       onChange={(checked) => set("auto_memory_enabled", checked)}
                     />
                     <div className="mt-4 rounded-lg border border-[#e2e5ea] bg-[#fbfcfd] p-3">
                       <div className="flex items-start justify-between gap-3">
                         <div className="min-w-0">
-                          <div className="text-[13px] font-medium text-[#202124]">Project memory audit</div>
-                          <div className="mt-1 break-all text-[12px] text-[#7a8088]">
-                            {memoryState?.path || ".demiurge/memory.md"}
+                          <div className="text-[13px] font-medium text-[#202124]">Scoped memory maintenance</div>
+                          <div className="mt-1 text-[12px] text-[#7a8088]">
+                            User, project, session, and pack memories are loaded into prompt context.
                           </div>
                         </div>
                         <div className="flex shrink-0 gap-2">
@@ -1836,68 +1838,185 @@ export default function SettingsDialog({
                           {memoryError}
                         </div>
                       )}
-                      <div className="mt-3 max-h-72 space-y-2 overflow-auto">
-                        {memoryState?.entries.length ? (
-                          memoryState.entries.map((entry) => {
-                            const duplicate = memoryState.duplicates.some((group) =>
-                              group.duplicate_ids.includes(entry.id),
-                            );
+                      <div className="mt-3 max-h-[520px] space-y-3 overflow-auto pr-1">
+                        {memoryState?.scopes.length ? (
+                          memoryState.scopes.map((scope) => {
+                            const defaultKind =
+                              scope.id === "user"
+                                ? "user"
+                                : scope.id === "session"
+                                  ? "session"
+                                  : scope.id === "pack"
+                                    ? "pack"
+                                    : "project";
+                            const draft = memoryDrafts[scope.id] ?? { kind: defaultKind, text: "" };
                             return (
-                              <div key={entry.id} className="rounded-lg border border-[#e2e5ea] bg-white p-3">
-                                <div className="mb-2 flex flex-wrap items-center gap-2 text-[11px] text-[#7a8088]">
-                                  <span className="rounded-md bg-[#eef1f5] px-1.5 py-0.5 text-[#4f5661]">
-                                    {entry.kind}
-                                  </span>
-                                  <span>line {entry.line}</span>
-                                  {duplicate && (
-                                    <span className="rounded-md bg-[#fff6dd] px-1.5 py-0.5 text-[#8a5a00]">
-                                      duplicate
+                              <div key={scope.id} className="rounded-lg border border-[#e2e5ea] bg-white">
+                                <div className="border-b border-[#eef1f4] px-3 py-2">
+                                  <div className="flex flex-wrap items-start justify-between gap-2">
+                                    <div className="min-w-0">
+                                      <div className="text-[13px] font-medium text-[#202124]">{scope.label}</div>
+                                      <div className="mt-0.5 break-all text-[11px] text-[#8a9099]">{scope.path}</div>
+                                    </div>
+                                    <span className="rounded-md bg-[#eef1f5] px-1.5 py-0.5 text-[11px] text-[#59616d]">
+                                      {scope.entries.length} entries
+                                      {scope.duplicates.length ? ` / ${scope.duplicates.length} dupes` : ""}
                                     </span>
-                                  )}
+                                  </div>
                                 </div>
-                                <textarea
-                                  className="min-h-16 w-full resize-y rounded-md border border-[#d9d9d9] px-2 py-1.5 text-[12px] text-[#202124] outline-none transition focus:border-[#7a7f87] focus:ring-2 focus:ring-[#202124]/5"
-                                  value={entry.text}
-                                  onChange={(e) => {
-                                    const text = e.target.value;
-                                    setMemoryState((cur) =>
-                                      cur
-                                        ? {
+                                <div className="space-y-2 p-3">
+                                  <div className="rounded-md border border-dashed border-[#d8dde5] bg-[#fbfcfd] p-2">
+                                    <div className="grid gap-2 md:grid-cols-[130px_minmax(0,1fr)_auto]">
+                                      <select
+                                        className={inputCls}
+                                        value={draft.kind}
+                                        onChange={(e) =>
+                                          setMemoryDrafts((cur) => ({
                                             ...cur,
-                                            entries: cur.entries.map((item) =>
-                                              item.id === entry.id ? { ...item, text } : item,
-                                            ),
-                                          }
-                                        : cur,
-                                    );
-                                  }}
-                                />
-                                <div className="mt-2 flex justify-end gap-2">
-                                  <button
-                                    className={secondaryButtonCls}
-                                    type="button"
-                                    disabled={memoryBusy}
-                                    onClick={() => runMemoryAction(() => api.memoryDeleteEntry(entry.id))}
-                                  >
-                                    Delete
-                                  </button>
-                                  <button
-                                    className="inline-flex h-8 items-center justify-center rounded-md bg-[#111827] px-3 text-[12px] font-medium text-white transition hover:bg-[#2b3442] disabled:cursor-not-allowed disabled:bg-[#b8bec8]"
-                                    type="button"
-                                    disabled={memoryBusy}
-                                    onClick={() =>
-                                      runMemoryAction(() => api.memoryUpdateEntry(entry.id, entry.kind, entry.text))
-                                    }
-                                  >
-                                    Save
-                                  </button>
+                                            [scope.id]: { ...draft, kind: e.target.value },
+                                          }))
+                                        }
+                                      >
+                                        <option value="user">user</option>
+                                        <option value="project">project</option>
+                                        <option value="session">session</option>
+                                        <option value="pack">pack</option>
+                                        <option value="preference">preference</option>
+                                      </select>
+                                      <input
+                                        className={inputCls}
+                                        value={draft.text}
+                                        placeholder={`Add ${scope.label.toLowerCase()} memory`}
+                                        onChange={(e) =>
+                                          setMemoryDrafts((cur) => ({
+                                            ...cur,
+                                            [scope.id]: { ...draft, text: e.target.value },
+                                          }))
+                                        }
+                                      />
+                                      <button
+                                        className={secondaryButtonCls}
+                                        type="button"
+                                        disabled={memoryBusy || !draft.text.trim()}
+                                        onClick={() =>
+                                          runMemoryAction(async () => {
+                                            const next = await api.memoryAddEntry(scope.id, draft.kind, draft.text);
+                                            setMemoryDrafts((cur) => ({
+                                              ...cur,
+                                              [scope.id]: { ...draft, text: "" },
+                                            }));
+                                            return next;
+                                          })
+                                        }
+                                      >
+                                        Add
+                                      </button>
+                                    </div>
+                                  </div>
+                                  {scope.entries.length ? (
+                                    scope.entries.map((entry) => {
+                                      const duplicate = scope.duplicates.some((group) =>
+                                        group.duplicate_ids.includes(entry.id),
+                                      );
+                                      return (
+                                        <div key={entry.id} className="rounded-md border border-[#e8ebef] bg-white p-2">
+                                          <div className="mb-2 flex flex-wrap items-center gap-2 text-[11px] text-[#7a8088]">
+                                            <select
+                                              className="h-7 rounded-md border border-[#d9d9d9] bg-white px-2 text-[11px] text-[#4f5661] outline-none"
+                                              value={entry.kind}
+                                              onChange={(e) => {
+                                                const kind = e.target.value;
+                                                setMemoryState((cur) =>
+                                                  cur
+                                                    ? {
+                                                        ...cur,
+                                                        entries: cur.entries.map((item) =>
+                                                          item.id === entry.id ? { ...item, kind } : item,
+                                                        ),
+                                                        scopes: cur.scopes.map((itemScope) => ({
+                                                          ...itemScope,
+                                                          entries: itemScope.entries.map((item) =>
+                                                            item.id === entry.id ? { ...item, kind } : item,
+                                                          ),
+                                                        })),
+                                                      }
+                                                    : cur,
+                                                );
+                                              }}
+                                            >
+                                              <option value="user">user</option>
+                                              <option value="project">project</option>
+                                              <option value="session">session</option>
+                                              <option value="pack">pack</option>
+                                              <option value="preference">preference</option>
+                                            </select>
+                                            <span>line {entry.line}</span>
+                                            {duplicate && (
+                                              <span className="rounded-md bg-[#fff6dd] px-1.5 py-0.5 text-[#8a5a00]">
+                                                duplicate
+                                              </span>
+                                            )}
+                                          </div>
+                                          <textarea
+                                            className="min-h-16 w-full resize-y rounded-md border border-[#d9d9d9] px-2 py-1.5 text-[12px] text-[#202124] outline-none transition focus:border-[#7a7f87] focus:ring-2 focus:ring-[#202124]/5"
+                                            value={entry.text}
+                                            onChange={(e) => {
+                                              const text = e.target.value;
+                                              setMemoryState((cur) =>
+                                                cur
+                                                  ? {
+                                                      ...cur,
+                                                      entries: cur.entries.map((item) =>
+                                                        item.id === entry.id ? { ...item, text } : item,
+                                                      ),
+                                                      scopes: cur.scopes.map((itemScope) => ({
+                                                        ...itemScope,
+                                                        entries: itemScope.entries.map((item) =>
+                                                          item.id === entry.id ? { ...item, text } : item,
+                                                        ),
+                                                      })),
+                                                    }
+                                                  : cur,
+                                              );
+                                            }}
+                                          />
+                                          <div className="mt-2 flex justify-end gap-2">
+                                            <button
+                                              className={secondaryButtonCls}
+                                              type="button"
+                                              disabled={memoryBusy}
+                                              onClick={() => runMemoryAction(() => api.memoryDeleteEntry(entry.id))}
+                                            >
+                                              Delete
+                                            </button>
+                                            <button
+                                              className="inline-flex h-8 items-center justify-center rounded-md bg-[#111827] px-3 text-[12px] font-medium text-white transition hover:bg-[#2b3442] disabled:cursor-not-allowed disabled:bg-[#b8bec8]"
+                                              type="button"
+                                              disabled={memoryBusy}
+                                              onClick={() =>
+                                                runMemoryAction(() =>
+                                                  api.memoryUpdateEntry(entry.id, entry.kind, entry.text),
+                                                )
+                                              }
+                                            >
+                                              Save
+                                            </button>
+                                          </div>
+                                        </div>
+                                      );
+                                    })
+                                  ) : (
+                                    <div className="rounded-md border border-dashed border-[#d8dde5] bg-white p-3 text-[12px] text-[#7a8088]">
+                                      No {scope.label.toLowerCase()} memory entries.
+                                    </div>
+                                  )}
                                 </div>
                               </div>
                             );
                           })
                         ) : (
                           <div className="rounded-lg border border-dashed border-[#d8dde5] bg-white p-4 text-[12px] text-[#7a8088]">
-                            No project memory entries.
+                            No memory scopes loaded.
                           </div>
                         )}
                       </div>

@@ -85,6 +85,8 @@ export const goalClear = () => invoke<GoalPanelState | null>("goal_clear");
 export const getHistory = () => invoke<Message[]>("get_history");
 export const contextPanelState = () => invoke<ContextPanelState>("context_panel_state");
 export const memoryPanelState = () => invoke<MemoryPanelState>("memory_panel_state");
+export const memoryAddEntry = (scope: string, kind: string, text: string) =>
+  invoke<MemoryPanelState>("memory_add_entry", { scope, kind, text });
 export const memoryUpdateEntry = (id: string, kind: string, text: string) =>
   invoke<MemoryPanelState>("memory_update_entry", { id, kind, text });
 export const memoryDeleteEntry = (id: string) => invoke<MemoryPanelState>("memory_delete_entry", { id });

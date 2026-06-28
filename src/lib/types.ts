@@ -274,6 +274,8 @@ export interface WorkflowPanelState {
 
 export interface MemoryEntry {
   id: string;
+  scope: string;
+  scopeLabel: string;
   kind: string;
   text: string;
   line: number;
@@ -285,6 +287,15 @@ export interface MemoryDuplicateGroup {
 }
 
 export interface MemoryPanelState {
+  path: string;
+  entries: MemoryEntry[];
+  duplicates: MemoryDuplicateGroup[];
+  scopes: MemoryScopeState[];
+}
+
+export interface MemoryScopeState {
+  id: string;
+  label: string;
   path: string;
   entries: MemoryEntry[];
   duplicates: MemoryDuplicateGroup[];
