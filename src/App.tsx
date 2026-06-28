@@ -85,6 +85,8 @@ export default function App() {
   const packMenuRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 
+  const activeSession = useMemo(() => sessions.find((s) => s.id === activeId) ?? null, [activeId, sessions]);
+
   const packName = useMemo(() => {
     const p = packs.find((x) => x.id === settings?.current_pack);
     return p?.name ?? settings?.current_pack ?? "Demiurge";
@@ -294,6 +296,17 @@ export default function App() {
     }
   }
 
+  async function handleRenameSession(id: string, title: string) {
+    if (busy) return;
+    const renamed = await api.renameSession(id, title);
+    setSessions((prev) =>
+      prev
+        .map((s) => (s.id === id ? { ...s, title: renamed, updated_at: Date.now() } : s))
+        .sort((a, b) => b.updated_at - a.updated_at),
+    );
+    await refreshSessions();
+  }
+
   async function handleDeleteSession(id: string) {
     if (busy) return;
     try {
@@ -352,6 +365,7 @@ export default function App() {
         onToggle={() => setSidebarOpen((v) => !v)}
         onNewChat={handleNewChat}
         onSelectSession={handleSelectSession}
+        onRenameSession={handleRenameSession}
         onDeleteSession={handleDeleteSession}
         onOpenSandbox={() => void api.openSandbox()}
         onOpenSettings={() => setSettingsOpen(true)}
@@ -398,6 +412,13 @@ export default function App() {
                 ))}
               </div>
             )}
+          </div>
+
+          <div className="hidden min-w-0 flex-col border-l border-[#ececec] pl-3 text-xs text-[#8a8a8a] sm:flex">
+            <span className="max-w-[28vw] truncate font-medium text-[#3f3f3f]" title={activeSession?.title ?? "新对话"}>
+              {activeSession?.title ?? "新对话"}
+            </span>
+            <span>{busy ? "正在处理当前会话" : "会话就绪"}</span>
           </div>
 
           <button

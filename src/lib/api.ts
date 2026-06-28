@@ -32,6 +32,7 @@ export const listSessions = () => invoke<SessionList>("list_sessions");
 export const newSession = () => invoke<string>("new_session");
 export const selectSession = (id: string) => invoke<void>("select_session", { id });
 export const deleteSession = (id: string) => invoke<string>("delete_session", { id });
+export const renameSession = (id: string, title: string) => invoke<string>("rename_session", { id, title });
 
 // Voice API placeholders. These commands intentionally return a clear
 // "backend not implemented" error until a concrete STT/TTS provider is chosen.

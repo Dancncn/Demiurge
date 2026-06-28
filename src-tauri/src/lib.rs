@@ -319,6 +319,27 @@ fn delete_session(state: State<'_, AppState>, id: String) -> String {
     active
 }
 
+/// 重命名指定会话。返回清洗后的标题，方便前端保持一致展示。
+#[tauri::command]
+fn rename_session(state: State<'_, AppState>, id: String, title: String) -> Result<String, String> {
+    let trimmed = title.trim();
+    if trimmed.is_empty() {
+        return Err("会话标题不能为空".to_string());
+    }
+
+    let clean: String = trimmed.chars().take(80).collect();
+    {
+        let mut store = state.sessions.lock().unwrap();
+        let session = store
+            .get_mut(&id)
+            .ok_or_else(|| "会话不存在".to_string())?;
+        session.title = clean.clone();
+        session.updated_at = store::now_millis();
+    }
+    state.persist_sessions();
+    Ok(clean)
+}
+
 /// 打开沙盒目录（方便用户放/取文件）。
 #[tauri::command]
 fn open_sandbox(state: State<'_, AppState>) -> Result<(), String> {
@@ -411,6 +432,7 @@ pub fn run() {
             new_session,
             select_session,
             delete_session,
+            rename_session,
             open_sandbox,
             ocr_model_status,
             ocr_download_models,
