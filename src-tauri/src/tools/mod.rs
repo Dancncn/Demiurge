@@ -27,6 +27,7 @@ mod write_file;
 mod write_plan;
 
 pub use edit_file::EditUndoEntry;
+pub use shell::ShellPolicyState;
 
 #[allow(dead_code)]
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
@@ -768,6 +769,10 @@ pub fn permission_policy_for_state(state: &crate::AppState, name: &str) -> Permi
     definition_for_state(state, name)
         .map(|t| t.permission)
         .unwrap_or_else(|| PermissionPolicy::ask("未知工具默认按最高安全级别询问。"))
+}
+
+pub fn shell_policy_state() -> shell::ShellPolicyState {
+    shell::policy_state()
 }
 
 async fn read_mcp_resource_tool(state: &crate::AppState, args: Value) -> Result<String, String> {

@@ -1,4 +1,5 @@
 //! shell：在沙盒目录内执行短时 shell 命令（confirm 类）。
+use serde::Serialize;
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::process::{Command, Stdio};
@@ -9,6 +10,20 @@ const DEFAULT_TIMEOUT_SECS: u64 = 15;
 const STRICT_TIMEOUT_SECS: u64 = 8;
 const MAX_TIMEOUT_SECS: u64 = 60;
 const OUTPUT_LIMIT: usize = 12_000;
+const ENV_ALLOWLIST: &[&str] = &[
+    "PATH",
+    "Path",
+    "HOME",
+    "USERPROFILE",
+    "TEMP",
+    "TMP",
+    "SystemRoot",
+    "WINDIR",
+    "COMSPEC",
+    "SHELL",
+    "LANG",
+    "LC_ALL",
+];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 enum ShellRiskClass {
@@ -23,6 +38,19 @@ enum ShellRiskClass {
 }
 
 impl ShellRiskClass {
+    fn id(self) -> &'static str {
+        match self {
+            ShellRiskClass::ReadOnly => "read_only",
+            ShellRiskClass::BuildTest => "build_test",
+            ShellRiskClass::FileWrite => "file_write",
+            ShellRiskClass::Network => "network",
+            ShellRiskClass::DependencyInstall => "dependency_install",
+            ShellRiskClass::Destructive => "destructive",
+            ShellRiskClass::Privilege => "privilege",
+            ShellRiskClass::ExternalExecution => "external_execution",
+        }
+    }
+
     fn label(self) -> &'static str {
         match self {
             ShellRiskClass::ReadOnly => "只读：检查/列出项目状态",
@@ -58,6 +86,42 @@ impl ShellRiskClass {
                 | ShellRiskClass::ExternalExecution
         )
     }
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct ShellPolicyState {
+    pub platform: &'static str,
+    pub default_isolation: &'static str,
+    pub strict_timeout_secs: u64,
+    pub max_timeout_secs: u64,
+    pub env_allowlist: Vec<&'static str>,
+    pub strict_blocked_risks: Vec<ShellRiskView>,
+    pub risk_rules: Vec<ShellRiskRuleView>,
+    pub containment: ShellContainmentView,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct ShellRiskView {
+    pub id: &'static str,
+    pub label: &'static str,
+    pub severity: &'static str,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct ShellRiskRuleView {
+    pub class: ShellRiskView,
+    pub reason: &'static str,
+    pub patterns: Vec<&'static str>,
+    pub blocked_in_strict: bool,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct ShellContainmentView {
+    pub process_group: bool,
+    pub kill_process_tree_on_timeout: bool,
+    pub filesystem_sandbox: &'static str,
+    pub network_sandbox: &'static str,
+    pub notes: Vec<&'static str>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -188,6 +252,62 @@ const RISK_RULES: &[RiskRule] = &[
         reason: "会执行本地构建/测试脚本",
     },
 ];
+
+pub fn policy_state() -> ShellPolicyState {
+    let strict_blocked_risks = [
+        ShellRiskClass::Network,
+        ShellRiskClass::DependencyInstall,
+        ShellRiskClass::Destructive,
+        ShellRiskClass::Privilege,
+        ShellRiskClass::ExternalExecution,
+    ]
+    .into_iter()
+    .map(risk_view)
+    .collect();
+
+    let risk_rules = RISK_RULES
+        .iter()
+        .map(|rule| ShellRiskRuleView {
+            class: risk_view(rule.class),
+            reason: rule.reason,
+            patterns: rule.needles.to_vec(),
+            blocked_in_strict: rule.class.blocked_in_strict(),
+        })
+        .collect();
+
+    ShellPolicyState {
+        platform: std::env::consts::OS,
+        default_isolation: ShellIsolationMode::Standard.label(),
+        strict_timeout_secs: STRICT_TIMEOUT_SECS,
+        max_timeout_secs: MAX_TIMEOUT_SECS,
+        env_allowlist: ENV_ALLOWLIST.to_vec(),
+        strict_blocked_risks,
+        risk_rules,
+        containment: containment_view(),
+    }
+}
+
+fn risk_view(class: ShellRiskClass) -> ShellRiskView {
+    ShellRiskView {
+        id: class.id(),
+        label: class.label(),
+        severity: class.severity(),
+    }
+}
+
+fn containment_view() -> ShellContainmentView {
+    ShellContainmentView {
+        process_group: false,
+        kill_process_tree_on_timeout: false,
+        filesystem_sandbox: "not_configured",
+        network_sandbox: "policy_only",
+        notes: vec![
+            "standard/strict 当前先做 cwd、stdin、timeout、output cap 和 env allowlist",
+            "strict 会拒绝联网、依赖安装、破坏性、提权和外部执行类命令",
+            "后续阶段会把执行层切到平台 process containment / sandbox wrapper",
+        ],
+    }
+}
 
 pub fn preview(state: &crate::AppState, args: Value) -> Result<String, String> {
     let req = parse_args(&args)?;
@@ -370,21 +490,7 @@ fn contains_any(haystack: &str, needles: &[&str]) -> bool {
 }
 
 fn safe_env() -> BTreeMap<String, String> {
-    const ALLOW: &[&str] = &[
-        "PATH",
-        "Path",
-        "HOME",
-        "USERPROFILE",
-        "TEMP",
-        "TMP",
-        "SystemRoot",
-        "WINDIR",
-        "COMSPEC",
-        "SHELL",
-        "LANG",
-        "LC_ALL",
-    ];
-    ALLOW
+    ENV_ALLOWLIST
         .iter()
         .filter_map(|key| {
             std::env::var(key)
@@ -503,5 +609,23 @@ mod tests {
         std::env::set_var("DEMIURGE_TEST_SECRET_TOKEN", "secret");
         let env = safe_env();
         assert!(!env.contains_key("DEMIURGE_TEST_SECRET_TOKEN"));
+    }
+
+    #[test]
+    fn policy_state_exposes_strict_shell_guardrails() {
+        let state = policy_state();
+        assert_eq!(state.default_isolation, "standard");
+        assert_eq!(state.strict_timeout_secs, STRICT_TIMEOUT_SECS);
+        assert!(state.env_allowlist.contains(&"PATH"));
+        assert!(state
+            .strict_blocked_risks
+            .iter()
+            .any(|risk| risk.id == "network"));
+        assert!(state.risk_rules.iter().any(|rule| {
+            rule.class.id == "dependency_install"
+                && rule.blocked_in_strict
+                && rule.patterns.contains(&"npm install")
+        }));
+        assert_eq!(state.containment.filesystem_sandbox, "not_configured");
     }
 }

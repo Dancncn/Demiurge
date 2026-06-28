@@ -549,6 +549,11 @@ fn permission_panel_state(state: State<'_, AppState>) -> permission::PermissionP
 }
 
 #[tauri::command]
+fn shell_policy_state() -> tools::ShellPolicyState {
+    tools::shell_policy_state()
+}
+
+#[tauri::command]
 fn permission_reset_rule(
     state: State<'_, AppState>,
     scope: tools::PermissionScope,
@@ -1205,6 +1210,7 @@ pub fn run() {
             webdav_list_backups,
             webdav_delete_backup,
             permission_panel_state,
+            shell_policy_state,
             permission_reset_rule,
             permission_upsert_rule,
             mcp_panel_state,

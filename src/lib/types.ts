@@ -479,6 +479,38 @@ export interface PermissionPanelState {
   tools: PermissionToolView[];
 }
 
+export interface ShellPolicyState {
+  platform: string;
+  default_isolation: string;
+  strict_timeout_secs: number;
+  max_timeout_secs: number;
+  env_allowlist: string[];
+  strict_blocked_risks: ShellRiskView[];
+  risk_rules: ShellRiskRuleView[];
+  containment: ShellContainmentView;
+}
+
+export interface ShellRiskView {
+  id: string;
+  label: string;
+  severity: string;
+}
+
+export interface ShellRiskRuleView {
+  class: ShellRiskView;
+  reason: string;
+  patterns: string[];
+  blocked_in_strict: boolean;
+}
+
+export interface ShellContainmentView {
+  process_group: boolean;
+  kill_process_tree_on_timeout: boolean;
+  filesystem_sandbox: string;
+  network_sandbox: string;
+  notes: string[];
+}
+
 export interface PlanState {
   active: boolean;
   approved: boolean;
