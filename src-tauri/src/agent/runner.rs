@@ -309,6 +309,7 @@ pub async fn run_turn_with_options(
                         .map(|t| t.risk)
                         .unwrap_or(tools::ToolRisk::Privileged);
                     let preview = tools::confirmation_preview(state, &name, args.clone());
+                    let summary = tools::permission_summary(&name, &args);
                     let response = permission::confirm(
                         app,
                         state,
@@ -318,6 +319,7 @@ pub async fn run_turn_with_options(
                             description,
                             risk,
                             decision: decision.clone(),
+                            summary,
                             preview,
                         },
                     )

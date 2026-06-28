@@ -134,6 +134,7 @@ pub async fn run_manual_dream(
             description: "整理长期记忆文件",
             risk: tools::ToolRisk::Mutating,
             decision: decision.clone(),
+            summary: "将整理并覆盖沙盒内的长期记忆文件 `.demiurge/memory.md`。".to_string(),
             preview: Some(preview),
         },
     )

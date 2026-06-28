@@ -38,6 +38,12 @@ export default function ConfirmDialog({ req, onRespond }: Props) {
           <span className="font-medium text-[#0b57d0]"> {req.tool}</span>
         </p>
         <div className="mb-3 space-y-1 rounded-xl border border-[#ececec] bg-[#fafafa] p-3 text-xs text-[#5f5f5f]">
+          {req.summary && (
+            <div className="rounded-lg bg-white px-2 py-1.5 text-[#333] shadow-sm">
+              <span className="text-[#9a9a9a]">将要执行：</span>
+              {req.summary}
+            </div>
+          )}
           <div>
             <span className="text-[#9a9a9a]">风险：</span>
             {riskLabel(req.risk)}

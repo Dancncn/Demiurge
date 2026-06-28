@@ -88,6 +88,7 @@ pub struct PermissionRequest<'a> {
     pub description: &'a str,
     pub risk: ToolRisk,
     pub decision: PermissionDecision,
+    pub summary: String,
     pub preview: Option<String>,
 }
 
@@ -207,7 +208,7 @@ pub async fn confirm(
         effect: req.decision.effect,
         scope: req.decision.scope,
         reason: &req.decision.reason,
-        summary: format!("{}：{}", req.tool, req.decision.reason),
+        summary: req.summary,
         preview: req.preview.as_deref(),
     };
 

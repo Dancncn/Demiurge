@@ -722,6 +722,124 @@ pub async fn execute_subagent_readonly(
     }
 }
 
+pub fn permission_summary(name: &str, args: &Value) -> String {
+    let str_arg = |key: &str| args.get(key).and_then(Value::as_str).unwrap_or("").trim();
+    let int_arg = |key: &str| args.get(key).and_then(Value::as_i64);
+
+    match name {
+        "open_path" => {
+            let target = str_arg("target");
+            if target.starts_with("http://") || target.starts_with("https://") {
+                format!("将用系统默认程序打开外部链接：{target}")
+            } else if !target.is_empty() {
+                format!("将用系统默认程序打开路径或应用：{target}")
+            } else {
+                "将调用系统默认程序打开目标。".to_string()
+            }
+        }
+        "shell" => {
+            let command = str_arg("command");
+            let cwd = str_arg("cwd");
+            if cwd.is_empty() {
+                format!("将在沙盒根目录执行 shell 命令：{command}")
+            } else {
+                format!("将在沙盒内 `{cwd}` 执行 shell 命令：{command}")
+            }
+        }
+        "write_file" => {
+            let path = str_arg("path");
+            format!("将创建或覆盖沙盒内文件：{path}")
+        }
+        "edit_file" => {
+            let path = str_arg("path");
+            if args
+                .get("replace_all")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+            {
+                format!("将批量替换沙盒内文件的匹配内容：{path}")
+            } else {
+                format!("将精确替换沙盒内文件的一处匹配内容：{path}")
+            }
+        }
+        "multi_edit" => {
+            let count = args
+                .get("edits")
+                .and_then(Value::as_array)
+                .map_or(0, Vec::len);
+            format!("将批量应用 {count} 个文本编辑；任一预检失败则不会写入。")
+        }
+        "apply_patch" => {
+            let count = args
+                .get("hunks")
+                .and_then(Value::as_array)
+                .map_or(0, Vec::len);
+            format!("将按结构化 patch 应用 {count} 个 hunk；执行前会预检匹配行。")
+        }
+        "undo_edit" => "将撤销本进程最近一次成功编辑，并先确认目标文件未被外部修改。".to_string(),
+        "context_collapse" => {
+            "将调用模型把旧会话压缩进 rolling summary，并修改当前会话历史。".to_string()
+        }
+        "agent_spawn" => {
+            let label = str_arg("label");
+            let mode = str_arg("context_mode");
+            let label = if label.is_empty() {
+                "只读子 Agent"
+            } else {
+                label
+            };
+            if mode.is_empty() {
+                format!("将额外启动 {label}，并可能把项目上下文发送给模型服务。")
+            } else {
+                format!("将以 `{mode}` 上下文模式额外启动 {label}，并可能调用模型服务。")
+            }
+        }
+        "execute_tool" => {
+            let tool_name = str_arg("tool_name");
+            format!("将执行按需发现的 deferred tool：{tool_name}")
+        }
+        "worktree_create" => {
+            let label = str_arg("label");
+            let branch = str_arg("branch");
+            if branch.is_empty() {
+                format!("将在沙盒 Git 仓库创建独立 worktree：{label}")
+            } else {
+                format!("将在沙盒 Git 仓库创建 worktree `{label}` 和分支 `{branch}`。")
+            }
+        }
+        "screen_list_windows" => {
+            "将读取当前桌面可见窗口标题、应用名和屏幕位置，可能包含隐私信息。".to_string()
+        }
+        "screen_capture_region" => format!(
+            "将截取屏幕区域 x={} y={} width={} height={} 并保存到沙盒。",
+            int_arg("x").map_or("?".to_string(), |v| v.to_string()),
+            int_arg("y").map_or("?".to_string(), |v| v.to_string()),
+            int_arg("width").map_or("?".to_string(), |v| v.to_string()),
+            int_arg("height").map_or("?".to_string(), |v| v.to_string())
+        ),
+        "screen_capture_window" => {
+            let title = str_arg("title");
+            let app = str_arg("app");
+            format!("将截取匹配窗口 title=`{title}` app=`{app}`，截图可能包含隐私信息。")
+        }
+        "screen_ocr_region" => format!(
+            "将截取屏幕区域 x={} y={} width={} height={} 并用本地 OCR 识别文本。",
+            int_arg("x").map_or("?".to_string(), |v| v.to_string()),
+            int_arg("y").map_or("?".to_string(), |v| v.to_string()),
+            int_arg("width").map_or("?".to_string(), |v| v.to_string()),
+            int_arg("height").map_or("?".to_string(), |v| v.to_string())
+        ),
+        "screen_ocr_window" => {
+            let title = str_arg("title");
+            let app = str_arg("app");
+            format!("将对匹配窗口 title=`{title}` app=`{app}` 截图并做本地 OCR，可能包含隐私信息。")
+        }
+        _ => definition_for(name)
+            .map(|t| format!("{}：{}", t.name, t.permission.reason))
+            .unwrap_or_else(|| format!("未知工具 `{name}` 将按最高安全级别处理。")),
+    }
+}
+
 pub fn confirmation_preview(state: &crate::AppState, name: &str, args: Value) -> Option<String> {
     match name {
         "edit_file" => Some(
