@@ -1163,6 +1163,7 @@ pub fn run() {
             *state.packs_dir.lock().unwrap() = packs;
             *state.settings.lock().unwrap() = settings;
             *state.sessions.lock().unwrap() = sessions;
+            agent::workflow_runtime::hydrate_persisted_runs(state.inner());
             // 保证落盘一次（迁移/初始化后）
             state.persist_sessions();
             Ok(())

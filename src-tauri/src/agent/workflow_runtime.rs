@@ -59,6 +59,7 @@ pub struct WorkflowRunProgress {
 #[serde(rename_all = "snake_case")]
 pub enum WorkflowStatus {
     Running,
+    StaleRunning,
     Done,
     Failed,
     Killed,
@@ -126,14 +127,22 @@ pub fn ensure_dir(state: &crate::AppState) -> Result<PathBuf, String> {
 pub fn panel_state(state: &crate::AppState) -> WorkflowPanelState {
     let definitions = list_definitions(state);
     let mut runs = state.workflow_runs.lock().unwrap().clone();
-    let seen = runs
+    let mut seen = runs
         .iter()
         .map(|run| run.run_id.clone())
         .collect::<HashSet<_>>();
+    for run in list_persisted_run_states(state) {
+        if seen.contains(&run.run_id) {
+            continue;
+        }
+        seen.insert(run.run_id.clone());
+        runs.push(run);
+    }
     for info in workflow_journal::list(state) {
         if seen.contains(&info.run_id) {
             continue;
         }
+        seen.insert(info.run_id.clone());
         runs.push(WorkflowRunProgress {
             run_id: info.run_id,
             name: "journal".to_string(),
@@ -153,6 +162,24 @@ pub fn panel_state(state: &crate::AppState) -> WorkflowPanelState {
     }
     runs.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
     WorkflowPanelState { definitions, runs }
+}
+
+pub fn hydrate_persisted_runs(state: &crate::AppState) {
+    let persisted = list_persisted_run_states(state);
+    if persisted.is_empty() {
+        return;
+    }
+    let mut runs = state.workflow_runs.lock().unwrap();
+    let mut seen = runs
+        .iter()
+        .map(|run| run.run_id.clone())
+        .collect::<HashSet<_>>();
+    for run in persisted {
+        if seen.insert(run.run_id.clone()) {
+            runs.push(run);
+        }
+    }
+    runs.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
 }
 
 pub fn list_definitions(state: &crate::AppState) -> Vec<WorkflowDefinitionInfo> {
@@ -735,6 +762,57 @@ fn write_run_state_in_root(root: &Path, run: &WorkflowRunProgress) -> Result<(),
     fs::rename(&tmp, &target).map_err(|e| format!("提交 workflow state 失败：{e}"))
 }
 
+fn list_persisted_run_states(state: &crate::AppState) -> Vec<WorkflowRunProgress> {
+    let sandbox = state.sandbox_dir.lock().unwrap().clone();
+    list_run_states_in_root(&sandbox)
+}
+
+fn list_run_states_in_root(root: &Path) -> Vec<WorkflowRunProgress> {
+    let runs_dir = root.join(workflow_journal::JOURNAL_DIR);
+    let Ok(entries) = fs::read_dir(runs_dir) else {
+        return Vec::new();
+    };
+    let mut runs = entries
+        .filter_map(Result::ok)
+        .filter_map(|entry| read_run_state_file(&entry.path().join(RUN_STATE_FILE)))
+        .map(normalize_restored_run)
+        .collect::<Vec<_>>();
+    runs.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+    runs
+}
+
+fn read_run_state_file(path: &Path) -> Option<WorkflowRunProgress> {
+    let raw = fs::read_to_string(path).ok()?;
+    let parsed = serde_json::from_str::<WorkflowRunStateFile>(&raw).ok()?;
+    if parsed.schema_version != RUN_STATE_SCHEMA_VERSION {
+        return None;
+    }
+    if parsed.run.run_id.trim().is_empty() {
+        return None;
+    }
+    Some(parsed.run)
+}
+
+fn normalize_restored_run(mut run: WorkflowRunProgress) -> WorkflowRunProgress {
+    if run.status == WorkflowStatus::Running {
+        if run.cancel_requested {
+            run.status = WorkflowStatus::Killed;
+            if run.error.is_none() {
+                run.error = Some("Workflow was stopping when Demiurge exited.".to_string());
+            }
+        } else {
+            run.status = WorkflowStatus::StaleRunning;
+            if run.error.is_none() {
+                run.error = Some(
+                    "Workflow was running when Demiurge exited; no live task is attached."
+                        .to_string(),
+                );
+            }
+        }
+    }
+    run
+}
+
 fn mark_run(
     state: &crate::AppState,
     run_id: &str,
@@ -864,6 +942,53 @@ mod tests {
         assert!(parsed.run.cancel_requested);
         assert_eq!(parsed.run.budget.used_total(), 20);
         assert_eq!(parsed.run.steps_done, 2);
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn restores_running_snapshot_as_stale_run() {
+        let root = std::env::temp_dir().join(format!(
+            "demiurge_workflow_restore_{}",
+            store::new_session_id()
+        ));
+        let run = WorkflowRunProgress {
+            run_id: "wf_restore_test".to_string(),
+            name: "restore-test".to_string(),
+            status: WorkflowStatus::Running,
+            cancel_requested: false,
+            current_phase: Some("phase-a".to_string()),
+            agents: Vec::new(),
+            logs: vec!["loaded demo".to_string()],
+            journal_path: workflow_journal::run_dir(&root, "wf_restore_test")
+                .join("journal.jsonl")
+                .to_string_lossy()
+                .to_string(),
+            started_at: 10,
+            updated_at: 20,
+            error: None,
+            budget: budget::TokenBudgetState {
+                total: Some(100),
+                used_exact: 12,
+                used_estimated: 8,
+            },
+            steps_total: 4,
+            steps_done: 2,
+        };
+        write_run_state_in_root(&root, &run).unwrap();
+
+        let restored = list_run_states_in_root(&root);
+
+        assert_eq!(restored.len(), 1);
+        assert_eq!(restored[0].status, WorkflowStatus::StaleRunning);
+        assert!(!restored[0].cancel_requested);
+        assert_eq!(restored[0].budget.used_total(), 20);
+        assert_eq!(restored[0].steps_done, 2);
+        assert!(restored[0]
+            .error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("no live task"));
 
         let _ = std::fs::remove_dir_all(root);
     }
