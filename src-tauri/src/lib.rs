@@ -95,9 +95,14 @@ struct ContextPanelState {
     assistant_messages: usize,
     tool_messages: usize,
     summary_chars: usize,
+    system_prompt_chars: usize,
+    system_prompt_tokens: usize,
     estimated_history_tokens: usize,
+    tools_tokens: usize,
+    history_budget_tokens: usize,
     max_input_tokens: usize,
     reserved_output_tokens: usize,
+    prompt_sections: Vec<agent::prompt::PromptSectionReport>,
 }
 
 #[derive(Deserialize)]
@@ -605,37 +610,43 @@ fn get_history(state: State<'_, AppState>) -> Vec<Message> {
 #[tauri::command]
 fn context_panel_state(state: State<'_, AppState>) -> ContextPanelState {
     let settings = state.settings.lock().unwrap().clone();
-    let store = state.sessions.lock().unwrap();
-    let Some(session) = store.get(&store.active) else {
-        return ContextPanelState {
-            message_count: 0,
-            user_messages: 0,
-            assistant_messages: 0,
-            tool_messages: 0,
-            summary_chars: 0,
-            estimated_history_tokens: 0,
-            max_input_tokens: settings.max_input_tokens,
-            reserved_output_tokens: settings.reserved_output_tokens,
-        };
+    let (messages, summary) = {
+        let store = state.sessions.lock().unwrap();
+        store
+            .get(&store.active)
+            .map(|session| (session.messages.clone(), session.summary.clone()))
+            .unwrap_or_else(|| (Vec::new(), None))
     };
+
+    let packs_dir = state.packs_dir.lock().unwrap().clone();
+    let persona_text = pack::load_pack(&packs_dir, &settings.current_pack)
+        .map(|p| p.persona_text)
+        .unwrap_or_default();
+    let prompt_build =
+        agent::prompt::build_with_report(state.inner(), &settings, &persona_text, summary.as_deref());
+    let profile = llm::ProviderProfile::for_kind(settings.provider);
+    let tools_schema = if profile.supports_tools {
+        tools::main_schemas_json_for(profile.tool_schema_dialect)
+    } else {
+        profile.empty_tool_schema()
+    };
+    let budget =
+        agent::budget::history_budget(&settings, &prompt_build.text, &tools_schema, &messages);
+
     ContextPanelState {
-        message_count: session.messages.len(),
-        user_messages: session.messages.iter().filter(|m| m.role == "user").count(),
-        assistant_messages: session
-            .messages
-            .iter()
-            .filter(|m| m.role == "assistant")
-            .count(),
-        tool_messages: session.messages.iter().filter(|m| m.role == "tool").count(),
-        summary_chars: session
-            .summary
-            .as_deref()
-            .unwrap_or_default()
-            .chars()
-            .count(),
-        estimated_history_tokens: agent::budget::estimate_messages_tokens(&session.messages),
-        max_input_tokens: settings.max_input_tokens,
-        reserved_output_tokens: settings.reserved_output_tokens,
+        message_count: messages.len(),
+        user_messages: messages.iter().filter(|m| m.role == "user").count(),
+        assistant_messages: messages.iter().filter(|m| m.role == "assistant").count(),
+        tool_messages: messages.iter().filter(|m| m.role == "tool").count(),
+        summary_chars: summary.as_deref().unwrap_or_default().chars().count(),
+        system_prompt_chars: prompt_build.prompt_chars,
+        system_prompt_tokens: budget.system_tokens,
+        estimated_history_tokens: budget.history_tokens,
+        tools_tokens: budget.tools_tokens,
+        history_budget_tokens: budget.history_budget_tokens,
+        max_input_tokens: budget.max_input_tokens,
+        reserved_output_tokens: budget.reserved_output_tokens,
+        prompt_sections: prompt_build.sections,
     }
 }
 

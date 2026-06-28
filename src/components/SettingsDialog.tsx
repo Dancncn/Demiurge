@@ -292,7 +292,43 @@ function ContextMetric({ label, value }: { label: string; value: number }) {
   return (
     <div className="rounded-lg border border-[#e5e8ed] bg-white px-3 py-2">
       <div className="text-[11px] text-[#8a9099]">{label}</div>
-      <div className="mt-1 text-[15px] font-semibold text-[#202124]">{value}</div>
+      <div className="mt-1 text-[15px] font-semibold text-[#202124]">{value.toLocaleString()}</div>
+    </div>
+  );
+}
+
+function PromptSectionList({ sections }: { sections: ContextPanelState["prompt_sections"] }) {
+  if (!sections.length) return null;
+  const ordered = [...sections].sort((a, b) => b.priority - a.priority);
+  return (
+    <div className="mt-3 overflow-hidden rounded-lg border border-[#e2e5ea] bg-white">
+      <div className="grid grid-cols-[1fr_auto_auto] gap-3 border-b border-[#eceff3] bg-[#fbfcfd] px-3 py-2 text-[11px] font-medium uppercase tracking-wide text-[#7a8088]">
+        <span>Prompt Sections</span>
+        <span>Priority</span>
+        <span>Chars</span>
+      </div>
+      <div className="max-h-52 overflow-y-auto">
+        {ordered.map((section) => (
+          <div
+            key={section.id}
+            className="grid grid-cols-[1fr_auto_auto] items-center gap-3 border-b border-[#f0f2f5] px-3 py-2 text-[12px] last:border-b-0"
+          >
+            <div className="min-w-0">
+              <div className="truncate font-medium text-[#202124]">{section.title}</div>
+              <div className="mt-0.5 text-[11px] text-[#8a9099]">
+                {section.included ? "Included" : "Skipped"}
+                {section.truncated ? " / truncated" : ""}
+              </div>
+            </div>
+            <span className="rounded-md bg-[#eef1f5] px-2 py-1 font-mono text-[11px] text-[#59616d]">
+              {section.priority}
+            </span>
+            <span className="font-mono text-[11px] tabular-nums text-[#59616d]">
+              {section.chars.toLocaleString()}
+            </span>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
@@ -704,7 +740,9 @@ export default function SettingsDialog({
       : null;
   const tokenPct = Math.min(
     100,
-    Math.round(((contextState?.estimated_history_tokens ?? 0) / Math.max(1, contextState?.max_input_tokens ?? 1)) * 100),
+    Math.round(
+      ((contextState?.estimated_history_tokens ?? 0) / Math.max(1, contextState?.history_budget_tokens ?? 1)) * 100,
+    ),
   );
 
   const navItems: { id: SettingsTab; label: string; detail: string }[] = [
@@ -1233,14 +1271,23 @@ export default function SettingsDialog({
                         <ContextMetric label="Assistant" value={contextState?.assistant_messages ?? 0} />
                         <ContextMetric label="Tool" value={contextState?.tool_messages ?? 0} />
                       </div>
+                      <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4">
+                        <ContextMetric label="System chars" value={contextState?.system_prompt_chars ?? 0} />
+                        <ContextMetric label="System tokens" value={contextState?.system_prompt_tokens ?? 0} />
+                        <ContextMetric label="Tools tokens" value={contextState?.tools_tokens ?? 0} />
+                        <ContextMetric label="History budget" value={contextState?.history_budget_tokens ?? 0} />
+                      </div>
                       <div className="mt-3 h-2 overflow-hidden rounded-full bg-[#e8ebef]">
                         <div className="h-full rounded-full bg-[#111827]" style={{ width: `${tokenPct}%` }} />
                       </div>
                       <div className="mt-2 text-[12px] text-[#7a8088]">
-                        Estimated history {contextState?.estimated_history_tokens ?? 0} /{" "}
-                        {contextState?.max_input_tokens ?? form.max_input_tokens} tokens. Summary{" "}
-                        {contextState?.summary_chars ?? 0} chars.
+                        Estimated history {(contextState?.estimated_history_tokens ?? 0).toLocaleString()} /{" "}
+                        {(contextState?.history_budget_tokens ?? form.max_input_tokens).toLocaleString()} tokens. Max input{" "}
+                        {(contextState?.max_input_tokens ?? form.max_input_tokens).toLocaleString()}, reserved output{" "}
+                        {(contextState?.reserved_output_tokens ?? form.reserved_output_tokens).toLocaleString()}. Summary{" "}
+                        {(contextState?.summary_chars ?? 0).toLocaleString()} chars.
                       </div>
+                      <PromptSectionList sections={contextState?.prompt_sections ?? []} />
                     </div>
                   </Section>
                   <Section title="Memory">

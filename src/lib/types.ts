@@ -215,9 +215,23 @@ export interface ContextPanelState {
   assistant_messages: number;
   tool_messages: number;
   summary_chars: number;
+  system_prompt_chars: number;
+  system_prompt_tokens: number;
   estimated_history_tokens: number;
+  tools_tokens: number;
+  history_budget_tokens: number;
   max_input_tokens: number;
   reserved_output_tokens: number;
+  prompt_sections: PromptSectionReport[];
+}
+
+export interface PromptSectionReport {
+  id: string;
+  title: string;
+  priority: number;
+  chars: number;
+  included: boolean;
+  truncated: boolean;
 }
 
 export type GoalStatus =
