@@ -36,6 +36,7 @@ Demiurge 的待办与方向，欢迎认领。✅ 已完成 · ⬜ 待做 · 💡
 - [x] **Deferred Tool Search 首版**：core tools 稳定加载，低频工具经 `tool_search` / `execute_tool` 发现和代理执行
 - [x] **Workflow Journal / Resume 首版**：`/ultracode` 写 JSONL journal，`/workflows` 列 run，`/workflow resume <run_id>` 恢复
 - [x] **Worktree Isolation 骨架**：`worktree_create` 在沙盒 Git 仓库下创建隔离 worktree
+- [x] **Workflow JSON DSL / Live Panel 首版**：`.demiurge/workflows/*.json` 支持 `agent` / `parallel` / `pipeline` / `phase` / `budget`，顶部 Workflows 面板可 run/stop/resume
 - [ ] **会话重命名**：手动改会话标题
 - [ ] **角色包头像**：读取 `manifest.avatar`，替换 UI 里的默认莲花头像
 - [ ] **设置里一键测试连接**：填完 Key 后点一下验证 base_url/model 可用
@@ -54,8 +55,7 @@ Demiurge 的待办与方向，欢迎认领。✅ 已完成 · ⬜ 待做 · 💡
 
 ## 暂不做（避免范围蔓延）🚫
 - 向量 / 长期记忆 RAG —— 持久化已覆盖 MVP 记忆
-- 完整工作流运行时 —— 只读多 Agent 编排、journal/resume、worktree 骨架已落地；DSL / live panel / per-agent budget 之后再分阶段做
-- 完整 workflow DSL / 实时面板 —— 目前已有 journal/resume 和 worktree 骨架，尚未实现 JS workflow engine 与 live panel
+- 完整 Claude Code JS workflow engine —— 当前先落地 Rust 原生 JSON DSL / live panel；JS DSL 兼容层、per-agent 硬预算和跨进程 live 恢复后续再分阶段做
 
 ## 想法 💡
 - 工具调用的「计划预览」——执行前让模型先列出将做的事

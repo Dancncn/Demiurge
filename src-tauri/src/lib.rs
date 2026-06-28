@@ -12,7 +12,7 @@ mod voice;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use serde::Serialize;
@@ -36,6 +36,8 @@ pub struct AppState {
     pub session_permission_rules: Mutex<HashMap<String, PermissionRule>>,
     /// 本进程内最近 edit_file 修改记录，用于 undo_edit 安全撤销
     pub edit_undo_stack: Mutex<Vec<tools::EditUndoEntry>>,
+    pub workflow_runs: Mutex<Vec<agent::workflow_runtime::WorkflowRunProgress>>,
+    pub workflow_cancels: Mutex<HashMap<String, Arc<AtomicBool>>>,
     /// 用户中断标志
     pub cancel: AtomicBool,
     /// 是否正在处理一轮对话（防止并发 send）
@@ -55,6 +57,8 @@ impl AppState {
             pending_confirms: Mutex::new(HashMap::new()),
             session_permission_rules: Mutex::new(HashMap::new()),
             edit_undo_stack: Mutex::new(Vec::new()),
+            workflow_runs: Mutex::new(Vec::new()),
+            workflow_cancels: Mutex::new(HashMap::new()),
             cancel: AtomicBool::new(false),
             busy: AtomicBool::new(false),
             data_dir: Mutex::new(PathBuf::new()),
@@ -298,6 +302,31 @@ async fn ocr_download_models(
     ocr::download_models(app, state.inner(), source).await
 }
 
+#[tauri::command]
+fn workflow_panel_state(state: State<'_, AppState>) -> agent::workflow_runtime::WorkflowPanelState {
+    agent::workflow_runtime::panel_state(state.inner())
+}
+
+#[tauri::command]
+fn workflow_run(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    name: String,
+) -> Result<String, String> {
+    let run_id = agent::workflow_runtime::launch(&app, state.inner(), &name)?;
+    let app_for_task = app.clone();
+    let run_id_for_task = run_id.clone();
+    tauri::async_runtime::spawn(async move {
+        agent::workflow_runtime::run_launched(app_for_task, run_id_for_task, name).await;
+    });
+    Ok(run_id)
+}
+
+#[tauri::command]
+fn workflow_stop(app: AppHandle, state: State<'_, AppState>, run_id: String) -> Result<(), String> {
+    agent::workflow_runtime::stop(&app, state.inner(), &run_id)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let http = reqwest::Client::builder()
@@ -347,6 +376,9 @@ pub fn run() {
             open_sandbox,
             ocr_model_status,
             ocr_download_models,
+            workflow_panel_state,
+            workflow_run,
+            workflow_stop,
             voice::voice_status,
             voice::voice_transcribe,
             voice::voice_synthesize,

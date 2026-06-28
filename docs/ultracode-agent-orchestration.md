@@ -1,6 +1,6 @@
 # Ultracode Multi-Agent Orchestration
 
-Demiurge 的 Ultracode 集成采用渐进式落地：先提供可运行的只读子 Agent 编排，再逐步扩展到可恢复 workflow、TUI 面板和隔离工作区。
+Demiurge 的 Ultracode 集成采用渐进式落地：先提供可运行的只读子 Agent 编排，再扩展到可恢复 workflow、React live panel 和隔离工作区。
 
 ## 已实现
 
@@ -14,6 +14,8 @@ Demiurge 的 Ultracode 集成采用渐进式落地：先提供可运行的只读
 - `context_inspect` / `context_collapse`：模型可检查上下文压力，并在确认后触发折叠。
 - Deferred Tool Search：主 Agent 默认只加载 core tools；截图/OCR/打开路径等低频能力通过 `tool_search` 发现、`execute_tool` 代理执行，保持 tools schema 稳定。
 - Workflow journal：`/ultracode` 会写 `.demiurge/workflow-runs/<run_id>/journal.jsonl`；`/workflows` 可列出 run，`/workflow resume <run_id>` 可用 journal 恢复。
+- Workflow JSON DSL：沙盒 `.demiurge/workflows/*.json` 可定义 `log`、`phase`、`agent`、`parallel`、`pipeline`、`budget` step，由 Rust 原生运行时执行。
+- Workflows live panel：顶部 `Workflows` 入口可查看定义、启动 workflow、实时查看 run/agent/log 状态，并支持 stop/resume。
 - `worktree_create`：在沙盒 Git 仓库下创建隔离 worktree，用于大改动或实验分支。
 
 ## 使用方式
@@ -39,11 +41,11 @@ Demiurge 的 Ultracode 集成采用渐进式落地：先提供可运行的只读
 
 后续可继续参考 Ultracode 做：
 
-- 完整 workflow DSL：`agent` / `parallel` / `pipeline` / `phase` / `budget` 的脚本运行时。
-- live workflow panel：带阶段树、agent 状态和 kill/resume 控制的 UI 面板。
+- per-agent budget：把 `budget` step 从 journal 标记升级为硬预算与消耗追踪。
+- cross-process recovery：应用重启后从 journal 恢复 live run 进度，而不是仅恢复为 overlay。
 - judge panel：同一设计让多个 Reviewer 独立打分，再由主 Agent 合成取舍。
 - context compaction policy：把大块工具结果压成结构化 evidence packet，再进入后续主上下文。
 
 ## 当前边界
 
-当前版本仍不是完整的 Claude Code workflow runtime。它已经有 fork-style 子 Agent、deferred tools、上下文折叠、journal/resume 和 worktree 创建骨架；但还没有 JavaScript workflow DSL、实时 workflow 面板、per-agent 预算追踪或跨进程 live 进度恢复。主 Agent 仍是唯一做最终判断和答复的角色。
+当前版本仍不是完整的 Claude Code workflow runtime。它已经有 fork-style 子 Agent、deferred tools、上下文折叠、journal/resume、Rust 原生 JSON workflow DSL、live panel 和 worktree 创建骨架；但还没有 JavaScript workflow DSL、per-agent 硬预算追踪或跨进程 live 进度恢复。主 Agent 仍是唯一做最终判断和答复的角色。

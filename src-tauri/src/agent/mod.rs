@@ -11,6 +11,7 @@ pub mod subagent;
 pub mod summary;
 pub mod ultracode;
 pub mod workflow_journal;
+pub mod workflow_runtime;
 
 mod runner;
 pub use runner::{run_turn, run_turn_with_options, TurnOptions};

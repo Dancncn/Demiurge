@@ -371,6 +371,8 @@ mod tests {
             pending_confirms: Mutex::new(std::collections::HashMap::new()),
             session_permission_rules: Mutex::new(std::collections::HashMap::new()),
             edit_undo_stack: Mutex::new(Vec::new()),
+            workflow_runs: Mutex::new(Vec::new()),
+            workflow_cancels: Mutex::new(std::collections::HashMap::new()),
             cancel: std::sync::atomic::AtomicBool::new(false),
             busy: std::sync::atomic::AtomicBool::new(false),
             data_dir: Mutex::new(data_dir),
