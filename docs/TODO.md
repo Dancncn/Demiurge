@@ -7,6 +7,7 @@ Demiurge 当前已经从 MVP 进入 Agent 能力打磨阶段。下面把现有 T
 - [x] **桌面应用骨架**：Tauri + Rust 后端、React 前端、会话 UI、设置页、工具卡片、确认弹窗。
 - [x] **流式 Agent Loop**：模型流式输出、工具调用、工具结果回填、多轮循环、用户中断。
 - [x] **Provider Adapter**：OpenAI-compatible、local、Anthropic、Gemini。
+- [x] **Provider Capability Profile 2.0 first slice**：集中 provider capability flags、tool schema dialect、structured output 能力标记和 provider body-builder gating。
 - [x] **工具注册表**：统一 metadata、JSON Schema、权限策略、并发属性和输出属性。
 - [x] **文件沙箱**：读写限定沙箱目录、路径校验 + canonicalize 防逃逸。
 - [x] **编辑工具**：`read_file`、`write_file`、`edit_file`、`multi_edit`、`apply_patch`、`undo_edit`。
@@ -36,7 +37,7 @@ Demiurge 当前已经从 MVP 进入 Agent 能力打磨阶段。下面把现有 T
 
 - [ ] **MCP 集成第一阶段**：实现完整 MCP Manager，优先 stdio server 配置、启动/停止/健康检查、tool discovery、resource 读取、凭据/env/token 管理、工具调用 UI 渲染，并把 MCP 工具接入权限模型与风险分级；后续再扩展 HTTP/SSE、OAuth、MCP-backed skills。
 - [ ] **真实 Plan Mode**：实现用户主导的“先计划、后执行”模式；生成计划文件，在用户批准边界之后才允许写入、shell、外部发布等动作，并支持 plan/default/auto/bypass 等权限模式的清晰切换。
-- [ ] **Provider Capability Profile 2.0**：统一建模 tools、streaming、prompt caching、thinking、parallel tool calls、max token 差异、structured output/schema dialect、provider-specific token budgets；重构 provider request building，避免 runner/tool 层散落 provider-specific conditionals。
+- [ ] **Provider Capability Profile 2.0 后续**：在 first slice 已集中 provider capability flags、tool schema dialect 与 provider body-builder gating 的基础上，继续统一建模 prompt caching、thinking、parallel tool calls、max token 差异、structured output/schema dialect、provider-specific token budgets；重构 provider request building，避免 runner/tool 层散落 provider-specific conditionals。
 - [ ] **Workflow durable run**：把 live run 从进程内状态升级为跨进程 durable background execution，能够在应用重启后恢复真实 run 状态、取消状态、预算状态和进度，而不只是生成 resume overlay。
 - [ ] **Shell / 进程隔离加强**：从 policy-level 约束推进到 OS-level process isolation；补齐平台 sandbox、可视化 allowlist/denylist、联网/依赖安装/外部执行策略，并深测 macOS/Linux 跨平台安全策略。
 - [ ] **Session Engine 成熟化**：引入或继续拆分 Session Engine，覆盖 turn management、多 tool-call loop、状态、取消、重试、错误、前端事件、store decoupling、React transcript/tool event rendering 与 Rust backend event stream。

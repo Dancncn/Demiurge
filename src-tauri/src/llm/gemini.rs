@@ -16,7 +16,8 @@ pub async fn stream_completion(
     mut on_delta: impl FnMut(&str),
     cancel: &AtomicBool,
 ) -> Result<AssistantTurn, String> {
-    let key = require_api_key(cfg, ProviderProfile::gemini())?
+    let profile = ProviderProfile::gemini();
+    let key = require_api_key(cfg, profile)?
         .ok_or_else(|| "未配置 API Key，请在设置里填写。".to_string())?;
     let url = format!(
         "{}/models/{}:streamGenerateContent?alt=sse&key={}",
@@ -24,7 +25,7 @@ pub async fn stream_completion(
         cfg.model,
         key
     );
-    let body = build_gemini_body(cfg, messages, tools)?;
+    let body = build_gemini_body(cfg, messages, tools, profile)?;
 
     let resp = client
         .post(&url)
@@ -72,6 +73,7 @@ pub fn build_gemini_body(
     cfg: &Settings,
     messages: &[Message],
     tools: &Value,
+    profile: ProviderProfile,
 ) -> Result<Value, String> {
     let mut system_parts = Vec::new();
     let mut contents = Vec::new();
@@ -138,13 +140,13 @@ pub fn build_gemini_body(
     let mut body = json!({
         "contents": contents,
         "generationConfig": {
-            "maxOutputTokens": cfg.reserved_output_tokens
+            "maxOutputTokens": profile.effective_max_output_tokens(cfg.reserved_output_tokens)
         }
     });
     if !system_parts.is_empty() {
         body["systemInstruction"] = json!({ "parts": system_parts });
     }
-    if super::non_empty_tools(tools) {
+    if profile.supports_non_empty_tools(tools) {
         body["tools"] = tools.clone();
     }
     Ok(body)
@@ -281,6 +283,7 @@ mod tests {
                 Message::tool_result("call_1", "grep", "done"),
             ],
             &json!([{ "function_declarations": [{ "name": "grep", "parameters": { "type": "object" } }] }]),
+            ProviderProfile::gemini(),
         )
         .unwrap();
         assert_eq!(body["systemInstruction"]["parts"][0]["text"], "sys");
@@ -292,7 +295,25 @@ mod tests {
             body["contents"][2]["parts"][0]["functionResponse"]["name"],
             "grep"
         );
+        assert_eq!(
+            body["generationConfig"]["maxOutputTokens"],
+            cfg().reserved_output_tokens
+        );
         assert!(body["tools"].is_array());
+    }
+
+    #[test]
+    fn gemini_body_omits_tools_when_profile_disables_tools() {
+        let mut profile = ProviderProfile::gemini();
+        profile.supports_tools = false;
+        let body = build_gemini_body(
+            &cfg(),
+            &[Message::user("hi")],
+            &json!([{ "function_declarations": [{ "name": "grep", "parameters": { "type": "object" } }] }]),
+            profile,
+        )
+        .unwrap();
+        assert!(body.get("tools").is_none());
     }
 
     #[test]

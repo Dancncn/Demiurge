@@ -172,7 +172,11 @@ pub async fn run(state: &crate::AppState, req: SubagentRequest) -> Result<String
             }
             msgs.push(Message::user(user));
             (
-                tools::schemas_json_for_names(profile.tool_schema_dialect, readonly_tool_names),
+                if profile.supports_tools {
+                    tools::schemas_json_for_names(profile.tool_schema_dialect, readonly_tool_names)
+                } else {
+                    profile.empty_tool_schema()
+                },
                 msgs,
             )
         }
@@ -190,7 +194,11 @@ pub async fn run(state: &crate::AppState, req: SubagentRequest) -> Result<String
                 &format!("## 父会话上下文\n{parent_context}\n\n## 指令"),
             );
             (
-                tools::schemas_json_for_names(profile.tool_schema_dialect, readonly_tool_names),
+                if profile.supports_tools {
+                    tools::schemas_json_for_names(profile.tool_schema_dialect, readonly_tool_names)
+                } else {
+                    profile.empty_tool_schema()
+                },
                 vec![Message::system(system), Message::user(user)],
             )
         }

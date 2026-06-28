@@ -17,10 +17,11 @@ pub async fn stream_completion(
     mut on_delta: impl FnMut(&str),
     cancel: &AtomicBool,
 ) -> Result<AssistantTurn, String> {
-    let key = require_api_key(cfg, ProviderProfile::anthropic())?
+    let profile = ProviderProfile::anthropic();
+    let key = require_api_key(cfg, profile)?
         .ok_or_else(|| "未配置 API Key，请在设置里填写。".to_string())?;
     let url = format!("{}/messages", cfg.base_url.trim_end_matches('/'));
-    let body = build_anthropic_body(cfg, messages, tools)?;
+    let body = build_anthropic_body(cfg, messages, tools, profile)?;
 
     let resp = client
         .post(&url)
@@ -73,6 +74,7 @@ pub fn build_anthropic_body(
     cfg: &Settings,
     messages: &[Message],
     tools: &Value,
+    profile: ProviderProfile,
 ) -> Result<Value, String> {
     let mut system_parts = Vec::new();
     let mut out_messages = Vec::new();
@@ -127,14 +129,14 @@ pub fn build_anthropic_body(
 
     let mut body = json!({
         "model": cfg.model,
-        "max_tokens": cfg.reserved_output_tokens,
-        "stream": true,
+        "max_tokens": profile.effective_max_output_tokens(cfg.reserved_output_tokens),
+        "stream": profile.supports_streaming,
         "messages": out_messages,
     });
     if !system_parts.is_empty() {
         body["system"] = json!(system_parts.join("\n\n"));
     }
-    if super::non_empty_tools(tools) {
+    if profile.supports_non_empty_tools(tools) {
         body["tools"] = tools.clone();
     }
     Ok(body)
@@ -336,12 +338,29 @@ mod tests {
                 Message::tool_result("toolu_1", "read_file", "ok"),
             ],
             &json!([{ "name": "read_file", "input_schema": { "type": "object" } }]),
+            ProviderProfile::anthropic(),
         )
         .unwrap();
         assert_eq!(body["system"], "sys");
         assert_eq!(body["messages"][1]["content"][0]["type"], "tool_use");
         assert_eq!(body["messages"][2]["content"][0]["type"], "tool_result");
+        assert_eq!(body["max_tokens"], cfg().reserved_output_tokens);
+        assert_eq!(body["stream"], true);
         assert!(body["tools"].is_array());
+    }
+
+    #[test]
+    fn anthropic_body_omits_tools_when_profile_disables_tools() {
+        let mut profile = ProviderProfile::anthropic();
+        profile.supports_tools = false;
+        let body = build_anthropic_body(
+            &cfg(),
+            &[Message::user("hi")],
+            &json!([{ "name": "read_file", "input_schema": { "type": "object" } }]),
+            profile,
+        )
+        .unwrap();
+        assert!(body.get("tools").is_none());
     }
 
     #[test]

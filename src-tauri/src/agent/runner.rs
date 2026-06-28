@@ -84,7 +84,9 @@ pub async fn run_turn_with_options(
         .iter()
         .map(String::as_str)
         .collect::<Vec<_>>();
-    let tools_schema = if allowed_tool_names.is_empty() {
+    let tools_schema = if !profile.supports_tools {
+        profile.empty_tool_schema()
+    } else if allowed_tool_names.is_empty() {
         tools::main_schemas_json_for(profile.tool_schema_dialect)
     } else {
         tools::schemas_json_for_names(profile.tool_schema_dialect, &allowed_tool_names)

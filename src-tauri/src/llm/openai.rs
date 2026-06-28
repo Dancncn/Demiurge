@@ -81,9 +81,12 @@ pub fn build_openai_body(
         "messages": messages,
         "stream": profile.supports_streaming,
     });
-    if profile.supports_tools && super::non_empty_tools(tools) {
+    if profile.supports_non_empty_tools(tools) {
         body["tools"] = tools.clone();
         body["tool_choice"] = json!("auto");
+        if profile.supports_parallel_tool_calls {
+            body["parallel_tool_calls"] = json!(true);
+        }
     }
     Ok(body)
 }

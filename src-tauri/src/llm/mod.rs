@@ -64,6 +64,15 @@ pub enum ToolSchemaDialect {
 }
 
 #[allow(dead_code)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StructuredOutputCapability {
+    Unsupported,
+    OpenAiJsonSchema,
+    AnthropicJsonSchema,
+    GeminiSchema,
+}
+
+#[allow(dead_code)]
 #[derive(Clone, Copy, Debug)]
 pub struct ProviderProfile {
     pub supports_tools: bool,
@@ -75,6 +84,7 @@ pub struct ProviderProfile {
     pub max_input_tokens: Option<u32>,
     pub max_output_tokens: Option<u32>,
     pub tool_schema_dialect: ToolSchemaDialect,
+    pub structured_output: StructuredOutputCapability,
 }
 
 impl ProviderProfile {
@@ -89,6 +99,7 @@ impl ProviderProfile {
             max_input_tokens: None,
             max_output_tokens: None,
             tool_schema_dialect: ToolSchemaDialect::OpenAiCompatible,
+            structured_output: StructuredOutputCapability::OpenAiJsonSchema,
         }
     }
 
@@ -110,6 +121,7 @@ impl ProviderProfile {
             max_input_tokens: None,
             max_output_tokens: None,
             tool_schema_dialect: ToolSchemaDialect::Anthropic,
+            structured_output: StructuredOutputCapability::AnthropicJsonSchema,
         }
     }
 
@@ -124,6 +136,7 @@ impl ProviderProfile {
             max_input_tokens: None,
             max_output_tokens: None,
             tool_schema_dialect: ToolSchemaDialect::Gemini,
+            structured_output: StructuredOutputCapability::GeminiSchema,
         }
     }
 
@@ -140,6 +153,25 @@ impl ProviderProfile {
             ProviderKind::Local => ProviderProfile::local_openai_compatible(),
             ProviderKind::Anthropic => ProviderProfile::anthropic(),
             ProviderKind::Gemini => ProviderProfile::gemini(),
+        }
+    }
+
+    pub fn supports_non_empty_tools(self, tools: &Value) -> bool {
+        self.supports_tools && non_empty_tools(tools)
+    }
+
+    pub fn effective_max_output_tokens(self, requested: usize) -> usize {
+        self.max_output_tokens
+            .map(|limit| requested.min(limit as usize))
+            .unwrap_or(requested)
+    }
+
+    pub fn empty_tool_schema(self) -> Value {
+        match self.tool_schema_dialect {
+            ToolSchemaDialect::Gemini => Value::Array(vec![serde_json::json!({
+                "function_declarations": []
+            })]),
+            ToolSchemaDialect::OpenAiCompatible | ToolSchemaDialect::Anthropic => Value::Array(vec![]),
         }
     }
 }
@@ -218,6 +250,10 @@ mod tests {
             ProviderProfile::for_kind(ProviderKind::DeepSeek).tool_schema_dialect,
             ToolSchemaDialect::OpenAiCompatible
         );
+        assert_eq!(
+            ProviderProfile::for_kind(ProviderKind::OpenAiCompatible).structured_output,
+            StructuredOutputCapability::OpenAiJsonSchema
+        );
         assert!(ProviderProfile::for_kind(ProviderKind::OpenAiCompatible).requires_api_key);
         assert!(!ProviderProfile::for_kind(ProviderKind::Local).requires_api_key);
         assert_eq!(
@@ -225,8 +261,29 @@ mod tests {
             ToolSchemaDialect::Anthropic
         );
         assert_eq!(
+            ProviderProfile::for_kind(ProviderKind::Anthropic).structured_output,
+            StructuredOutputCapability::AnthropicJsonSchema
+        );
+        assert_eq!(
             ProviderProfile::for_kind(ProviderKind::Gemini).tool_schema_dialect,
             ToolSchemaDialect::Gemini
         );
+        assert_eq!(
+            ProviderProfile::for_kind(ProviderKind::Gemini).structured_output,
+            StructuredOutputCapability::GeminiSchema
+        );
+    }
+
+    #[test]
+    fn provider_profile_helpers_gate_tools_and_tokens() {
+        let mut profile = ProviderProfile::openai_compatible();
+        assert!(profile.supports_non_empty_tools(&serde_json::json!([{ "name": "x" }])));
+        assert!(!profile.supports_non_empty_tools(&serde_json::json!([])));
+        profile.supports_tools = false;
+        assert!(!profile.supports_non_empty_tools(&serde_json::json!([{ "name": "x" }])));
+
+        profile.max_output_tokens = Some(100);
+        assert_eq!(profile.effective_max_output_tokens(250), 100);
+        assert_eq!(profile.effective_max_output_tokens(50), 50);
     }
 }
