@@ -29,6 +29,7 @@ regex = "1"
 keyring = "4.1.2"
 xcap = "0.9"
 image = { version = "0.25", default-features = false, features = ["png"] }
+oar-ocr = "=0.7.0"
 
 [profile.release]
 opt-level = "s"

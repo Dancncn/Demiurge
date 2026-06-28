@@ -355,6 +355,43 @@ pub fn registry() -> Vec<ToolDefinition> {
             }),
         },
         ToolDefinition {
+            name: "screen_ocr_region",
+            description: "截取主显示器或副屏上的一块区域，用本地 PP-OCRv5 模型识别文本，返回合并文本和每行坐标。坐标为物理像素。",
+            risk: ToolRisk::Privileged,
+            concurrency: ToolConcurrency::SerialOnly,
+            permission: PermissionPolicy::ask("会读取屏幕像素并做本地 OCR，可能包含密钥、聊天或其它隐私信息。"),
+            output_policy: ToolOutputPolicy::TruncateForUi,
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "x": { "type": "integer", "description": "OCR 区域左上角 x，物理像素" },
+                    "y": { "type": "integer", "description": "OCR 区域左上角 y，物理像素" },
+                    "width": { "type": "integer", "description": "OCR 区域宽度，物理像素" },
+                    "height": { "type": "integer", "description": "OCR 区域高度，物理像素" }
+                },
+                "required": ["x", "y", "width", "height"]
+            }),
+        },
+        ToolDefinition {
+            name: "screen_ocr_window",
+            description: "按窗口标题或应用名匹配一个可见窗口，截取整窗或裁剪区域，用本地 PP-OCRv5 模型识别文本并返回每行坐标。",
+            risk: ToolRisk::Privileged,
+            concurrency: ToolConcurrency::SerialOnly,
+            permission: PermissionPolicy::ask("会读取目标窗口的屏幕像素并做本地 OCR，可能包含密钥、聊天或其它隐私信息。"),
+            output_policy: ToolOutputPolicy::TruncateForUi,
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "title": { "type": "string", "description": "可选：要匹配的完整窗口标题" },
+                    "app": { "type": "string", "description": "可选：要匹配的应用名。title/app 至少提供一个" },
+                    "crop_left": { "type": "number", "description": "可选：左裁剪比例，默认 0" },
+                    "crop_top": { "type": "number", "description": "可选：上裁剪比例，默认 0" },
+                    "crop_right": { "type": "number", "description": "可选：右边界比例，默认 1" },
+                    "crop_bottom": { "type": "number", "description": "可选：下边界比例，默认 1" }
+                }
+            }),
+        },
+        ToolDefinition {
             name: "system_info",
             description: "读取当前时间（UTC）、操作系统、架构、工作目录等基础系统状态。",
             risk: ToolRisk::ReadOnly,
@@ -456,9 +493,11 @@ pub async fn execute(state: &crate::AppState, name: &str, args: Value) -> Result
         "apply_patch" => edit_file::patch_run(state, args),
         "undo_edit" => edit_file::undo(state, args),
         "web_search" => web_search::run(state, args).await,
-        "screen_list_windows" => screen::list_windows(),
+        "screen_list_windows" => screen::list_windows(state),
         "screen_capture_region" => screen::capture_region(state, args),
         "screen_capture_window" => screen::capture_window(state, args),
+        "screen_ocr_region" => screen::ocr_region(state, args),
+        "screen_ocr_window" => screen::ocr_window(state, args),
         "system_info" => system_info::run(),
         other => Err(format!("未实现的工具：{other}")),
     }
@@ -492,6 +531,14 @@ pub fn confirmation_preview(state: &crate::AppState, name: &str, args: Value) ->
         "screen_capture_window" => Some(
             screen::preview_window(args)
                 .unwrap_or_else(|e| format!("无法生成窗口截图 preview：{e}")),
+        ),
+        "screen_ocr_region" => Some(
+            screen::preview_ocr_region(args)
+                .unwrap_or_else(|e| format!("无法生成 OCR preview：{e}")),
+        ),
+        "screen_ocr_window" => Some(
+            screen::preview_ocr_window(args)
+                .unwrap_or_else(|e| format!("无法生成窗口 OCR preview：{e}")),
         ),
         _ => None,
     }

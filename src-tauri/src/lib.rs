@@ -2,6 +2,7 @@
 mod agent;
 mod credentials;
 mod llm;
+mod ocr;
 mod pack;
 mod permission;
 mod store;
@@ -42,6 +43,7 @@ pub struct AppState {
     pub data_dir: Mutex<PathBuf>,
     pub sandbox_dir: Mutex<PathBuf>,
     pub packs_dir: Mutex<PathBuf>,
+    pub ocr: ocr::OcrState,
 }
 
 impl AppState {
@@ -58,6 +60,7 @@ impl AppState {
             data_dir: Mutex::new(PathBuf::new()),
             sandbox_dir: Mutex::new(PathBuf::new()),
             packs_dir: Mutex::new(PathBuf::new()),
+            ocr: ocr::OcrState::default(),
         }
     }
 
@@ -227,6 +230,20 @@ fn open_sandbox(state: State<'_, AppState>) -> Result<(), String> {
     tools::execute_open(&dir.to_string_lossy()).map(|_| ())
 }
 
+#[tauri::command]
+fn ocr_model_status(state: State<'_, AppState>) -> ocr::OcrModelStatus {
+    ocr::model_status(state.inner())
+}
+
+#[tauri::command]
+async fn ocr_download_models(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    source: ocr::OcrModelSource,
+) -> Result<ocr::OcrModelStatus, String> {
+    ocr::download_models(app, state.inner(), source).await
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let http = reqwest::Client::builder()
@@ -274,6 +291,8 @@ pub fn run() {
             select_session,
             delete_session,
             open_sandbox,
+            ocr_model_status,
+            ocr_download_models,
             voice::voice_status,
             voice::voice_transcribe,
             voice::voice_synthesize,

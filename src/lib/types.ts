@@ -33,6 +33,35 @@ export interface Settings {
   voice_stt_backend: string;
   voice_tts_backend: string;
   voice_id: string;
+  computer_use_enabled: boolean;
+  ocr_model_source: OcrModelSource;
+}
+
+export type OcrModelSource = "modelscope" | "huggingface";
+
+export interface OcrModelFileStatus {
+  name: string;
+  present: boolean;
+  bytes: number;
+}
+
+export interface OcrModelStatus {
+  installed: boolean;
+  modelDir: string;
+  source: OcrModelSource;
+  files: OcrModelFileStatus[];
+  missing: string[];
+  totalBytes: number;
+}
+
+export interface OcrDownloadProgress {
+  source: OcrModelSource;
+  file: string;
+  index: number;
+  totalFiles: number;
+  downloadedBytes: number;
+  totalBytes?: number;
+  done: boolean;
 }
 
 export interface VoiceStatus {

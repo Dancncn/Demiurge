@@ -3,6 +3,9 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
   ConfirmRequestEvent,
   Message,
+  OcrDownloadProgress,
+  OcrModelSource,
+  OcrModelStatus,
   PackManifest,
   PermissionScope,
   SessionList,
@@ -35,6 +38,12 @@ export const voiceStatus = () => invoke<VoiceStatus>("voice_status");
 export const voiceTranscribe = (audioPath: string) => invoke<string>("voice_transcribe", { audioPath });
 export const voiceSynthesize = (text: string, voiceId?: string) =>
   invoke<string>("voice_synthesize", { text, voiceId });
+
+export const ocrModelStatus = () => invoke<OcrModelStatus>("ocr_model_status");
+export const ocrDownloadModels = (source: OcrModelSource) =>
+  invoke<OcrModelStatus>("ocr_download_models", { source });
+export const listenOcrDownloadProgress = (handler: (e: OcrDownloadProgress) => void) =>
+  listen<OcrDownloadProgress>("ocr-download-progress", (e) => handler(e.payload));
 
 // ---- 事件订阅 ----
 export interface AgentEventHandlers {

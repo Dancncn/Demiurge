@@ -14,6 +14,7 @@ pub const DEFAULT_MAX_INPUT_TOKENS: usize = 32_000;
 pub const DEFAULT_RESERVED_OUTPUT_TOKENS: usize = 4_000;
 pub const DEFAULT_AUTO_MEMORY_ENABLED: bool = true;
 pub const DEFAULT_VOICE_ENABLED: bool = false;
+pub const DEFAULT_COMPUTER_USE_ENABLED: bool = false;
 
 fn default_provider() -> ProviderKind {
     ProviderKind::OpenAiCompatible
@@ -45,6 +46,14 @@ fn default_voice_stt_backend() -> String {
 
 fn default_voice_tts_backend() -> String {
     "none".to_string()
+}
+
+fn default_computer_use_enabled() -> bool {
+    DEFAULT_COMPUTER_USE_ENABLED
+}
+
+fn default_ocr_model_source() -> String {
+    "modelscope".to_string()
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
@@ -82,6 +91,10 @@ pub struct Settings {
     pub voice_tts_backend: String,
     #[serde(default)]
     pub voice_id: String,
+    #[serde(default = "default_computer_use_enabled")]
+    pub computer_use_enabled: bool,
+    #[serde(default = "default_ocr_model_source")]
+    pub ocr_model_source: String,
 }
 
 impl Default for Settings {
@@ -101,6 +114,8 @@ impl Default for Settings {
             voice_stt_backend: default_voice_stt_backend(),
             voice_tts_backend: default_voice_tts_backend(),
             voice_id: String::new(),
+            computer_use_enabled: DEFAULT_COMPUTER_USE_ENABLED,
+            ocr_model_source: default_ocr_model_source(),
         }
     }
 }
@@ -254,6 +269,8 @@ mod tests {
         assert!(!settings.voice_enabled);
         assert_eq!(settings.voice_stt_backend, "none");
         assert_eq!(settings.voice_tts_backend, "none");
+        assert!(!settings.computer_use_enabled);
+        assert_eq!(settings.ocr_model_source, "modelscope");
     }
 
     #[test]
