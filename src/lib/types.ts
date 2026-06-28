@@ -113,6 +113,17 @@ export interface WorkflowPanelState {
   runs: WorkflowRunProgress[];
 }
 
+export interface ContextPanelState {
+  message_count: number;
+  user_messages: number;
+  assistant_messages: number;
+  tool_messages: number;
+  summary_chars: number;
+  estimated_history_tokens: number;
+  max_input_tokens: number;
+  reserved_output_tokens: number;
+}
+
 export interface PackManifest {
   id: string;
   name: string;

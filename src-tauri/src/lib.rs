@@ -82,6 +82,18 @@ struct SessionList {
     sessions: Vec<SessionMeta>,
 }
 
+#[derive(Serialize)]
+struct ContextPanelState {
+    message_count: usize,
+    user_messages: usize,
+    assistant_messages: usize,
+    tool_messages: usize,
+    summary_chars: usize,
+    estimated_history_tokens: usize,
+    max_input_tokens: usize,
+    reserved_output_tokens: usize,
+}
+
 fn session_list(store: &SessionStore) -> SessionList {
     let mut metas: Vec<SessionMeta> = store
         .sessions
@@ -285,6 +297,34 @@ fn get_history(state: State<'_, AppState>) -> Vec<Message> {
         .unwrap_or_default()
 }
 
+#[tauri::command]
+fn context_panel_state(state: State<'_, AppState>) -> ContextPanelState {
+    let settings = state.settings.lock().unwrap().clone();
+    let store = state.sessions.lock().unwrap();
+    let Some(session) = store.get(&store.active) else {
+        return ContextPanelState {
+            message_count: 0,
+            user_messages: 0,
+            assistant_messages: 0,
+            tool_messages: 0,
+            summary_chars: 0,
+            estimated_history_tokens: 0,
+            max_input_tokens: settings.max_input_tokens,
+            reserved_output_tokens: settings.reserved_output_tokens,
+        };
+    };
+    ContextPanelState {
+        message_count: session.messages.len(),
+        user_messages: session.messages.iter().filter(|m| m.role == "user").count(),
+        assistant_messages: session.messages.iter().filter(|m| m.role == "assistant").count(),
+        tool_messages: session.messages.iter().filter(|m| m.role == "tool").count(),
+        summary_chars: session.summary.as_deref().unwrap_or_default().chars().count(),
+        estimated_history_tokens: agent::budget::estimate_messages_tokens(&session.messages),
+        max_input_tokens: settings.max_input_tokens,
+        reserved_output_tokens: settings.reserved_output_tokens,
+    }
+}
+
 /// 新建会话并设为活动，返回新会话 id。
 #[tauri::command]
 fn new_session(state: State<'_, AppState>) -> String {
@@ -446,6 +486,7 @@ pub fn run() {
             list_packs,
             list_sessions,
             get_history,
+            context_panel_state,
             new_session,
             select_session,
             delete_session,

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import * as api from "../lib/api";
 import type {
+  ContextPanelState,
   OcrDownloadProgress,
   OcrModelSource,
   OcrModelStatus,
@@ -99,6 +100,15 @@ function formatTime(ms: number) {
   return new Date(ms).toLocaleString();
 }
 
+function ContextMetric({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="rounded-xl border border-[#ececec] bg-white px-3 py-2">
+      <div className="text-[#9a9a9a]">{label}</div>
+      <div className="mt-1 font-medium text-[#333]">{value}</div>
+    </div>
+  );
+}
+
 export default function SettingsDialog({ open, settings, packs, onClose, onSave }: Props) {
   const [form, setForm] = useState<Settings>(settings);
   const [ocrStatus, setOcrStatus] = useState<OcrModelStatus | null>(null);
@@ -107,6 +117,7 @@ export default function SettingsDialog({ open, settings, packs, onClose, onSave 
   const [ocrError, setOcrError] = useState("");
   const [permissionState, setPermissionState] = useState<PermissionPanelState | null>(null);
   const [permissionBusy, setPermissionBusy] = useState(false);
+  const [contextState, setContextState] = useState<ContextPanelState | null>(null);
 
   useEffect(() => {
     if (open) setForm(settings);
@@ -122,6 +133,22 @@ export default function SettingsDialog({ open, settings, packs, onClose, onSave 
       })
       .catch((err) => {
         if (!cancelled) setOcrError(String(err));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    api
+      .contextPanelState()
+      .then((state) => {
+        if (!cancelled) setContextState(state);
+      })
+      .catch((err) => {
+        if (!cancelled) console.error("读取上下文状态失败", err);
       });
     return () => {
       cancelled = true;
@@ -291,6 +318,39 @@ export default function SettingsDialog({ open, settings, packs, onClose, onSave 
               onChange={(e) => set("reserved_output_tokens", Number(e.target.value) || 0)}
             />
           </label>
+
+          <div className="rounded-2xl border border-[#eeeeee] bg-[#fafafa] p-3">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <div className="text-sm font-medium text-[#3f3f3f]">上下文可视化</div>
+                <div className="mt-1 text-xs text-[#9a9a9a]">当前会话历史、摘要和 token 预算的轻量统计。</div>
+              </div>
+              <button
+                className="rounded-full border border-[#e5e5e5] px-3 py-1.5 text-xs text-[#3f3f3f] transition hover:bg-white"
+                type="button"
+                onClick={async () => setContextState(await api.contextPanelState())}
+              >
+                刷新
+              </button>
+            </div>
+            <div className="mt-3 grid grid-cols-2 gap-2 text-xs sm:grid-cols-4">
+              <ContextMetric label="消息" value={contextState?.message_count ?? 0} />
+              <ContextMetric label="User" value={contextState?.user_messages ?? 0} />
+              <ContextMetric label="Assistant" value={contextState?.assistant_messages ?? 0} />
+              <ContextMetric label="Tool" value={contextState?.tool_messages ?? 0} />
+            </div>
+            <div className="mt-3 h-2 overflow-hidden rounded-full bg-white">
+              <div
+                className="h-full rounded-full bg-[#10a37f] transition-all"
+                style={{
+                  width: `${Math.min(100, Math.round(((contextState?.estimated_history_tokens ?? 0) / Math.max(1, contextState?.max_input_tokens ?? 1)) * 100))}%`,
+                }}
+              />
+            </div>
+            <div className="mt-2 text-xs text-[#7a7a7a]">
+              历史估算 {contextState?.estimated_history_tokens ?? 0} / {contextState?.max_input_tokens ?? form.max_input_tokens} tokens；摘要 {contextState?.summary_chars ?? 0} 字符；输出保留 {contextState?.reserved_output_tokens ?? form.reserved_output_tokens} tokens。
+            </div>
+          </div>
 
           <label className="flex items-start gap-3 rounded-2xl border border-[#eeeeee] bg-[#fafafa] p-3">
             <input
