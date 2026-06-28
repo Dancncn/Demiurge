@@ -4,7 +4,7 @@ use std::sync::atomic::Ordering;
 use serde_json::{json, Value};
 
 use super::conversation::Message;
-use super::{context, prompt};
+use super::prompt;
 use crate::{llm, pack, store, tools};
 
 const MAX_SUBAGENT_STEPS: usize = 6;
@@ -132,7 +132,7 @@ pub async fn run(state: &crate::AppState, req: SubagentRequest) -> Result<String
             let args: Value =
                 serde_json::from_str(&tc.function.arguments).unwrap_or_else(|_| json!({}));
             let result = if READ_ONLY_TOOLS.contains(&name.as_str()) {
-                match tools::execute(state, &name, args).await {
+                match tools::execute_subagent_readonly(state, &name, args).await {
                     Ok(s) => s,
                     Err(e) => format!("错误：{e}"),
                 }
@@ -207,8 +207,14 @@ mod tests {
 
     #[test]
     fn parses_context_mode_aliases() {
-        assert_eq!(SubagentContextMode::parse(Some("recent")), SubagentContextMode::Recent);
-        assert_eq!(SubagentContextMode::parse(Some("fork")), SubagentContextMode::Recent);
+        assert_eq!(
+            SubagentContextMode::parse(Some("recent")),
+            SubagentContextMode::Recent
+        );
+        assert_eq!(
+            SubagentContextMode::parse(Some("fork")),
+            SubagentContextMode::Recent
+        );
         assert_eq!(SubagentContextMode::parse(None), SubagentContextMode::Brief);
     }
 

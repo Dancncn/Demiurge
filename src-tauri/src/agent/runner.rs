@@ -24,10 +24,25 @@ fn truncate_ui(s: &str) -> String {
     }
 }
 
+#[derive(Clone, Debug, Default)]
+pub struct TurnOptions {
+    pub system_overlay: Option<String>,
+    pub stored_user_text: Option<String>,
+}
+
 pub async fn run_turn(
     app: &AppHandle,
     state: &crate::AppState,
     user_text: String,
+) -> Result<(), String> {
+    run_turn_with_options(app, state, user_text, TurnOptions::default()).await
+}
+
+pub async fn run_turn_with_options(
+    app: &AppHandle,
+    state: &crate::AppState,
+    user_text: String,
+    options: TurnOptions,
 ) -> Result<(), String> {
     state.cancel.store(false, Ordering::Relaxed);
 
@@ -43,7 +58,11 @@ pub async fn run_turn(
     };
     let profile = llm::ProviderProfile::for_kind(settings.provider);
     let tools_schema = tools::schemas_json_for(profile.tool_schema_dialect);
-    let original_user_text = user_text.clone();
+    let stored_user_text = options
+        .stored_user_text
+        .clone()
+        .unwrap_or_else(|| user_text.clone());
+    let original_user_text = stored_user_text.clone();
 
     // 向目标会话追加一条消息（并刷新 updated_at）
     let push = |msg: Message| {
@@ -58,7 +77,7 @@ pub async fn run_turn(
     {
         let mut storeg = state.sessions.lock().unwrap();
         if let Some(s) = storeg.get_mut(&sid) {
-            s.messages.push(Message::user(user_text));
+            s.messages.push(Message::user(stored_user_text.clone()));
             if s.title == "新对话" {
                 s.title = store::derive_title(&s.messages);
             }
@@ -84,6 +103,7 @@ pub async fn run_turn(
         };
 
         let mut system = prompt::build(state, &settings, &persona_text, session_summary.as_deref());
+        apply_system_overlay(&mut system, options.system_overlay.as_deref());
         let mut current_budget = budget::history_budget(&settings, &system, &tools_schema, &msgs);
         let mut removed_messages = context::trim_collect_removed_by_tokens(
             &mut msgs,
@@ -112,6 +132,7 @@ pub async fn run_turn(
                 state.persist_sessions();
 
                 system = prompt::build(state, &settings, &persona_text, session_summary.as_deref());
+                apply_system_overlay(&mut system, options.system_overlay.as_deref());
                 current_budget = budget::history_budget(&settings, &system, &tools_schema, &msgs);
                 removed_messages = context::trim_collect_removed_by_tokens(
                     &mut msgs,
@@ -321,4 +342,15 @@ pub async fn run_turn(
     );
     state.persist_sessions();
     Ok(())
+}
+
+fn apply_system_overlay(system: &mut String, overlay: Option<&str>) {
+    let Some(overlay) = overlay else {
+        return;
+    };
+    if overlay.trim().is_empty() {
+        return;
+    }
+    system.push_str("\n\n---\n临时任务指令：\n");
+    system.push_str(overlay.trim());
 }

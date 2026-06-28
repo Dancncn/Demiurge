@@ -107,6 +107,23 @@ async fn send(app: AppHandle, state: State<'_, AppState>, text: String) -> Resul
     let trimmed = text.trim();
     let res = if trimmed == "/dream" || trimmed.starts_with("/dream ") {
         agent::dream::run_manual_dream(&app, st, text).await
+    } else if trimmed == "/ultracode" || trimmed.starts_with("/ultracode ") {
+        let task = trimmed
+            .strip_prefix("/ultracode")
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        let overlay = agent::ultracode::overlay(&task);
+        agent::run_turn_with_options(
+            &app,
+            st,
+            text,
+            agent::TurnOptions {
+                system_overlay: Some(overlay),
+                stored_user_text: None,
+            },
+        )
+        .await
     } else {
         agent::run_turn(&app, st, text).await
     };

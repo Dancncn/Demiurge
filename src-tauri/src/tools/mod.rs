@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::path::{Component, Path, PathBuf};
 
+mod agent_spawn;
 mod args;
 mod edit_file;
 mod git_status;
@@ -307,6 +308,24 @@ pub fn registry() -> Vec<ToolDefinition> {
             }),
         },
         ToolDefinition {
+            name: "agent_spawn",
+            description: "启动一个只读子 Agent 来独立探索、审查、验证或反驳一个子任务。子 Agent 继承项目指令/记忆/会话摘要，可使用只读搜索与文件读取工具，结果只返回给主 Agent。",
+            risk: ToolRisk::External,
+            concurrency: ToolConcurrency::SerialOnly,
+            permission: PermissionPolicy::ask("会额外调用 LLM，并可能把项目上下文和只读工具结果发送给模型服务。"),
+            output_policy: ToolOutputPolicy::TruncateForUi,
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "prompt": { "type": "string", "description": "给子 Agent 的明确任务指令。必须包含范围、目标和期望输出。" },
+                    "label": { "type": "string", "description": "可选：3-6 个词的短标签，用于区分多个子 Agent。" },
+                    "agent_type": { "type": "string", "description": "可选：探索类型，如 Explore、Reviewer、Verifier、Critic、Planner。" },
+                    "context_mode": { "type": "string", "description": "可选：brief 或 recent。brief 只给摘要和少量最近消息；recent 给更多最近消息。默认 brief。" }
+                },
+                "required": ["prompt"]
+            }),
+        },
+        ToolDefinition {
             name: "screen_list_windows",
             description: "列出当前桌面上可见窗口的标题、应用名和屏幕坐标。适合在截图前定位目标窗口。",
             risk: ToolRisk::Privileged,
@@ -414,15 +433,27 @@ pub fn schemas_json() -> Value {
 }
 
 pub fn schemas_json_for(dialect: crate::llm::ToolSchemaDialect) -> Value {
+    schemas_json_for_defs(dialect, &registry())
+}
+
+pub fn schemas_json_for_names(dialect: crate::llm::ToolSchemaDialect, names: &[&str]) -> Value {
+    let defs = registry()
+        .into_iter()
+        .filter(|t| names.contains(&t.name))
+        .collect::<Vec<_>>();
+    schemas_json_for_defs(dialect, &defs)
+}
+
+fn schemas_json_for_defs(dialect: crate::llm::ToolSchemaDialect, defs: &[ToolDefinition]) -> Value {
     match dialect {
-        crate::llm::ToolSchemaDialect::OpenAiCompatible => openai_schemas_json(),
-        crate::llm::ToolSchemaDialect::Anthropic => anthropic_schemas_json(),
-        crate::llm::ToolSchemaDialect::Gemini => gemini_schemas_json(),
+        crate::llm::ToolSchemaDialect::OpenAiCompatible => openai_schemas_json(defs),
+        crate::llm::ToolSchemaDialect::Anthropic => anthropic_schemas_json(defs),
+        crate::llm::ToolSchemaDialect::Gemini => gemini_schemas_json(defs),
     }
 }
 
-fn openai_schemas_json() -> Value {
-    let arr: Vec<Value> = registry()
+fn openai_schemas_json(defs: &[ToolDefinition]) -> Value {
+    let arr: Vec<Value> = defs
         .iter()
         .map(|t| {
             json!({
@@ -438,8 +469,8 @@ fn openai_schemas_json() -> Value {
     Value::Array(arr)
 }
 
-fn anthropic_schemas_json() -> Value {
-    let arr: Vec<Value> = registry()
+fn anthropic_schemas_json(defs: &[ToolDefinition]) -> Value {
+    let arr: Vec<Value> = defs
         .iter()
         .map(|t| {
             json!({
@@ -452,8 +483,8 @@ fn anthropic_schemas_json() -> Value {
     Value::Array(arr)
 }
 
-fn gemini_schemas_json() -> Value {
-    let declarations: Vec<Value> = registry()
+fn gemini_schemas_json(defs: &[ToolDefinition]) -> Value {
+    let declarations: Vec<Value> = defs
         .iter()
         .map(|t| {
             json!({
@@ -493,6 +524,7 @@ pub async fn execute(state: &crate::AppState, name: &str, args: Value) -> Result
         "apply_patch" => edit_file::patch_run(state, args),
         "undo_edit" => edit_file::undo(state, args),
         "web_search" => web_search::run(state, args).await,
+        "agent_spawn" => agent_spawn::run(state, args).await,
         "screen_list_windows" => screen::list_windows(state),
         "screen_capture_region" => screen::capture_region(state, args),
         "screen_capture_window" => screen::capture_window(state, args),
@@ -500,6 +532,22 @@ pub async fn execute(state: &crate::AppState, name: &str, args: Value) -> Result
         "screen_ocr_window" => screen::ocr_window(state, args),
         "system_info" => system_info::run(),
         other => Err(format!("未实现的工具：{other}")),
+    }
+}
+
+pub async fn execute_subagent_readonly(
+    state: &crate::AppState,
+    name: &str,
+    args: Value,
+) -> Result<String, String> {
+    match name {
+        "read_file" => read_file::run(state, args),
+        "glob" => glob::run(state, args),
+        "grep" => grep::run(state, args),
+        "git_status" => git_status::run(state, args),
+        "system_info" => system_info::run(),
+        "web_search" => web_search::run(state, args).await,
+        other => Err(format!("子 Agent 不允许使用工具：{other}")),
     }
 }
 
