@@ -14,6 +14,8 @@ mod git_status;
 mod glob;
 mod goal_tool;
 mod grep;
+mod http_get;
+mod list_dir;
 mod open_path;
 mod read_file;
 mod screen;
@@ -111,6 +113,7 @@ pub struct ToolDefinition {
 
 pub const CORE_TOOL_NAMES: &[&str] = &[
     "read_file",
+    "list_dir",
     "glob",
     "grep",
     "git_status",
@@ -122,6 +125,7 @@ pub const CORE_TOOL_NAMES: &[&str] = &[
     "apply_patch",
     "undo_edit",
     "web_fetch",
+    "http_get",
     "web_search",
     "mcp_read_resource",
     "agent_spawn",
@@ -178,6 +182,22 @@ pub fn registry() -> Vec<ToolDefinition> {
                     "path": { "type": "string", "description": "相对沙盒目录的文件路径，如 notes/todo.txt" }
                 },
                 "required": ["path"]
+            }),
+        },
+        ToolDefinition {
+            name: "list_dir",
+            description: "列出沙盒目录内某个目录的直接子项，区分 file/dir/other 并显示文件大小。适合快速查看目录结构，不能访问沙盒之外。",
+            risk: ToolRisk::ReadOnly,
+            concurrency: ToolConcurrency::ParallelSafe,
+            permission: PermissionPolicy::allow("只列出沙盒目录内的直接子项。"),
+            output_policy: ToolOutputPolicy::TruncateForUi,
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "可选：相对沙盒目录的目录路径，默认沙盒根。" },
+                    "include_hidden": { "type": "boolean", "description": "可选：是否包含以 . 开头的隐藏项，默认 false。" },
+                    "limit": { "type": "integer", "description": "可选：最多返回多少项，默认 200，最大 500。" }
+                }
             }),
         },
         ToolDefinition {
@@ -372,6 +392,23 @@ pub fn registry() -> Vec<ToolDefinition> {
                     "context_max_characters": { "type": "integer", "description": "可选：输出正文最大字符数，默认 20000，最大 80000。" },
                     "source": { "type": "string", "enum": ["direct", "exa"], "description": "可选：direct 直接抓取；exa 调用 Exa get_contents/livecrawl。默认 direct。" },
                     "livecrawl": { "type": "string", "enum": ["fallback", "always", "never"], "description": "可选：Exa livecrawl 策略；设置后自动走 Exa。fallback 仅在普通抓取不足时深抓取，always 总是深抓取，never 禁用深抓取。" }
+                },
+                "required": ["url"]
+            }),
+        },
+        ToolDefinition {
+            name: "http_get",
+            description: "对公开 http/https URL 执行轻量 GET，返回状态、content-type、最终 URL 和截断正文。需要深度网页抽取或来源引用时优先用 web_fetch。",
+            risk: ToolRisk::External,
+            concurrency: ToolConcurrency::ParallelSafe,
+            permission: PermissionPolicy::allow("只向用户指定的公开 http/https URL 发送 GET 请求并读取响应。"),
+            output_policy: ToolOutputPolicy::TruncateForUi,
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "url": { "type": "string", "description": "要请求的公开 http/https URL；省略 scheme 时默认 https。" },
+                    "context_max_characters": { "type": "integer", "description": "可选：输出正文最大字符数，默认 12000，最大 50000。" },
+                    "accept": { "type": "string", "description": "可选：Accept header，默认 application/json,text/plain,text/html,*/*;q=0.8。" }
                 },
                 "required": ["url"]
             }),
@@ -793,6 +830,7 @@ pub async fn execute(state: &crate::AppState, name: &str, args: Value) -> Result
     match name {
         "open_path" => open_path::run(args),
         "read_file" => read_file::run(state, args),
+        "list_dir" => list_dir::run(state, args),
         "glob" => glob::run(state, args),
         "grep" => grep::run(state, args),
         "git_status" => git_status::run(state, args),
@@ -804,6 +842,7 @@ pub async fn execute(state: &crate::AppState, name: &str, args: Value) -> Result
         "apply_patch" => edit_file::patch_run(state, args),
         "undo_edit" => edit_file::undo(state, args),
         "web_fetch" => web_fetch::run(state, args).await,
+        "http_get" => http_get::run(state, args).await,
         "web_search" => web_search::run(state, args).await,
         "mcp_read_resource" => read_mcp_resource_tool(state, args).await,
         "agent_spawn" => agent_spawn::run(state, args).await,
@@ -830,10 +869,12 @@ pub async fn execute_subagent_readonly(
 ) -> Result<String, String> {
     match name {
         "read_file" => read_file::run(state, args),
+        "list_dir" => list_dir::run(state, args),
         "glob" => glob::run(state, args),
         "grep" => grep::run(state, args),
         "git_status" => git_status::run(state, args),
         "system_info" => system_info::run(),
+        "http_get" => http_get::run(state, args).await,
         "web_fetch" => web_fetch::run(state, args).await,
         "web_search" => web_search::run(state, args).await,
         "context_inspect" => context_tools::inspect(state),
@@ -878,6 +919,18 @@ pub fn permission_summary(name: &str, args: &Value) -> String {
             }
         }
         "write_plan" => "将写入 Plan Mode 实施计划文件，等待用户批准。".to_string(),
+        "list_dir" => {
+            let path = str_arg("path");
+            if path.is_empty() {
+                "将列出沙盒根目录的直接子项。".to_string()
+            } else {
+                format!("将列出沙盒内目录 `{path}` 的直接子项。")
+            }
+        }
+        "http_get" => {
+            let url = str_arg("url");
+            format!("将对公开 URL 执行 HTTP GET：{url}")
+        }
         "write_file" => {
             let path = str_arg("path");
             format!("将创建或覆盖沙盒内文件：{path}")
