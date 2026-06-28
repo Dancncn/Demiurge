@@ -228,7 +228,8 @@ pub fn registry() -> Vec<ToolDefinition> {
                 "properties": {
                     "command": { "type": "string", "description": "要执行的 shell 命令，例如 npm test 或 cargo check" },
                     "cwd": { "type": "string", "description": "可选：相对沙盒目录的工作目录，默认沙盒根" },
-                    "timeout_secs": { "type": "integer", "description": "可选：超时时间，默认 15 秒，最大 60 秒" }
+                    "timeout_secs": { "type": "integer", "description": "可选：超时时间，默认 15 秒，最大 60 秒" },
+                    "inherit_env": { "type": "boolean", "description": "可选：是否继承完整进程环境变量。默认 false，只传递最小跨平台环境白名单。" }
                 },
                 "required": ["command"]
             }),
@@ -740,10 +741,22 @@ pub fn permission_summary(name: &str, args: &Value) -> String {
         "shell" => {
             let command = str_arg("command");
             let cwd = str_arg("cwd");
-            if cwd.is_empty() {
-                format!("将在沙盒根目录执行 shell 命令：{command}")
+            let env_note = if args
+                .get("inherit_env")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+            {
+                "将继承完整环境变量"
             } else {
-                format!("将在沙盒内 `{cwd}` 执行 shell 命令：{command}")
+                "将使用最小环境白名单"
+            };
+            let safety = shell::safety_summary(command);
+            if cwd.is_empty() {
+                format!("将在沙盒根目录执行 shell 命令：{command}。风险：{safety}；{env_note}。")
+            } else {
+                format!(
+                    "将在沙盒内 `{cwd}` 执行 shell 命令：{command}。风险：{safety}；{env_note}。"
+                )
             }
         }
         "write_file" => {
