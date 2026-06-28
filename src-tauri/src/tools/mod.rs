@@ -20,6 +20,7 @@ mod screen;
 mod shell;
 mod system_info;
 mod tool_search;
+mod web_fetch;
 mod web_search;
 mod worktree;
 mod write_file;
@@ -114,6 +115,7 @@ pub const CORE_TOOL_NAMES: &[&str] = &[
     "multi_edit",
     "apply_patch",
     "undo_edit",
+    "web_fetch",
     "web_search",
     "agent_spawn",
     "context_inspect",
@@ -335,6 +337,24 @@ pub fn registry() -> Vec<ToolDefinition> {
             parameters: json!({ "type": "object", "properties": {} }),
         },
         ToolDefinition {
+            name: "web_fetch",
+            description: "抓取单个公开 URL，返回统一的标题、正文、来源和 Sources 提醒；可通过 Exa livecrawl 做深抓取。",
+            risk: ToolRisk::External,
+            concurrency: ToolConcurrency::ParallelSafe,
+            permission: PermissionPolicy::allow("只抓取用户指定的公开 http/https URL 或调用配置的 Exa livecrawl 服务。"),
+            output_policy: ToolOutputPolicy::TruncateForUi,
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "url": { "type": "string", "description": "要抓取的公开 http/https URL；省略 scheme 时默认 https。" },
+                    "context_max_characters": { "type": "integer", "description": "可选：输出正文最大字符数，默认 20000，最大 80000。" },
+                    "source": { "type": "string", "enum": ["direct", "exa"], "description": "可选：direct 直接抓取；exa 调用 Exa get_contents/livecrawl。默认 direct。" },
+                    "livecrawl": { "type": "string", "enum": ["fallback", "always", "never"], "description": "可选：Exa livecrawl 策略；设置后自动走 Exa。fallback 仅在普通抓取不足时深抓取，always 总是深抓取，never 禁用深抓取。" }
+                },
+                "required": ["url"]
+            }),
+        },
+        ToolDefinition {
             name: "web_search",
             description: "联网搜索，返回带来源链接的结果摘要。适合查事实、找资料、获取近期信息；回答中使用搜索信息时必须附 markdown Sources。",
             risk: ToolRisk::External,
@@ -357,9 +377,9 @@ pub fn registry() -> Vec<ToolDefinition> {
                     },
                     "num_results": { "type": "integer", "description": "可选：最多返回多少条结果，默认 8，最大 20。" },
                     "context_max_characters": { "type": "integer", "description": "可选：搜索结果输出的最大字符数，默认 10000，最大 50000。" },
-                    "source": { "type": "string", "description": "可选：搜索后端，auto、bing、duckduckgo、tavily、brave 或 exa。默认 auto；也可用 WEB_SEARCH_ADAPTER 环境变量指定。" },
-                    "livecrawl": { "type": "string", "description": "兼容字段，当前保留给后续深度抓取实现。" },
-                    "search_type": { "type": "string", "description": "兼容字段，可传 auto、fast、deep；当前实现按结果页搜索处理。" }
+                    "source": { "type": "string", "enum": ["auto", "bing", "duckduckgo", "tavily", "brave", "exa"], "description": "可选：搜索后端，auto、bing、duckduckgo、tavily、brave 或 exa。默认 auto；也可用 WEB_SEARCH_ADAPTER 环境变量指定。" },
+                    "livecrawl": { "type": "string", "enum": ["fallback", "always", "never"], "description": "可选：Exa livecrawl 策略；需要深抓取搜索结果时使用，单 URL 深抓取优先用 web_fetch。" },
+                    "search_type": { "type": "string", "enum": ["auto", "fast", "deep"], "description": "可选：Exa 搜索类型，auto 自动、fast 快速、deep 深度。" }
                 },
                 "required": ["query"]
             }),
@@ -691,6 +711,7 @@ pub async fn execute(state: &crate::AppState, name: &str, args: Value) -> Result
         "multi_edit" => edit_file::multi_run(state, args),
         "apply_patch" => edit_file::patch_run(state, args),
         "undo_edit" => edit_file::undo(state, args),
+        "web_fetch" => web_fetch::run(state, args).await,
         "web_search" => web_search::run(state, args).await,
         "agent_spawn" => agent_spawn::run(state, args).await,
         "context_inspect" => context_tools::inspect(state),
@@ -720,6 +741,7 @@ pub async fn execute_subagent_readonly(
         "grep" => grep::run(state, args),
         "git_status" => git_status::run(state, args),
         "system_info" => system_info::run(),
+        "web_fetch" => web_fetch::run(state, args).await,
         "web_search" => web_search::run(state, args).await,
         "context_inspect" => context_tools::inspect(state),
         other => Err(format!("子 Agent 不允许使用工具：{other}")),

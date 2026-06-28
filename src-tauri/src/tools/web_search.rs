@@ -8,6 +8,8 @@ const DEFAULT_NUM_RESULTS: usize = 8;
 const MAX_NUM_RESULTS: usize = 20;
 const DEFAULT_CONTEXT_MAX_CHARS: usize = 10_000;
 const MAX_CONTEXT_MAX_CHARS: usize = 50_000;
+const LIVECRAWL_STRATEGIES: &[&str] = &["fallback", "always", "never"];
+const EXA_SEARCH_TYPES: &[&str] = &["auto", "fast", "deep"];
 
 #[derive(Deserialize)]
 struct Args {
@@ -39,14 +41,17 @@ enum Adapter {
 }
 
 impl Adapter {
-    fn parse(value: Option<&str>) -> Self {
+    fn parse(value: Option<&str>) -> Result<Self, String> {
         match value.unwrap_or("").trim().to_ascii_lowercase().as_str() {
-            "bing" => Adapter::Bing,
-            "duckduckgo" | "ddg" => Adapter::DuckDuckGo,
-            "tavily" => Adapter::Tavily,
-            "brave" => Adapter::Brave,
-            "exa" => Adapter::Exa,
-            _ => Adapter::Auto,
+            "" | "auto" => Ok(Adapter::Auto),
+            "bing" => Ok(Adapter::Bing),
+            "duckduckgo" | "ddg" => Ok(Adapter::DuckDuckGo),
+            "tavily" => Ok(Adapter::Tavily),
+            "brave" => Ok(Adapter::Brave),
+            "exa" => Ok(Adapter::Exa),
+            other => Err(format!(
+                "source 不支持 {other:?}；可选：auto, bing, duckduckgo, tavily, brave, exa"
+            )),
         }
     }
 }
@@ -84,7 +89,11 @@ pub async fn run(state: &crate::AppState, args: Value) -> Result<String, String>
             .as_deref()
             .or_else(|| non_empty(settings_provider.as_str()))
             .or(env_adapter.as_deref()),
-    );
+    )?;
+    let livecrawl =
+        parse_optional_choice(args.livecrawl.as_deref(), "livecrawl", LIVECRAWL_STRATEGIES)?;
+    let search_type =
+        parse_optional_choice(args.search_type.as_deref(), "search_type", EXA_SEARCH_TYPES)?;
     let allowed = args.allowed_domains.as_deref().unwrap_or(&[]);
     let blocked = args.blocked_domains.as_deref().unwrap_or(&[]);
 
@@ -94,15 +103,7 @@ pub async fn run(state: &crate::AppState, args: Value) -> Result<String, String>
         Adapter::Tavily => search_tavily(state, query, limit, allowed, blocked).await?,
         Adapter::Brave => search_brave(state, query).await?,
         Adapter::Exa => {
-            search_exa(
-                state,
-                query,
-                limit,
-                args.livecrawl.as_deref(),
-                args.search_type.as_deref(),
-                context_max,
-            )
-            .await?
+            search_exa(state, query, limit, livecrawl, search_type, context_max).await?
         }
         Adapter::Auto => match search_bing(state, query).await {
             Ok(results) if !results.is_empty() => results,
@@ -681,6 +682,23 @@ fn strip_label<'a>(line: &'a str, labels: &[&str]) -> Option<&'a str> {
     }
 }
 
+fn parse_optional_choice<'a>(
+    value: Option<&str>,
+    field: &str,
+    allowed: &'a [&'a str],
+) -> Result<Option<&'a str>, String> {
+    let Some(value) = value.map(str::trim).filter(|v| !v.is_empty()) else {
+        return Ok(None);
+    };
+    let value = value.to_ascii_lowercase();
+    allowed
+        .iter()
+        .copied()
+        .find(|candidate| *candidate == value)
+        .map(Some)
+        .ok_or_else(|| format!("{field} 只支持：{}", allowed.join(", ")))
+}
+
 fn non_empty(value: &str) -> Option<&str> {
     let value = value.trim();
     if value.is_empty() || value.eq_ignore_ascii_case("auto") {
@@ -974,10 +992,25 @@ mod tests {
 
     #[test]
     fn parses_configured_adapter_names() {
-        assert_eq!(Adapter::parse(Some("tavily")), Adapter::Tavily);
-        assert_eq!(Adapter::parse(Some("brave")), Adapter::Brave);
-        assert_eq!(Adapter::parse(Some("exa")), Adapter::Exa);
-        assert_eq!(Adapter::parse(Some("ddg")), Adapter::DuckDuckGo);
+        assert_eq!(Adapter::parse(Some("tavily")).unwrap(), Adapter::Tavily);
+        assert_eq!(Adapter::parse(Some("brave")).unwrap(), Adapter::Brave);
+        assert_eq!(Adapter::parse(Some("exa")).unwrap(), Adapter::Exa);
+        assert_eq!(Adapter::parse(Some("ddg")).unwrap(), Adapter::DuckDuckGo);
+        assert!(Adapter::parse(Some("unknown")).is_err());
+    }
+
+    #[test]
+    fn validates_exa_options() {
+        assert_eq!(
+            parse_optional_choice(Some(" ALWAYS "), "livecrawl", LIVECRAWL_STRATEGIES).unwrap(),
+            Some("always")
+        );
+        assert_eq!(
+            parse_optional_choice(Some("deep"), "search_type", EXA_SEARCH_TYPES).unwrap(),
+            Some("deep")
+        );
+        assert!(parse_optional_choice(Some("browser"), "livecrawl", LIVECRAWL_STRATEGIES).is_err());
+        assert!(parse_optional_choice(Some("slow"), "search_type", EXA_SEARCH_TYPES).is_err());
     }
 
     #[test]
