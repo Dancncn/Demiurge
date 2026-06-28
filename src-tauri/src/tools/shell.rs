@@ -2,7 +2,8 @@
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::BTreeMap;
-use std::process::{Command, Stdio};
+use std::path::Path;
+use std::process::{Child, Command, Stdio};
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
@@ -128,6 +129,7 @@ pub struct ShellContainmentView {
 enum ShellIsolationMode {
     Standard,
     Strict,
+    Sandboxed,
 }
 
 impl ShellIsolationMode {
@@ -135,7 +137,15 @@ impl ShellIsolationMode {
         match self {
             ShellIsolationMode::Standard => "standard",
             ShellIsolationMode::Strict => "strict",
+            ShellIsolationMode::Sandboxed => "sandboxed",
         }
+    }
+
+    fn blocks_high_risk(self) -> bool {
+        matches!(
+            self,
+            ShellIsolationMode::Strict | ShellIsolationMode::Sandboxed
+        )
     }
 }
 
@@ -151,6 +161,12 @@ struct ShellRequest {
     timeout_secs: u64,
     inherit_env: bool,
     isolation: ShellIsolationMode,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ShellCommandSpec {
+    program: String,
+    args: Vec<String>,
 }
 
 struct RiskRule {
@@ -297,15 +313,32 @@ fn risk_view(class: ShellRiskClass) -> ShellRiskView {
 
 fn containment_view() -> ShellContainmentView {
     ShellContainmentView {
-        process_group: false,
-        kill_process_tree_on_timeout: false,
-        filesystem_sandbox: "not_configured",
-        network_sandbox: "policy_only",
+        process_group: true,
+        kill_process_tree_on_timeout: true,
+        filesystem_sandbox: platform_filesystem_sandbox(),
+        network_sandbox: platform_network_sandbox(),
         notes: vec![
-            "standard/strict 当前先做 cwd、stdin、timeout、output cap 和 env allowlist",
-            "strict 会拒绝联网、依赖安装、破坏性、提权和外部执行类命令",
-            "后续阶段会把执行层切到平台 process containment / sandbox wrapper",
+            "所有 shell 子进程都会以独立进程组/进程树启动，并在超时时终止整棵进程树",
+            "strict 会拒绝联网、依赖安装、破坏性、提权和外部执行类命令，并强制最小环境",
+            "sandboxed 模式在 macOS 使用 sandbox-exec，在 Linux/WSL 使用 bubblewrap；运行时不可用会 fail closed",
         ],
+    }
+}
+
+fn platform_filesystem_sandbox() -> &'static str {
+    match std::env::consts::OS {
+        "macos" => "sandbox-exec in sandboxed mode",
+        "linux" => "bubblewrap in sandboxed mode",
+        "windows" => "unsupported on native Windows; process-tree containment only",
+        _ => "unsupported on this platform; process-tree containment only",
+    }
+}
+
+fn platform_network_sandbox() -> &'static str {
+    match std::env::consts::OS {
+        "macos" => "sandbox-exec denies network in sandboxed mode",
+        "linux" => "bubblewrap unshares network in sandboxed mode",
+        _ => "policy_only",
     }
 }
 
@@ -325,7 +358,7 @@ pub fn preview(state: &crate::AppState, args: Value) -> Result<String, String> {
     let env_policy = env_policy_label(&req);
 
     Ok(format!(
-        "将在沙盒内执行 shell 命令：\n\n$ {}\n\n工作目录：{}\n超时：{} 秒\n风险分类：{} ({})\n风险原因：{}\n隔离模式：{}\n隔离策略：cwd 限定在沙盒、stdin 关闭、超时终止、输出截断；{}\n注意：strict 模式会清空环境后仅注入白名单变量，并拒绝联网、依赖安装、破坏性、提权或外部执行类命令；这仍不是完整 OS 级系统沙箱。",
+        "将在沙盒内执行 shell 命令：\n\n$ {}\n\n工作目录：{}\n超时：{} 秒\n风险分类：{} ({})\n风险原因：{}\n隔离模式：{}\n隔离策略：cwd 限定在沙盒、stdin 关闭、独立进程组/进程树、超时终止整棵进程树、输出截断；{}\n平台 containment：文件系统={}；网络={}\n注意：strict 模式会清空环境后仅注入白名单变量，并拒绝联网、依赖安装、破坏性、提权或外部执行类命令；sandboxed 模式还会要求平台 OS sandbox wrapper 可用。",
         req.command,
         cwd.strip_prefix(&sandbox)
             .map(|p| p.to_string_lossy().replace('\\', "/"))
@@ -336,6 +369,8 @@ pub fn preview(state: &crate::AppState, args: Value) -> Result<String, String> {
         profile.reasons.join("；"),
         req.isolation.label(),
         env_policy,
+        platform_filesystem_sandbox(),
+        platform_network_sandbox(),
     ))
 }
 
@@ -353,8 +388,8 @@ pub fn run(state: &crate::AppState, args: Value) -> Result<String, String> {
     let profile = classify_command(&req.command);
     validate_isolation_policy(&req, &profile)?;
 
-    let mut cmd = shell_command(&req.command);
-    if !req.inherit_env || req.isolation == ShellIsolationMode::Strict {
+    let mut cmd = build_shell_command(&req, &sandbox, &cwd)?;
+    if !req.inherit_env || req.isolation.blocks_high_risk() {
         cmd.env_clear().envs(safe_env());
     }
     let mut child = cmd
@@ -379,10 +414,10 @@ pub fn run(state: &crate::AppState, args: Value) -> Result<String, String> {
             ));
         }
         if Instant::now() >= deadline {
-            let _ = child.kill();
+            terminate_process_tree(&mut child);
             let _ = child.wait();
             return Err(format!(
-                "shell 命令超时（>{}s），已尝试终止进程",
+                "shell 命令超时（>{}s），已尝试终止进程树",
                 req.timeout_secs
             ));
         }
@@ -399,9 +434,10 @@ fn parse_args(args: &Value) -> Result<ShellRequest, String> {
     let isolation = match super::args::optional_str(args, "isolation").unwrap_or("standard") {
         "" | "standard" => ShellIsolationMode::Standard,
         "strict" => ShellIsolationMode::Strict,
+        "sandboxed" => ShellIsolationMode::Sandboxed,
         other => return Err(format!("未知 shell isolation 模式：{other}")),
     };
-    let default_timeout = if isolation == ShellIsolationMode::Strict {
+    let default_timeout = if isolation.blocks_high_risk() {
         STRICT_TIMEOUT_SECS
     } else {
         DEFAULT_TIMEOUT_SECS
@@ -418,8 +454,11 @@ fn parse_args(args: &Value) -> Result<ShellRequest, String> {
         .get("inherit_env")
         .and_then(Value::as_bool)
         .unwrap_or(false);
-    if isolation == ShellIsolationMode::Strict && inherit_env {
-        return Err("strict isolation 不允许 inherit_env=true".to_string());
+    if isolation.blocks_high_risk() && inherit_env {
+        return Err(format!(
+            "{} isolation 不允许 inherit_env=true",
+            isolation.label()
+        ));
     }
 
     Ok(ShellRequest {
@@ -465,11 +504,26 @@ fn validate_isolation_policy(
     req: &ShellRequest,
     profile: &ShellSafetyProfile,
 ) -> Result<(), String> {
-    if req.isolation == ShellIsolationMode::Strict && profile.risk.blocked_in_strict() {
+    if req.isolation.blocks_high_risk() && profile.risk.blocked_in_strict() {
         return Err(format!(
-            "strict isolation 拒绝执行 {} 命令：{}",
+            "{} isolation 拒绝执行 {} 命令：{}",
+            req.isolation.label(),
             profile.risk.label(),
             profile.reasons.join("；")
+        ));
+    }
+    if req.isolation == ShellIsolationMode::Sandboxed {
+        ensure_sandbox_runtime_available()?;
+    }
+    Ok(())
+}
+
+fn ensure_sandbox_runtime_available() -> Result<(), String> {
+    let runtime = platform_sandbox_runtime()
+        .ok_or_else(|| "当前平台不支持 shell sandboxed isolation".to_string())?;
+    if !command_available(runtime) {
+        return Err(format!(
+            "shell sandboxed isolation 需要 `{runtime}`，但当前 PATH 中不可用"
         ));
     }
     Ok(())
@@ -478,6 +532,8 @@ fn validate_isolation_policy(
 fn env_policy_label(req: &ShellRequest) -> &'static str {
     if req.isolation == ShellIsolationMode::Strict {
         "strict 模式强制 env_clear，仅传递最小跨平台环境白名单（PATH/HOME/TEMP/SystemRoot 等）"
+    } else if req.isolation == ShellIsolationMode::Sandboxed {
+        "sandboxed 模式强制 env_clear，并要求平台 OS sandbox wrapper 可用"
     } else if req.inherit_env {
         "继承当前进程环境变量（可能暴露本机凭据环境变量）"
     } else {
@@ -500,18 +556,213 @@ fn safe_env() -> BTreeMap<String, String> {
         .collect()
 }
 
-#[cfg(windows)]
-fn shell_command(command: &str) -> Command {
-    let mut cmd = Command::new("bash");
-    cmd.args(["-lc", command]);
+fn build_shell_command(req: &ShellRequest, sandbox: &Path, cwd: &Path) -> Result<Command, String> {
+    let base = shell_command_spec(&req.command);
+    let spec = if req.isolation == ShellIsolationMode::Sandboxed {
+        sandboxed_shell_spec(&base, sandbox, cwd)?
+    } else {
+        base
+    };
+    let mut cmd = command_from_spec(spec);
+    apply_process_containment(&mut cmd);
+    Ok(cmd)
+}
+
+fn command_from_spec(spec: ShellCommandSpec) -> Command {
+    let mut cmd = Command::new(spec.program);
+    cmd.args(spec.args);
     cmd
 }
 
+#[cfg(windows)]
+fn shell_command_spec(command: &str) -> ShellCommandSpec {
+    ShellCommandSpec {
+        program: "bash".to_string(),
+        args: vec!["-lc".to_string(), command.to_string()],
+    }
+}
+
 #[cfg(not(windows))]
-fn shell_command(command: &str) -> Command {
-    let mut cmd = Command::new("sh");
-    cmd.args(["-lc", command]);
-    cmd
+fn shell_command_spec(command: &str) -> ShellCommandSpec {
+    ShellCommandSpec {
+        program: "sh".to_string(),
+        args: vec!["-lc".to_string(), command.to_string()],
+    }
+}
+
+fn sandboxed_shell_spec(
+    base: &ShellCommandSpec,
+    sandbox: &Path,
+    cwd: &Path,
+) -> Result<ShellCommandSpec, String> {
+    ensure_sandbox_runtime_available()?;
+    let runtime = platform_sandbox_runtime()
+        .ok_or_else(|| "当前平台不支持 shell sandboxed isolation".to_string())?;
+    Ok(sandboxed_shell_spec_for_runtime(
+        runtime, base, sandbox, cwd,
+    ))
+}
+
+fn sandboxed_shell_spec_for_runtime(
+    runtime: &str,
+    base: &ShellCommandSpec,
+    sandbox: &Path,
+    cwd: &Path,
+) -> ShellCommandSpec {
+    match runtime {
+        "bwrap" => bubblewrap_spec(base, sandbox, cwd),
+        "sandbox-exec" => sandbox_exec_spec(base, sandbox),
+        _ => base.clone(),
+    }
+}
+
+fn platform_sandbox_runtime() -> Option<&'static str> {
+    match std::env::consts::OS {
+        "linux" => Some("bwrap"),
+        "macos" => Some("sandbox-exec"),
+        _ => None,
+    }
+}
+
+fn bubblewrap_spec(base: &ShellCommandSpec, sandbox: &Path, cwd: &Path) -> ShellCommandSpec {
+    let sandbox = sandbox.to_string_lossy().to_string();
+    let cwd = cwd.to_string_lossy().to_string();
+    let temp = std::env::temp_dir().to_string_lossy().to_string();
+    let mut args = vec![
+        "--die-with-parent".to_string(),
+        "--unshare-net".to_string(),
+        "--ro-bind".to_string(),
+        "/".to_string(),
+        "/".to_string(),
+        "--bind".to_string(),
+        sandbox.clone(),
+        sandbox,
+        "--bind".to_string(),
+        temp.clone(),
+        temp,
+        "--dev".to_string(),
+        "/dev".to_string(),
+        "--proc".to_string(),
+        "/proc".to_string(),
+        "--chdir".to_string(),
+        cwd,
+        base.program.clone(),
+    ];
+    args.extend(base.args.clone());
+    ShellCommandSpec {
+        program: "bwrap".to_string(),
+        args,
+    }
+}
+
+fn sandbox_exec_spec(base: &ShellCommandSpec, sandbox: &Path) -> ShellCommandSpec {
+    let temp = std::env::temp_dir();
+    let profile = format!(
+        "(version 1)\n\
+         (deny default)\n\
+         (allow process*)\n\
+         (allow file-read*)\n\
+         (allow file-write* (subpath \"{}\") (subpath \"{}\"))\n\
+         (deny network*)",
+        sandbox_profile_path(sandbox),
+        sandbox_profile_path(&temp)
+    );
+    let mut args = vec!["-p".to_string(), profile, base.program.clone()];
+    args.extend(base.args.clone());
+    ShellCommandSpec {
+        program: "sandbox-exec".to_string(),
+        args,
+    }
+}
+
+fn sandbox_profile_path(path: &Path) -> String {
+    path.to_string_lossy()
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+}
+
+fn command_available(program: &str) -> bool {
+    if program.contains(std::path::MAIN_SEPARATOR) {
+        return Path::new(program).exists();
+    }
+    let Some(paths) = std::env::var_os("PATH") else {
+        return false;
+    };
+    std::env::split_paths(&paths).any(|dir| {
+        let candidate = dir.join(program);
+        if candidate.exists() {
+            return true;
+        }
+        #[cfg(windows)]
+        {
+            if dir.join(format!("{program}.exe")).exists() {
+                return true;
+            }
+        }
+        false
+    })
+}
+
+fn apply_process_containment(cmd: &mut Command) {
+    apply_platform_process_containment(cmd);
+}
+
+#[cfg(windows)]
+fn apply_platform_process_containment(cmd: &mut Command) {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+    cmd.creation_flags(CREATE_NEW_PROCESS_GROUP);
+}
+
+#[cfg(unix)]
+fn apply_platform_process_containment(cmd: &mut Command) {
+    use std::os::unix::process::CommandExt;
+    cmd.process_group(0);
+}
+
+#[cfg(not(any(unix, windows)))]
+fn apply_platform_process_containment(_cmd: &mut Command) {}
+
+fn terminate_process_tree(child: &mut Child) {
+    terminate_platform_process_tree(child);
+}
+
+#[cfg(windows)]
+fn terminate_platform_process_tree(child: &mut Child) {
+    let pid = child.id().to_string();
+    let _ = Command::new("taskkill")
+        .args(["/PID", &pid, "/T", "/F"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+    let _ = child.kill();
+}
+
+#[cfg(unix)]
+fn terminate_platform_process_tree(child: &mut Child) {
+    let pgid = format!("-{}", child.id());
+    let _ = Command::new("kill")
+        .args(["-TERM", &pgid])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+    sleep(Duration::from_millis(200));
+    if matches!(child.try_wait(), Ok(None)) {
+        let _ = Command::new("kill")
+            .args(["-KILL", &pgid])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
+    let _ = child.kill();
+}
+
+#[cfg(not(any(unix, windows)))]
+fn terminate_platform_process_tree(child: &mut Child) {
+    let _ = child.kill();
 }
 
 fn format_output(command: &str, code: Option<i32>, stdout: &[u8], stderr: &[u8]) -> String {
@@ -598,10 +849,32 @@ mod tests {
     }
 
     #[test]
+    fn sandboxed_isolation_reuses_strict_policy() {
+        assert!(parse_args(&json!({
+            "command": "git status",
+            "isolation": "sandboxed",
+            "inherit_env": true
+        }))
+        .is_err());
+
+        let req =
+            parse_args(&json!({ "command": "curl https://example.com", "isolation": "sandboxed" }))
+                .unwrap();
+        let profile = classify_command(&req.command);
+        let err = validate_isolation_policy(&req, &profile).unwrap_err();
+        assert!(err.contains("sandboxed isolation 拒绝执行"));
+    }
+
+    #[test]
     fn strict_isolation_uses_shorter_default_timeout() {
         let req = parse_args(&json!({ "command": "git status", "isolation": "strict" })).unwrap();
         assert_eq!(req.timeout_secs, STRICT_TIMEOUT_SECS);
         assert_eq!(req.isolation, ShellIsolationMode::Strict);
+
+        let sandboxed =
+            parse_args(&json!({ "command": "git status", "isolation": "sandboxed" })).unwrap();
+        assert_eq!(sandboxed.timeout_secs, STRICT_TIMEOUT_SECS);
+        assert_eq!(sandboxed.isolation, ShellIsolationMode::Sandboxed);
     }
 
     #[test]
@@ -626,6 +899,48 @@ mod tests {
                 && rule.blocked_in_strict
                 && rule.patterns.contains(&"npm install")
         }));
-        assert_eq!(state.containment.filesystem_sandbox, "not_configured");
+        assert!(state.containment.process_group);
+        assert!(state.containment.kill_process_tree_on_timeout);
+        assert_ne!(state.containment.filesystem_sandbox, "not_configured");
+    }
+
+    #[test]
+    fn bubblewrap_spec_unshares_network_and_binds_sandbox() {
+        let base = ShellCommandSpec {
+            program: "sh".to_string(),
+            args: vec!["-lc".to_string(), "npm test".to_string()],
+        };
+        let spec = sandboxed_shell_spec_for_runtime(
+            "bwrap",
+            &base,
+            Path::new("/tmp/demiurge-sandbox"),
+            Path::new("/tmp/demiurge-sandbox/app"),
+        );
+
+        assert_eq!(spec.program, "bwrap");
+        assert!(spec.args.contains(&"--unshare-net".to_string()));
+        assert!(spec.args.contains(&"--die-with-parent".to_string()));
+        assert!(spec.args.contains(&"/tmp/demiurge-sandbox".to_string()));
+        assert_eq!(spec.args.last().map(String::as_str), Some("npm test"));
+    }
+
+    #[test]
+    fn sandbox_exec_spec_denies_network_and_limits_writes() {
+        let base = ShellCommandSpec {
+            program: "sh".to_string(),
+            args: vec!["-lc".to_string(), "cargo test".to_string()],
+        };
+        let spec = sandboxed_shell_spec_for_runtime(
+            "sandbox-exec",
+            &base,
+            Path::new("/tmp/demiurge-sandbox"),
+            Path::new("/tmp/demiurge-sandbox"),
+        );
+
+        assert_eq!(spec.program, "sandbox-exec");
+        let profile = &spec.args[1];
+        assert!(profile.contains("(deny network*)"));
+        assert!(profile.contains("(allow file-write*"));
+        assert!(profile.contains("/tmp/demiurge-sandbox"));
     }
 }

@@ -237,7 +237,7 @@ pub fn registry() -> Vec<ToolDefinition> {
                     "cwd": { "type": "string", "description": "可选：相对沙盒目录的工作目录，默认沙盒根" },
                     "timeout_secs": { "type": "integer", "description": "可选：超时时间，默认 15 秒，strict 模式默认 8 秒，最大 60 秒" },
                     "inherit_env": { "type": "boolean", "description": "可选：是否继承完整进程环境变量。默认 false，只传递最小跨平台环境白名单；strict 模式禁止 true。" },
-                    "isolation": { "type": "string", "enum": ["standard", "strict"], "description": "可选：进程隔离策略。standard 为默认轻量隔离；strict 强制清空环境、缩短默认超时，并拒绝联网/依赖安装/破坏性/提权/外部执行类命令。" }
+                    "isolation": { "type": "string", "enum": ["standard", "strict", "sandboxed"], "description": "可选：进程隔离策略。standard 为默认轻量隔离；strict 强制清空环境、缩短默认超时，并拒绝联网/依赖安装/破坏性/提权/外部执行类命令；sandboxed 在 strict 规则基础上要求平台 OS sandbox wrapper（macOS sandbox-exec、Linux/WSL bubblewrap）可用。" }
                 },
                 "required": ["command"]
             }),
