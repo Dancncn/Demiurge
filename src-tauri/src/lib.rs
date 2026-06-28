@@ -1,5 +1,6 @@
 //! Demiurge 引擎 —— Tauri v2 入口：全局状态、命令、构建器。
 mod agent;
+mod credentials;
 mod llm;
 mod pack;
 mod permission;
@@ -141,6 +142,7 @@ fn get_settings(state: State<'_, AppState>) -> Settings {
 
 #[tauri::command]
 fn save_settings(state: State<'_, AppState>, settings: Settings) -> Result<(), String> {
+    credentials::save_api_key(&settings.api_key)?;
     *state.settings.lock().unwrap() = settings.clone();
     let dir = state.data_dir.lock().unwrap().clone();
     store::save_settings(&dir, &settings)
@@ -243,7 +245,10 @@ pub fn run() {
             std::fs::create_dir_all(&packs)?;
             pack::ensure_default(&packs)?;
 
-            let settings = store::load_settings(&dir);
+            let mut settings = store::load_settings(&dir);
+            if let Err(e) = credentials::hydrate_or_migrate_settings(&dir, &mut settings) {
+                eprintln!("Demiurge credential warning: {e}");
+            }
             let sessions = store::load_sessions(&dir);
 
             let state = app.state::<AppState>();

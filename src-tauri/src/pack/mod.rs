@@ -50,7 +50,9 @@ pub fn ensure_default(packs_dir: &Path) -> Result<(), String> {
 /// 列出 packs 目录下所有含 manifest.json 的子目录。
 pub fn list_packs(packs_dir: &Path) -> Vec<PackManifest> {
     let mut out = Vec::new();
-    let Ok(entries) = fs::read_dir(packs_dir) else { return out };
+    let Ok(entries) = fs::read_dir(packs_dir) else {
+        return out;
+    };
     for e in entries.flatten() {
         let p = e.path();
         if !p.is_dir() {
@@ -78,7 +80,10 @@ pub fn load_pack(packs_dir: &Path, id: &str) -> Result<Pack, String> {
     let manifest: PackManifest =
         serde_json::from_str(&txt).map_err(|e| format!("解析角色包 {id} 清单失败：{e}"))?;
     let persona_path = dir.join(&manifest.persona);
-    let persona_text = fs::read_to_string(&persona_path)
-        .map_err(|e| format!("读取 persona 失败：{e}"))?;
-    Ok(Pack { manifest, persona_text })
+    let persona_text =
+        fs::read_to_string(&persona_path).map_err(|e| format!("读取 persona 失败：{e}"))?;
+    Ok(Pack {
+        manifest,
+        persona_text,
+    })
 }

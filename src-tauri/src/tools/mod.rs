@@ -12,6 +12,7 @@ mod glob;
 mod grep;
 mod open_path;
 mod read_file;
+mod screen;
 mod shell;
 mod system_info;
 mod web_search;
@@ -306,6 +307,54 @@ pub fn registry() -> Vec<ToolDefinition> {
             }),
         },
         ToolDefinition {
+            name: "screen_list_windows",
+            description: "列出当前桌面上可见窗口的标题、应用名和屏幕坐标。适合在截图前定位目标窗口。",
+            risk: ToolRisk::Privileged,
+            concurrency: ToolConcurrency::SerialOnly,
+            permission: PermissionPolicy::ask("会读取当前桌面窗口标题和位置，可能包含隐私信息。"),
+            output_policy: ToolOutputPolicy::TruncateForUi,
+            parameters: json!({ "type": "object", "properties": {} }),
+        },
+        ToolDefinition {
+            name: "screen_capture_region",
+            description: "截取主显示器上一块屏幕区域，保存为沙盒 .demiurge/screenshots/ 下的 PNG，并返回文件路径和尺寸。坐标为物理像素。",
+            risk: ToolRisk::Privileged,
+            concurrency: ToolConcurrency::SerialOnly,
+            permission: PermissionPolicy::ask("会读取屏幕像素并保存截图，可能包含密钥、聊天或其它隐私信息。"),
+            output_policy: ToolOutputPolicy::Inline,
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "x": { "type": "integer", "description": "截图区域左上角 x，物理像素，相对主显示器" },
+                    "y": { "type": "integer", "description": "截图区域左上角 y，物理像素，相对主显示器" },
+                    "width": { "type": "integer", "description": "截图宽度，物理像素" },
+                    "height": { "type": "integer", "description": "截图高度，物理像素" },
+                    "label": { "type": "string", "description": "可选：用于截图文件名的简短标签" }
+                },
+                "required": ["x", "y", "width", "height"]
+            }),
+        },
+        ToolDefinition {
+            name: "screen_capture_window",
+            description: "按窗口标题或应用名匹配一个可见窗口，截取整窗或裁剪区域，保存为沙盒 .demiurge/screenshots/ 下的 PNG。裁剪参数为 0~1 比例。",
+            risk: ToolRisk::Privileged,
+            concurrency: ToolConcurrency::SerialOnly,
+            permission: PermissionPolicy::ask("会读取目标窗口的屏幕像素并保存截图，可能包含密钥、聊天或其它隐私信息。"),
+            output_policy: ToolOutputPolicy::Inline,
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "title": { "type": "string", "description": "可选：要匹配的完整窗口标题" },
+                    "app": { "type": "string", "description": "可选：要匹配的应用名。title/app 至少提供一个" },
+                    "crop_left": { "type": "number", "description": "可选：左裁剪比例，默认 0" },
+                    "crop_top": { "type": "number", "description": "可选：上裁剪比例，默认 0" },
+                    "crop_right": { "type": "number", "description": "可选：右边界比例，默认 1" },
+                    "crop_bottom": { "type": "number", "description": "可选：下边界比例，默认 1" },
+                    "label": { "type": "string", "description": "可选：用于截图文件名的简短标签" }
+                }
+            }),
+        },
+        ToolDefinition {
             name: "system_info",
             description: "读取当前时间（UTC）、操作系统、架构、工作目录等基础系统状态。",
             risk: ToolRisk::ReadOnly,
@@ -407,6 +456,9 @@ pub async fn execute(state: &crate::AppState, name: &str, args: Value) -> Result
         "apply_patch" => edit_file::patch_run(state, args),
         "undo_edit" => edit_file::undo(state, args),
         "web_search" => web_search::run(state, args).await,
+        "screen_list_windows" => screen::list_windows(),
+        "screen_capture_region" => screen::capture_region(state, args),
+        "screen_capture_window" => screen::capture_window(state, args),
         "system_info" => system_info::run(),
         other => Err(format!("未实现的工具：{other}")),
     }
@@ -432,6 +484,14 @@ pub fn confirmation_preview(state: &crate::AppState, name: &str, args: Value) ->
         ),
         "shell" => Some(
             shell::preview(state, args).unwrap_or_else(|e| format!("无法生成 shell preview：{e}")),
+        ),
+        "screen_list_windows" => Some("将读取当前桌面可见窗口标题、应用名与屏幕位置。".to_string()),
+        "screen_capture_region" => Some(
+            screen::preview_region(args).unwrap_or_else(|e| format!("无法生成截图 preview：{e}")),
+        ),
+        "screen_capture_window" => Some(
+            screen::preview_window(args)
+                .unwrap_or_else(|e| format!("无法生成窗口截图 preview：{e}")),
         ),
         _ => None,
     }

@@ -26,6 +26,9 @@ futures-util = "0.3"
 walkdir = "2"
 globset = "0.4"
 regex = "1"
+keyring = "4.1.2"
+xcap = "0.9"
+image = { version = "0.25", default-features = false, features = ["png"] }
 
 [profile.release]
 opt-level = "s"

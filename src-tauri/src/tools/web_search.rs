@@ -25,7 +25,10 @@ pub async fn run(state: &crate::AppState, args: Value) -> Result<String, String>
     if !resp.status().is_success() {
         return Err(format!("搜索返回 HTTP {}", resp.status()));
     }
-    let v: Value = resp.json().await.map_err(|e| format!("解析搜索结果失败：{e}"))?;
+    let v: Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("解析搜索结果失败：{e}"))?;
 
     let mut out = String::new();
 

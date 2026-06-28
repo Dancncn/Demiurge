@@ -56,8 +56,8 @@ pub enum ProviderKind {
     Gemini,
 }
 
-/// 运行时设置。MVP 直接以 JSON 落盘（含 api_key 明文）。
-/// 注：更安全的做法是把 api_key 存进系统凭据管理器（如 Windows 凭据管理器 / keyring），后续可平滑替换。
+/// 运行时设置。`api_key` 只保留在内存和前端表单里，落盘时会被清空；
+/// 实际密钥由 `credentials` 模块写入系统凭据管理器。
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Settings {
     #[serde(default = "default_provider")]
@@ -189,7 +189,9 @@ pub fn load_settings(dir: &Path) -> Settings {
 
 pub fn save_settings(dir: &Path, s: &Settings) -> Result<(), String> {
     let p = dir.join("settings.json");
-    let json = serde_json::to_string_pretty(s).map_err(|e| e.to_string())?;
+    let mut safe = s.clone();
+    safe.api_key.clear();
+    let json = serde_json::to_string_pretty(&safe).map_err(|e| e.to_string())?;
     fs::write(&p, json).map_err(|e| e.to_string())
 }
 
@@ -252,6 +254,25 @@ mod tests {
         assert!(!settings.voice_enabled);
         assert_eq!(settings.voice_stt_backend, "none");
         assert_eq!(settings.voice_tts_backend, "none");
+    }
+
+    #[test]
+    fn save_settings_does_not_persist_api_key() {
+        let dir = std::env::temp_dir().join(format!("demiurge_settings_test_{}", new_session_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let settings = Settings {
+            api_key: "sk-secret".to_string(),
+            ..Settings::default()
+        };
+        save_settings(&dir, &settings).unwrap();
+
+        let raw = std::fs::read_to_string(dir.join("settings.json")).unwrap();
+        assert!(!raw.contains("sk-secret"));
+        let saved = serde_json::from_str::<Settings>(&raw).unwrap();
+        assert!(saved.api_key.is_empty());
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
 
