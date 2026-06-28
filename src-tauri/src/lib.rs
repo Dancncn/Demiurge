@@ -1,5 +1,6 @@
 //! Demiurge 引擎 —— Tauri v2 入口：全局状态、命令、构建器。
 mod agent;
+mod connection_tests;
 mod credentials;
 mod llm;
 pub mod mcp;
@@ -409,6 +410,14 @@ fn save_settings(state: State<'_, AppState>, settings: Settings) -> Result<(), S
     *state.settings.lock().unwrap() = settings.clone();
     let dir = state.data_dir.lock().unwrap().clone();
     store::save_settings(&dir, &settings)
+}
+
+#[tauri::command]
+async fn provider_check_connection(
+    state: State<'_, AppState>,
+    settings: Settings,
+) -> Result<connection_tests::ConnectionTestResult, String> {
+    connection_tests::test_provider(&state.http, settings).await
 }
 
 #[tauri::command]
@@ -1201,6 +1210,7 @@ pub fn run() {
             respond_confirm,
             get_settings,
             save_settings,
+            provider_check_connection,
             set_permission_mode,
             plan_state,
             approve_plan,
