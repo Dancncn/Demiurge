@@ -321,6 +321,38 @@ fn agent_panel_state(state: State<'_, AppState>) -> agent::custom::AgentPanelSta
     agent::custom::panel_state(state.inner())
 }
 
+#[tauri::command]
+fn memory_panel_state(state: State<'_, AppState>) -> agent::memory::MemoryPanelState {
+    let sandbox = state.sandbox_dir.lock().unwrap().clone();
+    agent::memory::panel_state(&sandbox)
+}
+
+#[tauri::command]
+fn memory_update_entry(
+    state: State<'_, AppState>,
+    id: String,
+    kind: String,
+    text: String,
+) -> Result<agent::memory::MemoryPanelState, String> {
+    let sandbox = state.sandbox_dir.lock().unwrap().clone();
+    agent::memory::update_entry(&sandbox, &id, &kind, &text)
+}
+
+#[tauri::command]
+fn memory_delete_entry(
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<agent::memory::MemoryPanelState, String> {
+    let sandbox = state.sandbox_dir.lock().unwrap().clone();
+    agent::memory::delete_entry(&sandbox, &id)
+}
+
+#[tauri::command]
+fn memory_dedupe_apply(state: State<'_, AppState>) -> Result<agent::memory::MemoryPanelState, String> {
+    let sandbox = state.sandbox_dir.lock().unwrap().clone();
+    agent::memory::apply_dedupe(&sandbox)
+}
+
 // ---- 会话管理 ----
 
 #[tauri::command]
@@ -527,6 +559,10 @@ pub fn run() {
             permission_reset_rule,
             list_packs,
             agent_panel_state,
+            memory_panel_state,
+            memory_update_entry,
+            memory_delete_entry,
+            memory_dedupe_apply,
             list_sessions,
             get_history,
             context_panel_state,

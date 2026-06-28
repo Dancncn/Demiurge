@@ -3,6 +3,7 @@ import * as api from "../lib/api";
 import type {
   AgentPanelState,
   ContextPanelState,
+  MemoryPanelState,
   OcrDownloadProgress,
   OcrModelSource,
   OcrModelStatus,
@@ -120,6 +121,9 @@ export default function SettingsDialog({ open, settings, packs, agentPanel, onCl
   const [permissionState, setPermissionState] = useState<PermissionPanelState | null>(null);
   const [permissionBusy, setPermissionBusy] = useState(false);
   const [contextState, setContextState] = useState<ContextPanelState | null>(null);
+  const [memoryState, setMemoryState] = useState<MemoryPanelState | null>(null);
+  const [memoryBusy, setMemoryBusy] = useState(false);
+  const [memoryError, setMemoryError] = useState("");
 
   useEffect(() => {
     if (open) setForm(settings);
@@ -151,6 +155,22 @@ export default function SettingsDialog({ open, settings, packs, agentPanel, onCl
       })
       .catch((err) => {
         if (!cancelled) console.error("读取上下文状态失败", err);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    api
+      .memoryPanelState()
+      .then((state) => {
+        if (!cancelled) setMemoryState(state);
+      })
+      .catch((err) => {
+        if (!cancelled) setMemoryError(String(err));
       });
     return () => {
       cancelled = true;
@@ -195,6 +215,17 @@ export default function SettingsDialog({ open, settings, packs, agentPanel, onCl
   const selectedProvider = providerOptions.find((p) => p.value === form.provider) ?? providerOptions[0];
   const selectedWebSearchProvider =
     webSearchProviders.find((p) => p.value === form.web_search_provider) ?? webSearchProviders[0];
+  const runMemoryAction = async (action: () => Promise<MemoryPanelState>) => {
+    setMemoryBusy(true);
+    setMemoryError("");
+    try {
+      setMemoryState(await action());
+    } catch (err) {
+      setMemoryError(String(err));
+    } finally {
+      setMemoryBusy(false);
+    }
+  };
   const resetPermissionRule = async (scope: PermissionScope, tool: string) => {
     setPermissionBusy(true);
     try {
@@ -398,6 +429,81 @@ export default function SettingsDialog({ open, settings, packs, agentPanel, onCl
               <span className="mt-1 block text-xs text-[#9a9a9a]">保守提取用户偏好和项目长期约束，写入沙盒 .demiurge/memory.md。</span>
             </span>
           </label>
+
+          <div className="rounded-2xl border border-[#eeeeee] bg-[#fafafa] p-3">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <div className="text-sm font-medium text-[#3f3f3f]">项目记忆审计</div>
+                <div className="mt-1 break-all text-xs text-[#9a9a9a]">{memoryState?.path || ".demiurge/memory.md"}</div>
+              </div>
+              <div className="flex gap-2">
+                <button
+                  className="rounded-full border border-[#e5e5e5] px-3 py-1.5 text-xs text-[#3f3f3f] transition hover:bg-white disabled:opacity-50"
+                  type="button"
+                  disabled={memoryBusy}
+                  onClick={() => runMemoryAction(api.memoryPanelState)}
+                >
+                  刷新
+                </button>
+                <button
+                  className="rounded-full border border-[#e5e5e5] px-3 py-1.5 text-xs text-[#3f3f3f] transition hover:bg-white disabled:opacity-50"
+                  type="button"
+                  disabled={memoryBusy || !memoryState?.duplicates.length}
+                  onClick={() => runMemoryAction(api.memoryDedupeApply)}
+                >
+                  去重 {memoryState?.duplicates.length || 0}
+                </button>
+              </div>
+            </div>
+            {memoryError ? <div className="mt-2 rounded-xl bg-[#fff1f1] p-2 text-xs text-[#9f1d1d]">{memoryError}</div> : null}
+            <div className="mt-3 max-h-72 space-y-2 overflow-auto">
+              {memoryState?.entries.length ? (
+                memoryState.entries.map((entry) => {
+                  const duplicate = memoryState.duplicates.some((group) => group.duplicate_ids.includes(entry.id));
+                  return (
+                    <div key={entry.id} className="rounded-xl border border-[#ececec] bg-white p-3 text-xs text-[#5f5f5f]">
+                      <div className="mb-2 flex items-center gap-2">
+                        <span className="rounded bg-[#f3eef6] px-1.5 py-0.5 text-[#6c6073]">{entry.kind}</span>
+                        <span className="text-[#9a9a9a]">line {entry.line}</span>
+                        {duplicate ? <span className="rounded bg-[#fff4d6] px-1.5 py-0.5 text-[#8a5a00]">duplicate</span> : null}
+                      </div>
+                      <textarea
+                        className="min-h-16 w-full rounded-lg border border-[#ececec] px-2 py-1.5 text-[#333] outline-none focus:border-[#10a37f]"
+                        value={entry.text}
+                        onChange={(e) => {
+                          const text = e.target.value;
+                          setMemoryState((cur) => cur ? {
+                            ...cur,
+                            entries: cur.entries.map((item) => item.id === entry.id ? { ...item, text } : item),
+                          } : cur);
+                        }}
+                      />
+                      <div className="mt-2 flex justify-end gap-2">
+                        <button
+                          className="rounded-full border border-[#e5e5e5] px-3 py-1 text-[#6f6f6f] transition hover:bg-[#f7f7f7] disabled:opacity-50"
+                          type="button"
+                          disabled={memoryBusy}
+                          onClick={() => runMemoryAction(() => api.memoryDeleteEntry(entry.id))}
+                        >
+                          删除
+                        </button>
+                        <button
+                          className="rounded-full bg-[#111] px-3 py-1 text-white transition hover:bg-[#333] disabled:opacity-50"
+                          type="button"
+                          disabled={memoryBusy}
+                          onClick={() => runMemoryAction(() => api.memoryUpdateEntry(entry.id, entry.kind, entry.text))}
+                        >
+                          保存
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })
+              ) : (
+                <div className="rounded-xl border border-dashed border-[#e0e0e0] bg-white p-3 text-xs text-[#8a8a8a]">暂无项目记忆。</div>
+              )}
+            </div>
+          </div>
 
           <div className="rounded-2xl border border-[#eeeeee] bg-[#fafafa] p-3">
             <div className="text-sm font-medium text-[#3f3f3f]">Web Search</div>

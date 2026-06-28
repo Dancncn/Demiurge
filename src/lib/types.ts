@@ -120,6 +120,24 @@ export interface WorkflowPanelState {
   runs: WorkflowRunProgress[];
 }
 
+export interface MemoryEntry {
+  id: string;
+  kind: string;
+  text: string;
+  line: number;
+}
+
+export interface MemoryDuplicateGroup {
+  canonical_id: string;
+  duplicate_ids: string[];
+}
+
+export interface MemoryPanelState {
+  path: string;
+  entries: MemoryEntry[];
+  duplicates: MemoryDuplicateGroup[];
+}
+
 export interface ContextPanelState {
   message_count: number;
   user_messages: number;

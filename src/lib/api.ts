@@ -6,6 +6,7 @@ import type {
   ContextPanelState,
   GoalProgressEvent,
   Message,
+  MemoryPanelState,
   OcrDownloadProgress,
   OcrModelSource,
   OcrModelStatus,
@@ -36,6 +37,11 @@ export const listPacks = () => invoke<PackManifest[]>("list_packs");
 export const agentPanelState = () => invoke<AgentPanelState>("agent_panel_state");
 export const getHistory = () => invoke<Message[]>("get_history");
 export const contextPanelState = () => invoke<ContextPanelState>("context_panel_state");
+export const memoryPanelState = () => invoke<MemoryPanelState>("memory_panel_state");
+export const memoryUpdateEntry = (id: string, kind: string, text: string) =>
+  invoke<MemoryPanelState>("memory_update_entry", { id, kind, text });
+export const memoryDeleteEntry = (id: string) => invoke<MemoryPanelState>("memory_delete_entry", { id });
+export const memoryDedupeApply = () => invoke<MemoryPanelState>("memory_dedupe_apply");
 export const openSandbox = () => invoke<void>("open_sandbox");
 
 // 会话管理
