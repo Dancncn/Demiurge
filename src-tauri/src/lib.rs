@@ -117,9 +117,14 @@ struct ContextPanelState {
     assistant_messages: usize,
     tool_messages: usize,
     summary_chars: usize,
+    system_prompt_chars: usize,
+    system_prompt_tokens: usize,
     estimated_history_tokens: usize,
+    tools_tokens: usize,
+    history_budget_tokens: usize,
     max_input_tokens: usize,
     reserved_output_tokens: usize,
+    prompt_sections: Vec<agent::prompt::PromptSectionReport>,
 }
 
 #[derive(Deserialize)]
@@ -489,6 +494,14 @@ fn permission_reset_rule(
 }
 
 #[tauri::command]
+fn permission_upsert_rule(
+    state: State<'_, AppState>,
+    input: permission::PermissionRuleInput,
+) -> Result<permission::PermissionPanelState, String> {
+    permission::upsert_rule(state.inner(), input)
+}
+
+#[tauri::command]
 async fn mcp_panel_state(state: State<'_, AppState>) -> Result<mcp::McpPanelState, String> {
     mcp::ensure_initialized(state.inner()).await;
     Ok(mcp::panel_state(state.inner()))
@@ -536,6 +549,132 @@ fn list_packs(state: State<'_, AppState>) -> Vec<pack::PackManifest> {
 #[tauri::command]
 fn agent_panel_state(state: State<'_, AppState>) -> agent::custom::AgentPanelState {
     agent::custom::panel_state(state.inner())
+}
+
+#[tauri::command]
+fn agent_template_json() -> String {
+    agent::custom::template_json()
+}
+
+#[tauri::command]
+fn agent_validate_json(raw_json: String) -> agent::custom::AgentValidationResult {
+    agent::custom::validate_raw(&raw_json)
+}
+
+#[tauri::command]
+fn agent_read_file(
+    state: State<'_, AppState>,
+    name: String,
+) -> Result<agent::custom::AgentEditorFile, String> {
+    agent::custom::read_editor_file(state.inner(), &name)
+}
+
+#[tauri::command]
+fn agent_save_file(
+    state: State<'_, AppState>,
+    file_name: String,
+    raw_json: String,
+) -> Result<agent::custom::AgentPanelState, String> {
+    let panel = agent::custom::save_editor_file(state.inner(), &file_name, &raw_json)?;
+    Ok(panel)
+}
+
+#[tauri::command]
+fn agent_delete_file(
+    state: State<'_, AppState>,
+    name: String,
+) -> Result<agent::custom::AgentPanelState, String> {
+    agent::custom::delete_editor_file(state.inner(), &name)
+}
+
+#[tauri::command]
+fn goal_panel_state(state: State<'_, AppState>) -> Option<agent::goal::GoalPanelState> {
+    agent::goal::panel_state(state.inner())
+}
+
+#[tauri::command]
+fn goal_pause(state: State<'_, AppState>) -> Result<Option<agent::goal::GoalPanelState>, String> {
+    let paused = agent::goal::pause_goal(state.inner()).is_some();
+    if !paused {
+        return Err("Current goal cannot be paused.".to_string());
+    }
+    state.persist_sessions();
+    Ok(agent::goal::panel_state(state.inner()))
+}
+
+#[tauri::command]
+async fn goal_resume(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Option<agent::goal::GoalPanelState>, String> {
+    let st = state.inner();
+    if st.busy.swap(true, Ordering::SeqCst) {
+        return Err("Demiurge is already processing a turn.".to_string());
+    }
+    let result = async {
+        let Some(goal) = agent::goal::resume_goal(st) else {
+            return Err("No paused goal to resume.".to_string());
+        };
+        st.persist_sessions();
+        run_goal_control_turn(&app, st, "[Goal resumed]", goal).await
+    }
+    .await;
+    st.busy.store(false, Ordering::SeqCst);
+    result
+}
+
+#[tauri::command]
+async fn goal_continue(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Option<agent::goal::GoalPanelState>, String> {
+    let st = state.inner();
+    if st.busy.swap(true, Ordering::SeqCst) {
+        return Err("Demiurge is already processing a turn.".to_string());
+    }
+    let result = async {
+        let Some(goal) = agent::goal::continue_from_max_turns(st) else {
+            return Err("Current goal is not waiting for continue.".to_string());
+        };
+        st.persist_sessions();
+        run_goal_control_turn(&app, st, "[Goal continued]", goal).await
+    }
+    .await;
+    st.busy.store(false, Ordering::SeqCst);
+    result
+}
+
+#[tauri::command]
+fn goal_clear(state: State<'_, AppState>) -> Option<agent::goal::GoalPanelState> {
+    agent::goal::clear_goal(state.inner());
+    state.persist_sessions();
+    agent::goal::panel_state(state.inner())
+}
+
+async fn run_goal_control_turn(
+    app: &AppHandle,
+    state: &AppState,
+    stored_user_text: &str,
+    goal: agent::goal::GoalState,
+) -> Result<Option<agent::goal::GoalPanelState>, String> {
+    let hidden_text = stored_user_text.to_string();
+    agent::run_turn_with_options(
+        app,
+        state,
+        hidden_text.clone(),
+        agent::TurnOptions {
+            system_overlay: Some(agent::goal::build_continuation_prompt(&goal)),
+            stored_user_text: Some(hidden_text),
+            workflow_run_id: None,
+            agent_names: Vec::new(),
+            token_budget: None,
+        },
+    )
+    .await?;
+    if !state.cancel.load(Ordering::Relaxed) {
+        agent::goal::drive_after_turn(app, state).await?;
+    }
+    Ok(agent::goal::panel_state(state))
 }
 
 #[tauri::command]
@@ -592,37 +731,43 @@ fn get_history(state: State<'_, AppState>) -> Vec<Message> {
 #[tauri::command]
 fn context_panel_state(state: State<'_, AppState>) -> ContextPanelState {
     let settings = state.settings.lock().unwrap().clone();
-    let store = state.sessions.lock().unwrap();
-    let Some(session) = store.get(&store.active) else {
-        return ContextPanelState {
-            message_count: 0,
-            user_messages: 0,
-            assistant_messages: 0,
-            tool_messages: 0,
-            summary_chars: 0,
-            estimated_history_tokens: 0,
-            max_input_tokens: settings.max_input_tokens,
-            reserved_output_tokens: settings.reserved_output_tokens,
-        };
+    let (messages, summary) = {
+        let store = state.sessions.lock().unwrap();
+        store
+            .get(&store.active)
+            .map(|session| (session.messages.clone(), session.summary.clone()))
+            .unwrap_or_else(|| (Vec::new(), None))
     };
+
+    let packs_dir = state.packs_dir.lock().unwrap().clone();
+    let persona_text = pack::load_pack(&packs_dir, &settings.current_pack)
+        .map(|p| p.persona_text)
+        .unwrap_or_default();
+    let prompt_build =
+        agent::prompt::build_with_report(state.inner(), &settings, &persona_text, summary.as_deref());
+    let profile = llm::ProviderProfile::for_kind(settings.provider);
+    let tools_schema = if profile.supports_tools {
+        tools::main_schemas_json_for(profile.tool_schema_dialect)
+    } else {
+        profile.empty_tool_schema()
+    };
+    let budget =
+        agent::budget::history_budget(&settings, &prompt_build.text, &tools_schema, &messages);
+
     ContextPanelState {
-        message_count: session.messages.len(),
-        user_messages: session.messages.iter().filter(|m| m.role == "user").count(),
-        assistant_messages: session
-            .messages
-            .iter()
-            .filter(|m| m.role == "assistant")
-            .count(),
-        tool_messages: session.messages.iter().filter(|m| m.role == "tool").count(),
-        summary_chars: session
-            .summary
-            .as_deref()
-            .unwrap_or_default()
-            .chars()
-            .count(),
-        estimated_history_tokens: agent::budget::estimate_messages_tokens(&session.messages),
-        max_input_tokens: settings.max_input_tokens,
-        reserved_output_tokens: settings.reserved_output_tokens,
+        message_count: messages.len(),
+        user_messages: messages.iter().filter(|m| m.role == "user").count(),
+        assistant_messages: messages.iter().filter(|m| m.role == "assistant").count(),
+        tool_messages: messages.iter().filter(|m| m.role == "tool").count(),
+        summary_chars: summary.as_deref().unwrap_or_default().chars().count(),
+        system_prompt_chars: prompt_build.prompt_chars,
+        system_prompt_tokens: budget.system_tokens,
+        estimated_history_tokens: budget.history_tokens,
+        tools_tokens: budget.tools_tokens,
+        history_budget_tokens: budget.history_budget_tokens,
+        max_input_tokens: budget.max_input_tokens,
+        reserved_output_tokens: budget.reserved_output_tokens,
+        prompt_sections: prompt_build.sections,
     }
 }
 
@@ -992,11 +1137,22 @@ pub fn run() {
             webdav_delete_backup,
             permission_panel_state,
             permission_reset_rule,
+            permission_upsert_rule,
             mcp_panel_state,
             mcp_refresh,
             mcp_set_server_enabled,
             list_packs,
             agent_panel_state,
+            agent_template_json,
+            agent_validate_json,
+            agent_read_file,
+            agent_save_file,
+            agent_delete_file,
+            goal_panel_state,
+            goal_pause,
+            goal_resume,
+            goal_continue,
+            goal_clear,
             memory_panel_state,
             memory_update_entry,
             memory_delete_entry,

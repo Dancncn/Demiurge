@@ -181,7 +181,14 @@ export default function WorkflowsPanel({ open, busy, onClose, onResume }: Props)
           <section className="min-h-0 overflow-y-auto p-4">
             {error && <div className="mb-3 rounded-lg bg-[#fff1f1] px-3 py-2 text-sm text-[#9f1d1d]">{error}</div>}
             {selectedRun ? (
-              <RunDetail run={selectedRun} busy={busy} onStop={stopWorkflow} onResume={onResume} onClose={onClose} />
+              <RunDetail
+                run={selectedRun}
+                busy={busy}
+                onStop={stopWorkflow}
+                onResume={onResume}
+                onRerun={runWorkflow}
+                onClose={onClose}
+              />
             ) : (
               <div className="flex h-full items-center justify-center text-sm text-[#777]">
                 Select or run a workflow.
@@ -208,18 +215,27 @@ function RunDetail({
   busy,
   onStop,
   onResume,
+  onRerun,
   onClose,
 }: {
   run: WorkflowRunProgress;
   busy: boolean;
   onStop: (runId: string) => Promise<void>;
   onResume: (command: string) => void;
+  onRerun: (name: string) => Promise<void>;
   onClose: () => void;
 }) {
   const doneAgents = run.agents.filter((agent) => agent.status === "done").length;
   const runningAgents = run.agents.filter((agent) => agent.status === "running").length;
   const failedAgents = run.agents.filter((agent) => agent.status === "failed").length;
-  const progressPct = run.agents.length ? Math.round((doneAgents / run.agents.length) * 100) : 0;
+  const progressPct = run.steps_total
+    ? Math.round((run.steps_done / run.steps_total) * 100)
+    : run.agents.length
+      ? Math.round((doneAgents / run.agents.length) * 100)
+      : run.status === "done"
+        ? 100
+        : 0;
+  const canRetry = run.status === "failed" || run.status === "killed";
   return (
     <div className="space-y-5">
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -242,6 +258,15 @@ function RunDetail({
               Stop
             </button>
           )}
+          {canRetry && (
+            <button
+              disabled={busy}
+              onClick={() => void onRerun(run.name)}
+              className="h-9 rounded-lg border border-[#e1dbe6] px-3 text-sm font-medium text-[#4a414f] transition hover:bg-white disabled:opacity-50"
+            >
+              Retry run
+            </button>
+          )}
           <button
             disabled={busy}
             onClick={() => {
@@ -255,8 +280,16 @@ function RunDetail({
         </div>
       </div>
 
-      <div className="grid gap-3 sm:grid-cols-4">
+      {run.error && (
+        <div className="rounded-lg border border-[#f1b8b8] bg-[#fff1f1] px-3 py-2 text-sm text-[#9f1d1d]">
+          <div className="font-medium">Workflow stopped with an error</div>
+          <div className="mt-1 whitespace-pre-wrap text-xs">{run.error}</div>
+        </div>
+      )}
+
+      <div className="grid gap-3 sm:grid-cols-5">
         <Metric label="Phase" value={run.current_phase || "-"} />
+        <Metric label="Steps" value={run.steps_total ? `${run.steps_done}/${run.steps_total}` : "-"} />
         <Metric label="Agents" value={`${doneAgents}/${run.agents.length}`} />
         <Metric label="Token budget" value={budgetLabel(run.budget)} />
         <Metric label="Updated" value={String(run.updated_at)} />
@@ -265,10 +298,15 @@ function RunDetail({
       <div className="rounded-lg border border-[#ece7ef] bg-white p-3">
         <div className="mb-2 flex items-center justify-between text-xs text-[#777]">
           <span>Workflow progress</span>
-          <span>{progressPct}% · running {runningAgents} · failed {failedAgents}</span>
+          <span>{progressPct}% / running {runningAgents} / failed {failedAgents}</span>
         </div>
         <div className="h-2 overflow-hidden rounded-full bg-[#f0edf2]">
-          <div className="h-full rounded-full bg-[#2f9e44] transition-all" style={{ width: `${progressPct}%` }} />
+          <div
+            className={`h-full rounded-full transition-all ${
+              run.status === "failed" ? "bg-[#d64545]" : run.status === "killed" ? "bg-[#8a8a8a]" : "bg-[#2f9e44]"
+            }`}
+            style={{ width: `${progressPct}%` }}
+          />
         </div>
         {run.logs[0] && <div className="mt-2 truncate text-xs text-[#777]">Latest: {run.logs[run.logs.length - 1]}</div>}
       </div>

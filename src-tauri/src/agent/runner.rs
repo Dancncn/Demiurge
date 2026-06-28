@@ -1,6 +1,7 @@
 //! 组件 3：Agent 循环。整个系统的心脏。
 //! 输入 + 上下文 → 调 LLM → 若请求工具则执行 → 把 tool_result 喂回 → 重复，直到给出最终答复。
 use std::sync::atomic::Ordering;
+use std::time::Instant;
 
 use serde_json::json;
 use tauri::{AppHandle, Emitter};
@@ -22,6 +23,108 @@ fn truncate_ui(s: &str) -> String {
         let head: String = s.chars().take(UI_RESULT_CAP).collect();
         format!("{head}…（已截断，共 {} 字）", s.chars().count())
     }
+}
+
+fn assistant_error_payload(err: &str) -> serde_json::Value {
+    let lower = err.to_ascii_lowercase();
+    let (kind, hint) = if lower.contains("401")
+        || lower.contains("403")
+        || lower.contains("api key")
+        || lower.contains("unauthorized")
+    {
+        (
+            "llm",
+            "Provider authentication failed. Re-save the API key in Settings and retry.",
+        )
+    } else if lower.contains("timeout") || lower.contains("timed out") {
+        (
+            "network",
+            "The provider timed out. Retry once; if it repeats, lower context size or switch endpoint.",
+        )
+    } else if lower.contains("network")
+        || lower.contains("connection")
+        || lower.contains("dns")
+        || lower.contains("econn")
+    {
+        (
+            "network",
+            "The app could not reach the provider. Check base URL, proxy, and local network access.",
+        )
+    } else {
+        (
+            "llm",
+            "Verify the provider, base URL, model name, API key, and tool capability settings.",
+        )
+    };
+    json!({
+        "kind": kind,
+        "message": err,
+        "hint": hint,
+        "retryable": true,
+    })
+}
+
+fn tool_error_hint(name: &str, result: &str, ok: bool, denied: bool) -> Option<String> {
+    if denied {
+        return Some("Permission denied before execution. Change the permission rule or retry and allow once.".to_string());
+    }
+    if ok {
+        return None;
+    }
+    let lower = result.to_ascii_lowercase();
+    if name == "web_search" || name == "web_fetch" {
+        if lower.contains("api key") || lower.contains("401") || lower.contains("403") {
+            return Some("Search/fetch provider authentication failed. Check the configured API key or switch provider.".to_string());
+        }
+        if lower.contains("timeout") || lower.contains("timed out") {
+            return Some("Network lookup timed out. Retry once, reduce result depth, or switch to another search provider.".to_string());
+        }
+        if lower.contains("http 429") || lower.contains("rate limit") {
+            return Some(
+                "Provider rate limit hit. Wait briefly or switch to another search provider."
+                    .to_string(),
+            );
+        }
+        return Some("Network tool failed. Check provider settings, allowed domains, and local connectivity before retrying.".to_string());
+    }
+    if lower.contains("not found") || lower.contains("no such file") {
+        return Some("Target path was not found. Check the path and retry with an exact sandbox-relative path.".to_string());
+    }
+    if lower.contains("permission") || lower.contains("access") {
+        return Some("The operation was blocked by filesystem or process permissions. Check the target path and permission rule.".to_string());
+    }
+    Some("Review the tool arguments and retry after correcting the failing input.".to_string())
+}
+
+fn source_quality_hint(name: &str, result: &str, ok: bool) -> Option<serde_json::Value> {
+    if !ok || !matches!(name, "web_search" | "web_fetch") {
+        return None;
+    }
+    let source_count = result
+        .lines()
+        .filter(|line| line.contains("](") && line.contains("http"))
+        .count();
+    let (level, hint) = if source_count >= 3 {
+        (
+            "strong",
+            "Enough source links were returned for cross-checking.",
+        )
+    } else if source_count >= 1 {
+        (
+            "limited",
+            "Only a small number of source links were returned. Consider another query or provider if the answer needs verification.",
+        )
+    } else {
+        (
+            "none",
+            "No usable source links were found. Retry with a narrower query or a different search provider.",
+        )
+    };
+    Some(json!({
+        "level": level,
+        "source_count": source_count,
+        "hint": hint,
+    }))
 }
 
 #[derive(Clone, Debug, Default)]
@@ -70,6 +173,7 @@ pub async fn run_turn_with_options(
             .max_total_tokens
             .map(|total| budget::TokenBudgetState::new(Some(total)))
     });
+    custom::record_runtime_start(state, &selected_agents.definitions);
     // 捕获本轮的目标会话 id：即便用户中途切换会话，写入也始终落到这一段对话
     let sid = state.sessions.lock().unwrap().active.clone();
 
@@ -253,7 +357,7 @@ pub async fn run_turn_with_options(
 
         let _ = app.emit("assistant-start", ());
 
-        let turn = llm::stream_completion(
+        let turn = match llm::stream_completion(
             &state.http,
             &settings,
             &full,
@@ -263,12 +367,26 @@ pub async fn run_turn_with_options(
             },
             &state.cancel,
         )
-        .await?;
+        .await
+        {
+            Ok(turn) => turn,
+            Err(err) => {
+                custom::record_runtime_error(state, &selected_agents.definitions, &err);
+                let _ = app.emit("assistant-error", assistant_error_payload(&err));
+                return Err(err);
+            }
+        };
+
+        let estimated_usage = budget::estimate_messages_tokens(&full)
+            .saturating_add(budget::estimate_text_tokens(&turn.content));
+        let agent_usage_tokens = turn
+            .usage
+            .and_then(|usage| usage.total_or_sum())
+            .unwrap_or(estimated_usage);
+        custom::record_runtime_usage(state, &selected_agents.definitions, agent_usage_tokens);
 
         if let Some(budget_state) = &mut turn_budget {
-            let estimated = budget::estimate_messages_tokens(&full)
-                .saturating_add(budget::estimate_text_tokens(&turn.content));
-            budget_state.record_usage_or_estimate(turn.usage, estimated);
+            budget_state.record_usage_or_estimate(turn.usage, estimated_usage);
             if let Some(run_id) = &options.workflow_run_id {
                 let _ = workflow_journal::append(
                     state,
@@ -366,6 +484,8 @@ pub async fn run_turn_with_options(
             let args: serde_json::Value =
                 serde_json::from_str(&tc.function.arguments).unwrap_or_else(|_| json!({}));
             let tool_def = tools::definition_for_state(state, &name);
+            let preview = tools::confirmation_preview(state, &name, args.clone());
+            let affected_paths = tools::affected_paths(&name, &args);
 
             let _ = app.emit(
                 "tool-start",
@@ -378,6 +498,8 @@ pub async fn run_turn_with_options(
                     "permission_effect": tool_def.as_ref().map(|t| t.permission.effect),
                     "concurrency": tool_def.as_ref().map(|t| t.concurrency),
                     "output_policy": tool_def.as_ref().map(|t| t.output_policy),
+                    "preview": preview,
+                    "affected_paths": &affected_paths,
                 }),
             );
             if let Some(run_id) = &options.workflow_run_id {
@@ -410,7 +532,6 @@ pub async fn run_turn_with_options(
                         .as_ref()
                         .map(|t| t.risk)
                         .unwrap_or(tools::ToolRisk::Privileged);
-                    let preview = tools::confirmation_preview(state, &name, args.clone());
                     let summary = tools::permission_summary_for_state(state, &name, &args);
                     let response = permission::confirm(
                         app,
@@ -422,7 +543,8 @@ pub async fn run_turn_with_options(
                             risk,
                             decision: decision.clone(),
                             summary,
-                            preview,
+                            preview: preview.clone(),
+                            affected_paths: affected_paths.clone(),
                         },
                     )
                     .await;
@@ -445,10 +567,11 @@ pub async fn run_turn_with_options(
             };
 
             let interrupted = state.cancel.load(Ordering::Relaxed);
-            let result = if !allowed && interrupted {
-                "[已被用户中断]".to_string()
+            let tool_started_at = Instant::now();
+            let (result, tool_ok, denied) = if !allowed && interrupted {
+                ("[Interrupted before execution]".to_string(), false, true)
             } else if !allowed {
-                "[用户拒绝了该操作]".to_string()
+                ("[User denied this operation]".to_string(), false, true)
             } else {
                 match tools::execute(state, &name, args.clone()).await {
                     Ok(s) => {
@@ -456,15 +579,27 @@ pub async fn run_turn_with_options(
                             let _ =
                                 app.emit("plan-updated", state.plan_state.lock().unwrap().clone());
                         }
-                        s
+                        (s, true, false)
                     }
-                    Err(e) => format!("错误：{e}"),
+                    Err(e) => (format!("Error: {e}"), false, false),
                 }
             };
+            let duration_ms = tool_started_at.elapsed().as_millis() as u64;
+            let error_hint = tool_error_hint(&name, &result, tool_ok, denied);
+            let source_quality = source_quality_hint(&name, &result, tool_ok);
 
             let _ = app.emit(
                 "tool-end",
-                json!({ "tool_call_id": tc.id, "name": name, "ok": allowed, "result": truncate_ui(&result) }),
+                json!({
+                    "tool_call_id": tc.id,
+                    "name": name,
+                    "ok": tool_ok,
+                    "denied": denied,
+                    "result": truncate_ui(&result),
+                    "duration_ms": duration_ms,
+                    "error_hint": error_hint,
+                    "source_quality": source_quality,
+                }),
             );
             if let Some(run_id) = &options.workflow_run_id {
                 let _ = workflow_journal::append(
@@ -474,7 +609,8 @@ pub async fn run_turn_with_options(
                     json!({
                         "tool_call_id": tc.id.clone(),
                         "name": name.clone(),
-                        "ok": allowed,
+                        "ok": tool_ok,
+                        "denied": denied,
                         "result": truncate_ui(&result),
                     }),
                 );

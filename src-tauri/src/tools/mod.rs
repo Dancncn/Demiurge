@@ -44,6 +44,7 @@ pub enum PermissionScope {
     Once,
     Session,
     Project,
+    User,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
@@ -1022,6 +1023,55 @@ pub fn confirmation_preview(state: &crate::AppState, name: &str, args: Value) ->
         ),
         _ => None,
     }
+}
+
+pub fn affected_paths(name: &str, args: &Value) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut push = |value: String| {
+        if !value.trim().is_empty() && !out.contains(&value) {
+            out.push(value);
+        }
+    };
+    let str_arg = |key: &str| args.get(key).and_then(Value::as_str).unwrap_or("").trim();
+
+    match name {
+        "open_path" => push(str_arg("target").to_string()),
+        "shell" => push(str_arg("cwd").to_string()),
+        "write_file" | "edit_file" => push(str_arg("path").to_string()),
+        "multi_edit" => {
+            if let Some(edits) = args.get("edits").and_then(Value::as_array) {
+                for edit in edits {
+                    if let Some(path) = edit.get("path").and_then(Value::as_str) {
+                        push(path.to_string());
+                    }
+                }
+            }
+        }
+        "apply_patch" => {
+            if let Some(hunks) = args.get("hunks").and_then(Value::as_array) {
+                for hunk in hunks {
+                    if let Some(path) = hunk.get("path").and_then(Value::as_str) {
+                        push(path.to_string());
+                    }
+                }
+            }
+        }
+        "worktree_create" => {
+            let label = str_arg("label");
+            if !label.is_empty() {
+                push(format!(".worktrees/{label}"));
+            }
+        }
+        "screen_capture_region"
+        | "screen_capture_window"
+        | "screen_ocr_region"
+        | "screen_ocr_window" => {
+            push(".demiurge/screens".to_string());
+        }
+        _ => {}
+    }
+
+    out
 }
 
 // ---- 沙盒路径解析（供 read_file / write_file 共用）----

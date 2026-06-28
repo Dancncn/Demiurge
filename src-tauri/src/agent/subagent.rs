@@ -1,6 +1,7 @@
 //! 子 Agent：给主 Agent 提供只读、多视角的探索/审查 worker。
 use std::sync::atomic::Ordering;
 
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use super::conversation::Message;
@@ -11,6 +12,7 @@ use crate::{llm, pack, store, tools};
 const MAX_SUBAGENT_STEPS: usize = 6;
 const MAX_PARENT_CONTEXT_CHARS: usize = 10_000;
 const FORK_PLACEHOLDER_RESULT: &str = "Fork started - processing in background";
+const SUBMIT_EVIDENCE_TOOL: &str = "submit_evidence_packet";
 
 const READ_ONLY_TOOLS: &[&str] = &[
     "read_file",
@@ -60,6 +62,253 @@ pub enum SubagentContextMode {
     Brief,
     Recent,
     Fork,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct EvidencePacket {
+    verdict: String,
+    confidence_score: u8,
+    findings: Vec<EvidenceFinding>,
+    #[serde(default)]
+    uncertainties: Vec<String>,
+    #[serde(default)]
+    next_actions: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct EvidenceFinding {
+    claim: String,
+    evidence: String,
+    reasoning: String,
+    severity: String,
+}
+
+fn subagent_tool_schema(
+    profile: llm::ProviderProfile,
+    readonly_tool_names: &[&str],
+    output_format: SubagentOutputFormat,
+    handoff_format: &str,
+) -> Value {
+    let mut schema = if profile.supports_tools {
+        tools::schemas_json_for_names(profile.tool_schema_dialect, readonly_tool_names)
+    } else {
+        profile.empty_tool_schema()
+    };
+    if profile.supports_tools && output_format == SubagentOutputFormat::EvidencePacket {
+        append_submit_evidence_tool(&mut schema, profile.tool_schema_dialect, handoff_format);
+    }
+    schema
+}
+
+fn append_submit_evidence_tool(
+    schema: &mut Value,
+    dialect: llm::ToolSchemaDialect,
+    handoff_format: &str,
+) {
+    let parameters = evidence_packet_parameters(handoff_format);
+    match dialect {
+        llm::ToolSchemaDialect::OpenAiCompatible => {
+            if let Some(items) = schema.as_array_mut() {
+                items.push(json!({
+                    "type": "function",
+                    "function": {
+                        "name": SUBMIT_EVIDENCE_TOOL,
+                        "description": "Submit the final validated evidence packet. This is terminal; call it exactly once when ready.",
+                        "parameters": parameters
+                    }
+                }));
+            }
+        }
+        llm::ToolSchemaDialect::Anthropic => {
+            if let Some(items) = schema.as_array_mut() {
+                items.push(json!({
+                    "name": SUBMIT_EVIDENCE_TOOL,
+                    "description": "Submit the final validated evidence packet. This is terminal; call it exactly once when ready.",
+                    "input_schema": parameters
+                }));
+            }
+        }
+        llm::ToolSchemaDialect::Gemini => {
+            let declaration = json!({
+                "name": SUBMIT_EVIDENCE_TOOL,
+                "description": "Submit the final validated evidence packet. This is terminal; call it exactly once when ready.",
+                "parameters": parameters
+            });
+            if let Some(items) = schema.as_array_mut() {
+                if items.is_empty() {
+                    items.push(json!({ "function_declarations": [declaration] }));
+                } else if let Some(declarations) = items[0]
+                    .get_mut("function_declarations")
+                    .and_then(Value::as_array_mut)
+                {
+                    declarations.push(declaration);
+                }
+            }
+        }
+    }
+}
+
+fn evidence_packet_parameters(handoff_format: &str) -> Value {
+    let handoff_note = if handoff_format.trim().is_empty() {
+        "Follow the canonical Demiurge evidence packet contract.".to_string()
+    } else {
+        format!(
+            "Also satisfy this custom handoff_format exactly where it maps to the schema: {}",
+            handoff_format.trim()
+        )
+    };
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "description": handoff_note,
+        "properties": {
+            "verdict": {
+                "type": "string",
+                "description": "One-sentence conclusion."
+            },
+            "confidence_score": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 100
+            },
+            "findings": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "claim": { "type": "string" },
+                        "evidence": { "type": "string", "description": "Concrete file path, line, tool source, URL, or observation." },
+                        "reasoning": { "type": "string" },
+                        "severity": { "type": "string", "enum": ["info", "low", "medium", "high", "critical"] }
+                    },
+                    "required": ["claim", "evidence", "reasoning", "severity"]
+                }
+            },
+            "uncertainties": {
+                "type": "array",
+                "items": { "type": "string" }
+            },
+            "next_actions": {
+                "type": "array",
+                "items": { "type": "string" }
+            }
+        },
+        "required": ["verdict", "confidence_score", "findings", "uncertainties", "next_actions"]
+    })
+}
+
+fn finalize_subagent_output(
+    output_format: SubagentOutputFormat,
+    content: &str,
+    handoff_format: &str,
+) -> Result<String, String> {
+    match output_format {
+        SubagentOutputFormat::Plain => Ok(content.to_string()),
+        SubagentOutputFormat::EvidencePacket => canonicalize_evidence_text(content, handoff_format),
+    }
+}
+
+fn canonicalize_evidence_text(content: &str, handoff_format: &str) -> Result<String, String> {
+    let value = extract_json_value(content)?;
+    canonicalize_evidence_value(value, handoff_format)
+}
+
+fn canonicalize_evidence_value(value: Value, handoff_format: &str) -> Result<String, String> {
+    let packet: EvidencePacket = serde_json::from_value(value)
+        .map_err(|e| format!("Evidence packet is not valid JSON for the required schema: {e}"))?;
+    validate_evidence_packet(&packet, handoff_format)?;
+    let json = serde_json::to_string_pretty(&packet)
+        .map_err(|e| format!("Failed to serialize validated evidence packet: {e}"))?;
+    Ok(format!("Evidence packet (validated)\n```json\n{json}\n```"))
+}
+
+fn extract_json_value(content: &str) -> Result<Value, String> {
+    let trimmed = content.trim();
+    if let Ok(value) = serde_json::from_str::<Value>(trimmed) {
+        return Ok(value);
+    }
+    if let Some(fenced) = extract_fenced_json(trimmed) {
+        if let Ok(value) = serde_json::from_str::<Value>(fenced) {
+            return Ok(value);
+        }
+    }
+    let Some(start) = trimmed.find('{') else {
+        return Err("No JSON object found in evidence output.".to_string());
+    };
+    let Some(end) = trimmed.rfind('}') else {
+        return Err("JSON object start was found, but no closing brace was present.".to_string());
+    };
+    serde_json::from_str::<Value>(&trimmed[start..=end])
+        .map_err(|e| format!("Failed to parse JSON object from evidence output: {e}"))
+}
+
+fn extract_fenced_json(content: &str) -> Option<&str> {
+    let body = content
+        .strip_prefix("```json")
+        .or_else(|| content.strip_prefix("```"))?;
+    let body = body.trim_start_matches(|ch| ch == '\r' || ch == '\n');
+    let end = body.rfind("```")?;
+    Some(body[..end].trim())
+}
+
+fn validate_evidence_packet(packet: &EvidencePacket, handoff_format: &str) -> Result<(), String> {
+    let mut errors = Vec::new();
+    if packet.verdict.trim().is_empty() {
+        errors.push("verdict is required.".to_string());
+    }
+    if packet.confidence_score > 100 {
+        errors.push("confidence_score must be between 0 and 100.".to_string());
+    }
+    if packet.findings.is_empty() {
+        errors.push("findings must contain at least one item.".to_string());
+    }
+    for (idx, finding) in packet.findings.iter().enumerate() {
+        if finding.claim.trim().is_empty() {
+            errors.push(format!("findings[{idx}].claim is required."));
+        }
+        if finding.evidence.trim().is_empty() {
+            errors.push(format!("findings[{idx}].evidence is required."));
+        }
+        if finding.reasoning.trim().is_empty() {
+            errors.push(format!("findings[{idx}].reasoning is required."));
+        }
+        if !matches!(
+            finding.severity.as_str(),
+            "info" | "low" | "medium" | "high" | "critical"
+        ) {
+            errors.push(format!(
+                "findings[{idx}].severity must be one of info, low, medium, high, critical."
+            ));
+        }
+    }
+
+    let handoff = handoff_format.to_ascii_lowercase();
+    if (handoff.contains("next action") || handoff.contains("suggest"))
+        && packet.next_actions.is_empty()
+    {
+        errors.push("custom handoff_format requires next_actions.".to_string());
+    }
+    if handoff.contains("uncert") && packet.uncertainties.is_empty() {
+        errors.push("custom handoff_format requires uncertainties.".to_string());
+    }
+    if handoff.contains("risk")
+        && !packet.findings.iter().any(|finding| {
+            matches!(
+                finding.severity.as_str(),
+                "low" | "medium" | "high" | "critical"
+            )
+        })
+    {
+        errors.push("custom handoff_format asks for risks; at least one finding must carry non-info severity.".to_string());
+    }
+
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors.join("\n"))
+    }
 }
 
 impl SubagentContextMode {
@@ -145,6 +394,10 @@ pub async fn run(state: &crate::AppState, req: SubagentRequest) -> Result<String
     );
 
     let profile = llm::ProviderProfile::for_kind(settings.provider);
+    let handoff_format = template
+        .as_ref()
+        .map(|agent| agent.handoff_format.as_str())
+        .unwrap_or("");
     let template_tool_names = template
         .as_ref()
         .map(|agent| {
@@ -172,11 +425,12 @@ pub async fn run(state: &crate::AppState, req: SubagentRequest) -> Result<String
             }
             msgs.push(Message::user(user));
             (
-                if profile.supports_tools {
-                    tools::schemas_json_for_names(profile.tool_schema_dialect, readonly_tool_names)
-                } else {
-                    profile.empty_tool_schema()
-                },
+                subagent_tool_schema(
+                    profile,
+                    readonly_tool_names,
+                    req.output_format,
+                    handoff_format,
+                ),
                 msgs,
             )
         }
@@ -194,11 +448,12 @@ pub async fn run(state: &crate::AppState, req: SubagentRequest) -> Result<String
                 &format!("## 父会话上下文\n{parent_context}\n\n## 指令"),
             );
             (
-                if profile.supports_tools {
-                    tools::schemas_json_for_names(profile.tool_schema_dialect, readonly_tool_names)
-                } else {
-                    profile.empty_tool_schema()
-                },
+                subagent_tool_schema(
+                    profile,
+                    readonly_tool_names,
+                    req.output_format,
+                    handoff_format,
+                ),
                 vec![Message::system(system), Message::user(user)],
             )
         }
@@ -241,7 +496,16 @@ pub async fn run(state: &crate::AppState, req: SubagentRequest) -> Result<String
         }
 
         if turn.tool_calls.is_empty() {
-            return Ok(with_budget_footer(turn.content, token_budget.as_ref()));
+            match finalize_subagent_output(req.output_format, &turn.content, handoff_format) {
+                Ok(content) => return Ok(with_budget_footer(content, token_budget.as_ref())),
+                Err(err) => {
+                    msgs.push(Message::assistant_text(turn.content));
+                    msgs.push(Message::user(format!(
+                        "Your previous evidence packet failed validation:\n{err}\n\nCall `{SUBMIT_EVIDENCE_TOOL}` with a valid evidence packet. Do not answer in prose."
+                    )));
+                    continue;
+                }
+            }
         }
 
         let content_opt = if turn.content.is_empty() {
@@ -258,6 +522,10 @@ pub async fn run(state: &crate::AppState, req: SubagentRequest) -> Result<String
             let name = tc.function.name;
             let args: Value =
                 serde_json::from_str(&tc.function.arguments).unwrap_or_else(|_| json!({}));
+            if name == SUBMIT_EVIDENCE_TOOL {
+                let content = canonicalize_evidence_value(args, handoff_format)?;
+                return Ok(with_budget_footer(content, token_budget.as_ref()));
+            }
             let result = if READ_ONLY_TOOLS.contains(&name.as_str()) {
                 match tools::execute_subagent_readonly(state, &name, args).await {
                     Ok(s) => s,
@@ -284,9 +552,13 @@ async fn run_reviewer_panel(
     req: SubagentRequest,
     reviewer_count: usize,
 ) -> Result<String, String> {
-    let per_reviewer_budget = req
+    let synthesis_budget = req
         .max_total_tokens
-        .map(|total| (total / reviewer_count).max(1));
+        .map(|total| (total / reviewer_count.saturating_add(1)).max(1));
+    let per_reviewer_budget = req.max_total_tokens.map(|total| {
+        let reserved = synthesis_budget.unwrap_or(0);
+        (total.saturating_sub(reserved) / reviewer_count).max(1)
+    });
     let lenses = [
         "correctness",
         "evidence",
@@ -322,7 +594,7 @@ async fn run_reviewer_panel(
         outputs.push(format!("## Reviewer {} ({lens})\n{}", idx + 1, output));
     }
 
-    Ok(synthesize_reviewer_outputs(&outputs))
+    synthesize_reviewer_outputs(state, &req, reviewer_count, &outputs, synthesis_budget).await
 }
 
 fn output_contract(format: SubagentOutputFormat) -> &'static str {
@@ -333,27 +605,59 @@ fn output_contract(format: SubagentOutputFormat) -> &'static str {
              - 标注不确定点和建议主 Agent 下一步做什么。"
         }
         SubagentOutputFormat::EvidencePacket => {
-            "请输出一个结构化 evidence packet，使用以下 Markdown 小节且字段名不要改：\n\
-             1. `verdict`: 一句话结论。\n\
-             2. `confidence_score`: 0-100 整数。\n\
-             3. `findings`: 列表，每项包含 `claim`、`evidence`（文件路径/行号/工具来源）、`reasoning`、`severity`。\n\
-             4. `uncertainties`: 尚未验证或证据不足的点。\n\
-             5. `next_actions`: 建议主 Agent 做的最小下一步。"
+            "When you are ready to hand off, call the `submit_evidence_packet` tool exactly once.\n\
+             The tool input must be a JSON object with these fields:\n\
+             - `verdict`: one-sentence conclusion.\n\
+             - `confidence_score`: integer 0-100.\n\
+             - `findings`: non-empty list; each item has `claim`, `evidence`, `reasoning`, and `severity` (`info`, `low`, `medium`, `high`, `critical`).\n\
+             - `uncertainties`: list of unresolved or weakly-supported points.\n\
+             - `next_actions`: list of the smallest useful follow-up actions.\n\
+             Do not hand off by writing prose or Markdown; use the tool so the backend can validate the packet."
         }
     }
 }
 
-fn synthesize_reviewer_outputs(outputs: &[String]) -> String {
-    let mut out = String::from("Multi-reviewer synthesis\n\n");
-    out.push_str(&format!("Reviewers completed: {}\n\n", outputs.len()));
-    out.push_str(
-        "Synthesis guidance for main Agent: compare the reviewer evidence packets, prefer claims with concrete file/path evidence, and treat score disagreements as uncertainty rather than majority truth.\n\n",
-    );
-    for output in outputs {
-        out.push_str(output.trim());
-        out.push_str("\n\n");
+async fn synthesize_reviewer_outputs(
+    state: &crate::AppState,
+    req: &SubagentRequest,
+    reviewer_count: usize,
+    outputs: &[String],
+    synthesis_budget: Option<usize>,
+) -> Result<String, String> {
+    if outputs.is_empty() {
+        return Ok("Multi-reviewer synthesis\n\nNo reviewer packets were produced.".to_string());
     }
-    out
+    let reviewer_packets = outputs
+        .iter()
+        .enumerate()
+        .map(|(idx, output)| format!("## Reviewer {}\n{}", idx + 1, output.trim()))
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    let mut child = req.clone();
+    child.reviewer_count = 1;
+    child.output_format = SubagentOutputFormat::EvidencePacket;
+    child.context_mode = SubagentContextMode::Brief;
+    child.agent_name = None;
+    child.agent_type = Some("synthesizer".to_string());
+    child.label = Some(format!(
+        "{}-synthesizer",
+        req.label.as_deref().unwrap_or("review")
+    ));
+    child.max_total_tokens = synthesis_budget;
+    child.prompt = format!(
+        "You are the judge/synthesizer for a multi-reviewer Demiurge subagent run.\n\
+         Original task:\n{}\n\n\
+         Reviewer count requested: {reviewer_count}\n\
+         Reviewer evidence packets:\n{reviewer_packets}\n\n\
+         Produce one final evidence packet. Prefer concrete evidence over majority vote. Preserve disagreements as uncertainties. Do not invent evidence.",
+        req.prompt.trim()
+    );
+    let synthesis = Box::pin(run(state, child)).await?;
+    Ok(format!(
+        "Multi-reviewer synthesis (judge round)\n\n## Synthesizer\n{}\n\n## Reviewer evidence packets\n{}\n",
+        synthesis.trim(),
+        reviewer_packets
+    ))
 }
 
 fn with_budget_footer(content: String, budget: Option<&budget::TokenBudgetState>) -> String {
@@ -496,17 +800,69 @@ mod tests {
     }
 
     #[test]
-    fn synthesizes_reviewer_outputs() {
-        let out = synthesize_reviewer_outputs(&["a".into(), "b".into()]);
-        assert!(out.contains("Reviewers completed: 2"));
-        assert!(out.contains("a"));
-        assert!(out.contains("b"));
-    }
-
-    #[test]
     fn caps_parent_context() {
         let capped = cap_chars("x".repeat(12), 5);
         assert!(capped.contains("已截断"));
+    }
+
+    #[test]
+    fn canonicalizes_valid_evidence_packet() {
+        let out = canonicalize_evidence_value(
+            json!({
+                "verdict": "Looks correct.",
+                "confidence_score": 82,
+                "findings": [{
+                    "claim": "The implementation has tests.",
+                    "evidence": "src/foo.rs:10",
+                    "reasoning": "The cited test covers the path.",
+                    "severity": "info"
+                }],
+                "uncertainties": [],
+                "next_actions": ["Run cargo test."]
+            }),
+            "Return findings, evidence, and next actions.",
+        )
+        .unwrap();
+        assert!(out.contains("Evidence packet (validated)"));
+        assert!(out.contains("\"confidence_score\": 82"));
+    }
+
+    #[test]
+    fn handoff_format_can_require_risk_signal() {
+        let err = canonicalize_evidence_value(
+            json!({
+                "verdict": "Risk not addressed.",
+                "confidence_score": 70,
+                "findings": [{
+                    "claim": "Only an informational finding.",
+                    "evidence": "src/foo.rs:10",
+                    "reasoning": "No risky finding was supplied.",
+                    "severity": "info"
+                }],
+                "uncertainties": [],
+                "next_actions": ["Review risk."]
+            }),
+            "Return findings, evidence, risks, and suggested next actions.",
+        )
+        .unwrap_err();
+        assert!(err.contains("risks"));
+    }
+
+    #[test]
+    fn evidence_schema_adds_submit_tool() {
+        let schema = subagent_tool_schema(
+            llm::ProviderProfile::openai_compatible(),
+            &["read_file"],
+            SubagentOutputFormat::EvidencePacket,
+            "",
+        );
+        let names = schema
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|tool| tool["function"]["name"].as_str())
+            .collect::<Vec<_>>();
+        assert!(names.contains(&SUBMIT_EVIDENCE_TOOL));
     }
 
     #[test]

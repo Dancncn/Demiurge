@@ -4,8 +4,11 @@ import { getCurrentWindow, PhysicalSize } from "@tauri-apps/api/window";
 import * as api from "./lib/api";
 import type {
   AgentPanelState,
+  AssistantErrorEvent,
   ConfirmRequestEvent,
   DisplayItem,
+  GoalPanelState,
+  GoalProgressEvent,
   Message,
   PackManifest,
   PermissionMode,
@@ -17,6 +20,7 @@ import type {
 import { MessageList } from "./components/MessageList";
 import { Sidebar, type AppView } from "./components/Sidebar";
 import { Composer } from "./components/Composer";
+import GoalBar, { type GoalAction } from "./components/GoalBar";
 import ConfirmDialog from "./components/ConfirmDialog";
 import SettingsDialog from "./components/SettingsDialog";
 import WorkflowsPanel from "./components/WorkflowsPanel";
@@ -32,6 +36,36 @@ const SUGGESTIONS = [
 ];
 
 const DEFAULT_WINDOW_SIZE = { width: 1811, height: 1213 };
+
+function friendlyAssistantError(err: unknown, event?: AssistantErrorEvent) {
+  const raw = event?.message || String(err);
+  const lower = raw.toLowerCase();
+  let title = "Request failed";
+  let hint = event?.hint || "Check the provider settings and try again.";
+
+  if (event?.kind === "llm" || lower.includes("llm") || lower.includes("model")) {
+    title = "Model request failed";
+    hint = event?.hint || "Verify the model name, base URL, API key, and provider capability settings.";
+  }
+  if (lower.includes("401") || lower.includes("403") || lower.includes("unauthorized") || lower.includes("api key")) {
+    title = "Provider authentication failed";
+    hint = event?.hint || "Re-save the provider API key in Settings, then retry the same request.";
+  } else if (lower.includes("timeout") || lower.includes("timed out")) {
+    title = "Request timed out";
+    hint = event?.hint || "The provider or network was slow. Retry once; if it repeats, lower context size or switch endpoint.";
+  } else if (
+    lower.includes("network") ||
+    lower.includes("connection") ||
+    lower.includes("dns") ||
+    lower.includes("econn") ||
+    lower.includes("fetch")
+  ) {
+    title = "Network request failed";
+    hint = event?.hint || "Check the endpoint and local network path. If you use a proxy, confirm the app can reach it.";
+  }
+
+  return { title, message: raw.replace(/^Error:\s*/i, ""), hint, retryable: event?.retryable ?? true };
+}
 
 const PERMISSION_MODE_LABELS: Record<PermissionMode, string> = {
   plan: "Plan",
@@ -99,6 +133,8 @@ export default function App() {
   const [settings, setSettings] = useState<Settings | null>(null);
   const [packs, setPacks] = useState<PackManifest[]>([]);
   const [agentPanel, setAgentPanel] = useState<AgentPanelState>({ definitions: [], agents_dir: "" });
+  const [goalPanel, setGoalPanel] = useState<GoalPanelState | null>(null);
+  const [goalProgress, setGoalProgress] = useState<GoalProgressEvent | null>(null);
   const [selectedAgentNames, setSelectedAgentNames] = useState<string[]>([]);
   const [sessions, setSessions] = useState<SessionMeta[]>([]);
   const [activeId, setActiveId] = useState("");
@@ -115,6 +151,8 @@ export default function App() {
   const genId = () => `it_${++seq.current}`;
   const curAssistantId = useRef<string | null>(null);
   const toolItemIds = useRef<Map<string, string>>(new Map());
+  const lastRetryText = useRef<string>("");
+  const assistantErrorDelivered = useRef(false);
   const packMenuRef = useRef<HTMLDivElement | null>(null);
   const agentMenuRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -145,10 +183,11 @@ export default function App() {
   useEffect(() => {
     (async () => {
       try {
-        const [s, ps, agents, list, hist, plan] = await Promise.all([
+        const [s, ps, agents, goal, list, hist, plan] = await Promise.all([
           api.getSettings(),
           api.listPacks(),
           api.agentPanelState(),
+          api.goalPanelState(),
           api.listSessions(),
           api.getHistory(),
           api.planState(),
@@ -156,6 +195,7 @@ export default function App() {
         setSettings(s);
         setPacks(ps);
         setAgentPanel(agents);
+        setGoalPanel(goal);
         setSessions(list.sessions);
         setActiveId(list.active);
         setItems(buildHistory(hist));
@@ -171,6 +211,14 @@ export default function App() {
       const list = await api.listSessions();
       setSessions(list.sessions);
       setActiveId(list.active);
+    } catch (e) {
+      console.error(e);
+    }
+  }
+
+  async function refreshGoalPanel() {
+    try {
+      setGoalPanel(await api.goalPanelState());
     } catch (e) {
       console.error(e);
     }
@@ -217,10 +265,32 @@ export default function App() {
           }
           curAssistantId.current = null;
           setBusy(false);
+          void refreshGoalPanel();
+        },
+        onAssistantError: (e) => {
+          finalizeAssistant();
+          assistantErrorDelivered.current = true;
+          const friendly = friendlyAssistantError(e.message, e);
+          setItems((p) => [
+            ...p,
+            {
+              id: genId(),
+              kind: "assistant",
+              text: friendly.message,
+              streaming: false,
+              error: true,
+              errorTitle: friendly.title,
+              errorHint: friendly.hint,
+              retryText: friendly.retryable ? lastRetryText.current : undefined,
+            },
+          ]);
+          setBusy(false);
+          void refreshGoalPanel();
         },
         onAssistantInterrupted: () => {
           finalizeAssistant();
           setBusy(false);
+          void refreshGoalPanel();
         },
         onToolStart: (e) => {
           finalizeAssistant();
@@ -235,6 +305,7 @@ export default function App() {
               name: e.name,
               args: e.args,
               status: "running",
+              preview: e.preview,
               description: e.description,
               risk: e.risk,
               permission_effect: e.permission_effect,
@@ -247,13 +318,22 @@ export default function App() {
           setItems((p) =>
             p.map((it) =>
               it.kind === "tool" && (it.id === id || it.tool_call_id === e.tool_call_id)
-                ? { ...it, status: e.ok ? "done" : "denied", result: e.result }
+                ? {
+                    ...it,
+                    status: e.denied ? "denied" : e.ok ? "done" : "failed",
+                    result: e.result,
+                    duration_ms: e.duration_ms,
+                    error_hint: e.error_hint,
+                    source_quality: e.source_quality,
+                  }
                 : it,
             ),
           );
         },
         onConfirmRequest: (e) => setConfirmReq(e),
         onGoalProgress: (e) => {
+          setGoalProgress(e);
+          void refreshGoalPanel();
           setItems((p) => [
             ...p,
             {
@@ -318,11 +398,13 @@ export default function App() {
     if ((!text && !attachmentPrompt) || busy) return false;
     setInput("");
     setActiveView("chat");
+    assistantErrorDelivered.current = false;
     const uid = genId();
     setItems((p) => [...p, { id: uid, kind: "user", text: buildUserDisplayText(text, attachments) }]);
     setBusy(true);
     try {
       const prompt = `${text || "Please review the attached files."}${attachmentPrompt}`;
+      lastRetryText.current = prompt;
       if (selectedAgentNames.length) {
         await api.sendWithAgents(prompt, selectedAgentNames);
       } else {
@@ -334,11 +416,27 @@ export default function App() {
         setItems((p) => p.map((it) => (it.id === id && it.kind === "assistant" ? { ...it, streaming: false } : it)));
         curAssistantId.current = null;
       }
-      const nid = genId();
-      setItems((p) => [...p, { id: nid, kind: "assistant", text: `Warning: ${String(err)}`, streaming: false, error: true }]);
+      if (!assistantErrorDelivered.current) {
+        const friendly = friendlyAssistantError(err);
+        const nid = genId();
+        setItems((p) => [
+          ...p,
+          {
+            id: nid,
+            kind: "assistant",
+            text: friendly.message,
+            streaming: false,
+            error: true,
+            errorTitle: friendly.title,
+            errorHint: friendly.hint,
+            retryText: friendly.retryable ? lastRetryText.current : undefined,
+          },
+        ]);
+      }
     } finally {
       setBusy(false);
       void refreshSessions();
+      void refreshGoalPanel();
     }
     return true;
   }
@@ -351,6 +449,36 @@ export default function App() {
       await api.respondConfirm(id, allow, scope);
     } catch (e) {
       console.error("Failed to respond to confirmation", e);
+    }
+  }
+
+  async function handleGoalAction(action: GoalAction) {
+    if ((action === "resume" || action === "continue") && busy) return;
+    setGoalProgress(null);
+    if (action === "resume" || action === "continue") {
+      setActiveView("chat");
+      setBusy(true);
+    }
+    try {
+      const next =
+        action === "pause"
+          ? await api.goalPause()
+          : action === "resume"
+            ? await api.goalResume()
+            : action === "continue"
+              ? await api.goalContinue()
+              : await api.goalClear();
+      setGoalPanel(next);
+      await refreshSessions();
+    } catch (err) {
+      const nid = genId();
+      setItems((p) => [
+        ...p,
+        { id: nid, kind: "assistant", text: `Warning: ${String(err)}`, streaming: false, error: true },
+      ]);
+    } finally {
+      if (action === "resume" || action === "continue") setBusy(false);
+      void refreshGoalPanel();
     }
   }
 
@@ -368,7 +496,10 @@ export default function App() {
     }
     resetTurnRefs();
     setItems([]);
+    setGoalPanel(null);
+    setGoalProgress(null);
     await refreshSessions();
+    await refreshGoalPanel();
     requestAnimationFrame(() => textareaRef.current?.focus());
   }
 
@@ -377,6 +508,7 @@ export default function App() {
       const hist = await api.getHistory();
       resetTurnRefs();
       setItems(buildHistory(hist));
+      await refreshGoalPanel();
     } catch (e) {
       console.error(e);
     }
@@ -387,6 +519,7 @@ export default function App() {
     try {
       await api.selectSession(id);
       setActiveId(id);
+      setGoalProgress(null);
       await loadActiveHistory();
     } catch (e) {
       console.error(e);
@@ -410,6 +543,7 @@ export default function App() {
       await api.deleteSession(id);
       await refreshSessions();
       await loadActiveHistory();
+      setGoalProgress(null);
     } catch (e) {
       console.error(e);
     }
@@ -660,12 +794,15 @@ export default function App() {
                 </button>
               </header>
 
+              <GoalBar goal={goalPanel} busy={busy} progress={goalProgress} onAction={handleGoalAction} />
+
               <MessageList
                 items={items}
                 thinking={thinking}
                 greeting="How can I help?"
                 suggestions={SUGGESTIONS}
                 onSuggestionClick={(t) => void handleSend(t)}
+                onRetry={(t) => void handleSend(t)}
               />
 
               <Composer
@@ -703,6 +840,7 @@ export default function App() {
           agentPanel={agentPanel}
           onClose={() => setSettingsOpen(false)}
           onSave={handleSaveSettings}
+          onAgentPanelChange={setAgentPanel}
         />
       )}
     </main>

@@ -245,6 +245,8 @@ export interface WorkflowRunProgress {
   updated_at: number;
   error?: string;
   budget: TokenBudgetState;
+  steps_total: number;
+  steps_done: number;
 }
 
 export interface WorkflowPanelState {
@@ -276,9 +278,53 @@ export interface ContextPanelState {
   assistant_messages: number;
   tool_messages: number;
   summary_chars: number;
+  system_prompt_chars: number;
+  system_prompt_tokens: number;
   estimated_history_tokens: number;
+  tools_tokens: number;
+  history_budget_tokens: number;
   max_input_tokens: number;
   reserved_output_tokens: number;
+  prompt_sections: PromptSectionReport[];
+}
+
+export interface PromptSectionReport {
+  id: string;
+  title: string;
+  priority: number;
+  chars: number;
+  included: boolean;
+  truncated: boolean;
+}
+
+export type GoalStatus =
+  | "active"
+  | "paused"
+  | "blocked"
+  | "budget_limited"
+  | "usage_limited"
+  | "max_turns"
+  | "complete";
+
+export interface GoalPanelState {
+  objective: string;
+  status: GoalStatus;
+  status_label: string;
+  token_budget: number | null;
+  tokens_used: number;
+  token_remaining: number | null;
+  elapsed: string;
+  elapsed_ms: number;
+  turns_executed: number;
+  max_turns: number;
+  blocked_attempts: number;
+  last_block_reason: string | null;
+  created_at: number;
+  updated_at: number;
+  can_pause: boolean;
+  can_resume: boolean;
+  can_continue: boolean;
+  can_clear: boolean;
 }
 
 export interface PackManifest {
@@ -297,6 +343,14 @@ export interface AgentBudget {
   max_total_tokens?: number;
 }
 
+export interface AgentRuntimeStats {
+  run_count: number;
+  total_tokens: number;
+  error_count: number;
+  last_used_at?: number;
+  last_error?: string;
+}
+
 export interface AgentDefinitionInfo {
   name: string;
   description: string;
@@ -308,11 +362,27 @@ export interface AgentDefinitionInfo {
   budget?: AgentBudget;
   handoff_format: string;
   members: string[];
+  runtime: AgentRuntimeStats;
 }
 
 export interface AgentPanelState {
   definitions: AgentDefinitionInfo[];
   agents_dir: string;
+}
+
+export interface AgentEditorFile {
+  name: string;
+  file_name: string;
+  path: string;
+  raw_json: string;
+}
+
+export interface AgentValidationResult {
+  ok: boolean;
+  errors: string[];
+  warnings: string[];
+  normalized_name: string;
+  suggested_file_name: string;
 }
 
 export interface SessionMeta {
@@ -326,7 +396,7 @@ export interface SessionList {
 }
 
 export type PermissionEffect = "allow" | "deny" | "ask";
-export type PermissionScope = "once" | "session" | "project";
+export type PermissionScope = "once" | "session" | "project" | "user";
 export type PermissionDecisionSource = "tool_default" | "user_override" | "unknown_tool";
 export type ToolRisk = "read_only" | "mutating" | "external" | "privileged";
 export type ToolConcurrency = "parallel_safe" | "serial_only";
@@ -348,9 +418,26 @@ export interface PermissionAuditEntry {
   reason: string;
 }
 
+export interface PermissionToolView {
+  tool: string;
+  description: string;
+  risk: ToolRisk;
+  default_effect: PermissionEffect;
+  default_scope: PermissionScope;
+  default_reason: string;
+}
+
+export interface PermissionRuleInput {
+  tool: string;
+  effect: PermissionEffect;
+  scope: PermissionScope;
+  reason: string;
+}
+
 export interface PermissionPanelState {
   rules: PermissionRuleView[];
   audit: PermissionAuditEntry[];
+  tools: PermissionToolView[];
 }
 
 export interface PlanState {
@@ -371,12 +458,24 @@ export interface ToolStartEvent {
   risk?: ToolRisk;
   permission_effect?: PermissionEffect;
   concurrency?: ToolConcurrency;
+  preview?: string;
+  affected_paths?: string[];
 }
 export interface ToolEndEvent {
   tool_call_id: string;
   name: string;
   ok: boolean;
+  denied?: boolean;
   result: string;
+  duration_ms?: number;
+  error_hint?: string;
+  source_quality?: ToolSourceQuality;
+}
+
+export interface ToolSourceQuality {
+  level: "strong" | "limited" | "none";
+  source_count: number;
+  hint: string;
 }
 export interface ConfirmRequestEvent {
   id: string;
@@ -386,9 +485,11 @@ export interface ConfirmRequestEvent {
   risk?: ToolRisk;
   effect?: PermissionEffect;
   scope?: PermissionScope;
+  source?: PermissionDecisionSource;
   reason?: string;
   summary?: string;
   preview?: string;
+  affected_paths?: string[];
 }
 
 export interface GoalProgressEvent {
@@ -399,19 +500,39 @@ export interface GoalProgressEvent {
   token_budget?: number;
 }
 
+export interface AssistantErrorEvent {
+  kind: "llm" | "network" | "tool" | "workflow" | "unknown";
+  message: string;
+  hint: string;
+  retryable: boolean;
+}
+
 // ---- 前端聊天展示项 ----
 export type DisplayItem =
   | { id: string; kind: "user"; text: string }
-  | { id: string; kind: "assistant"; text: string; streaming: boolean; error?: boolean }
+  | {
+      id: string;
+      kind: "assistant";
+      text: string;
+      streaming: boolean;
+      error?: boolean;
+      errorTitle?: string;
+      errorHint?: string;
+      retryText?: string;
+    }
   | {
       id: string;
       kind: "tool";
       tool_call_id?: string;
       name: string;
       args: unknown;
-      status: "running" | "done" | "denied";
+      status: "running" | "done" | "denied" | "failed";
       result?: string;
+      preview?: string;
       description?: string;
       risk?: ToolRisk;
       permission_effect?: PermissionEffect;
+      duration_ms?: number;
+      error_hint?: string;
+      source_quality?: ToolSourceQuality;
     };

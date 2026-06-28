@@ -2,8 +2,12 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
   AgentPanelState,
+  AgentEditorFile,
+  AgentValidationResult,
+  AssistantErrorEvent,
   ConfirmRequestEvent,
   ContextPanelState,
+  GoalPanelState,
   GoalProgressEvent,
   ImageGenerationRequest,
   ImageGenerationResult,
@@ -18,6 +22,7 @@ import type {
   PermissionScope,
   PlanState,
   PermissionPanelState,
+  PermissionRuleInput,
   SessionList,
   Settings,
   SpeechSynthesisRequest,
@@ -46,12 +51,25 @@ export const rejectPlan = () => invoke<PlanState>("reject_plan");
 export const permissionPanelState = () => invoke<PermissionPanelState>("permission_panel_state");
 export const permissionResetRule = (scope: PermissionScope, tool: string) =>
   invoke<PermissionPanelState>("permission_reset_rule", { scope, tool });
+export const permissionUpsertRule = (input: PermissionRuleInput) =>
+  invoke<PermissionPanelState>("permission_upsert_rule", { input });
 export const mcpPanelState = () => invoke<McpPanelState>("mcp_panel_state");
 export const mcpRefresh = () => invoke<McpPanelState>("mcp_refresh");
 export const mcpSetServerEnabled = (name: string, enabled: boolean) =>
   invoke<McpPanelState>("mcp_set_server_enabled", { name, enabled });
 export const listPacks = () => invoke<PackManifest[]>("list_packs");
 export const agentPanelState = () => invoke<AgentPanelState>("agent_panel_state");
+export const agentTemplateJson = () => invoke<string>("agent_template_json");
+export const agentValidateJson = (rawJson: string) => invoke<AgentValidationResult>("agent_validate_json", { rawJson });
+export const agentReadFile = (name: string) => invoke<AgentEditorFile>("agent_read_file", { name });
+export const agentSaveFile = (fileName: string, rawJson: string) =>
+  invoke<AgentPanelState>("agent_save_file", { fileName, rawJson });
+export const agentDeleteFile = (name: string) => invoke<AgentPanelState>("agent_delete_file", { name });
+export const goalPanelState = () => invoke<GoalPanelState | null>("goal_panel_state");
+export const goalPause = () => invoke<GoalPanelState | null>("goal_pause");
+export const goalResume = () => invoke<GoalPanelState | null>("goal_resume");
+export const goalContinue = () => invoke<GoalPanelState | null>("goal_continue");
+export const goalClear = () => invoke<GoalPanelState | null>("goal_clear");
 export const getHistory = () => invoke<Message[]>("get_history");
 export const contextPanelState = () => invoke<ContextPanelState>("context_panel_state");
 export const memoryPanelState = () => invoke<MemoryPanelState>("memory_panel_state");
@@ -111,6 +129,7 @@ export interface AgentEventHandlers {
   onAssistantStart: () => void;
   onAssistantDelta: (text: string) => void;
   onAssistantDone: (text: string) => void;
+  onAssistantError: (e: AssistantErrorEvent) => void;
   onAssistantInterrupted: () => void;
   onToolStart: (e: ToolStartEvent) => void;
   onToolEnd: (e: ToolEndEvent) => void;
@@ -124,6 +143,7 @@ export async function listenAgentEvents(h: AgentEventHandlers): Promise<Unlisten
     listen("assistant-start", () => h.onAssistantStart()),
     listen<string>("assistant-delta", (e) => h.onAssistantDelta(e.payload)),
     listen<string>("assistant-done", (e) => h.onAssistantDone(e.payload)),
+    listen<AssistantErrorEvent>("assistant-error", (e) => h.onAssistantError(e.payload)),
     listen("assistant-interrupted", () => h.onAssistantInterrupted()),
     listen<ToolStartEvent>("tool-start", (e) => h.onToolStart(e.payload)),
     listen<ToolEndEvent>("tool-end", (e) => h.onToolEnd(e.payload)),

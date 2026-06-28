@@ -57,10 +57,10 @@ pub fn preview(state: &crate::AppState, args: Value) -> Result<String, String> {
 pub fn run(state: &crate::AppState, args: Value) -> Result<String, String> {
     let req = parse_edit_args(&args)?;
     let planned = plan_edit(state, &req)?;
-    write_planned_edit(state, &planned)?;
+    let undo_id = write_planned_edit(state, &planned)?;
     Ok(format!(
-        "已编辑沙盒文件：{}（替换 {} 处）",
-        planned.rel, planned.replacements
+        "Edit applied: {} ({} replacement(s)). undo_record: {}. Run undo_edit to roll it back.",
+        planned.rel, planned.replacements, undo_id
     ))
 }
 
@@ -75,15 +75,17 @@ pub fn multi_run(state: &crate::AppState, args: Value) -> Result<String, String>
     let planned = plan_multi_edit(state, &args)?;
     let total_replacements = planned.iter().map(|p| p.replacements).sum::<usize>();
 
+    let mut undo_ids = Vec::new();
     for edit in &planned {
-        write_planned_edit(state, edit)?;
+        undo_ids.push(write_planned_edit(state, edit)?);
     }
 
     Ok(format!(
-        "已批量编辑 {} 个文件（{} 个 edit，替换 {} 处）",
+        "Batch edit applied: {} file(s), {} edit(s), {} replacement(s). undo_records: {}. Run undo_edit to roll back the latest record.",
         planned.len(),
         edits_count,
-        total_replacements
+        total_replacements,
+        undo_ids.join(", ")
     ))
 }
 
@@ -97,14 +99,16 @@ pub fn patch_run(state: &crate::AppState, args: Value) -> Result<String, String>
     let hunk_count = hunks_count(&args)?;
     let planned = plan_patch(state, &args)?;
 
+    let mut undo_ids = Vec::new();
     for edit in &planned {
-        write_planned_edit(state, edit)?;
+        undo_ids.push(write_planned_edit(state, edit)?);
     }
 
     Ok(format!(
-        "已应用结构化 patch：{} 个文件（{} 个 hunk）",
+        "Structured patch applied: {} file(s), {} hunk(s). undo_records: {}. Run undo_edit to roll back the latest record.",
         planned.len(),
-        hunk_count
+        hunk_count,
+        undo_ids.join(", ")
     ))
 }
 
@@ -404,18 +408,18 @@ fn apply_edit(original: &str, req: &EditRequest) -> Result<(String, usize), Stri
     Ok((updated, if req.replace_all { count } else { 1 }))
 }
 
-fn write_planned_edit(state: &crate::AppState, edit: &PlannedEdit) -> Result<(), String> {
+fn write_planned_edit(state: &crate::AppState, edit: &PlannedEdit) -> Result<String, String> {
     let sandbox = state.sandbox_dir.lock().unwrap().clone();
     let path = super::resolve_in_sandbox(&sandbox, &edit.rel)?;
     std::fs::write(&path, &edit.after).map_err(|e| format!("写入失败：{e}"))?;
-    push_undo_entry(
+    let undo_id = push_undo_entry(
         state,
         edit.rel.clone(),
         edit.before.clone(),
         edit.after.clone(),
         edit.replacements,
     );
-    Ok(())
+    Ok(undo_id)
 }
 
 fn push_undo_entry(
@@ -424,10 +428,12 @@ fn push_undo_entry(
     before: String,
     after: String,
     replacements: usize,
-) {
+) -> String {
     let created_at = crate::store::now_millis();
+    let mut stack = state.edit_undo_stack.lock().unwrap();
+    let entry_id = format!("edit_{created_at}_{}", stack.len() + 1);
     let entry = EditUndoEntry {
-        id: format!("edit_{created_at}"),
+        id: entry_id.clone(),
         path,
         before,
         after,
@@ -435,12 +441,12 @@ fn push_undo_entry(
         replacements,
     };
 
-    let mut stack = state.edit_undo_stack.lock().unwrap();
     stack.push(entry);
     if stack.len() > MAX_UNDO_ENTRIES {
         let overflow = stack.len() - MAX_UNDO_ENTRIES;
         stack.drain(0..overflow);
     }
+    entry_id
 }
 
 fn latest_undo_entry(state: &crate::AppState) -> Result<EditUndoEntry, String> {
@@ -610,7 +616,8 @@ mod tests {
             json!({ "path": "note.txt", "old_string": "world", "new_string": "Demiurge" }),
         )
         .unwrap();
-        assert!(result.contains("替换 1 处"));
+        assert!(result.contains("Edit applied: note.txt (1 replacement(s))."));
+        assert!(result.contains("undo_record: edit_"));
         assert_eq!(std::fs::read_to_string(&file).unwrap(), "hello\nDemiurge\n");
         assert_eq!(state.edit_undo_stack.lock().unwrap().len(), 1);
 
@@ -678,7 +685,8 @@ mod tests {
         )
         .unwrap();
 
-        assert!(result.contains("2 个文件"));
+        assert!(result.contains("Batch edit applied: 2 file(s), 2 edit(s), 2 replacement(s)."));
+        assert!(result.contains("undo_records: edit_"));
         assert_eq!(std::fs::read_to_string(&a).unwrap(), "ALPHA\n");
         assert_eq!(std::fs::read_to_string(&b).unwrap(), "BETA\n");
         assert_eq!(state.edit_undo_stack.lock().unwrap().len(), 2);
@@ -798,7 +806,8 @@ mod tests {
         )
         .unwrap();
 
-        assert!(result.contains("1 个 hunk"));
+        assert!(result.contains("Structured patch applied: 1 file(s), 1 hunk(s)."));
+        assert!(result.contains("undo_records: edit_"));
         assert_eq!(
             std::fs::read_to_string(&file).unwrap(),
             "one\nTWO\ntwo-point-five\nthree\n"

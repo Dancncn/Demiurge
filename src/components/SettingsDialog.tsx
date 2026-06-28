@@ -1,7 +1,9 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import * as api from "../lib/api";
 import type {
+  AgentEditorFile,
   AgentPanelState,
+  AgentValidationResult,
   ContextPanelState,
   MemoryPanelState,
   McpPanelState,
@@ -10,6 +12,7 @@ import type {
   OcrModelSource,
   OcrModelStatus,
   PackManifest,
+  PermissionEffect,
   PermissionPanelState,
   PermissionScope,
   ProviderKind,
@@ -27,6 +30,7 @@ interface Props {
   agentPanel: AgentPanelState;
   onClose: () => void;
   onSave: (s: Settings) => void;
+  onAgentPanelChange: (state: AgentPanelState) => void;
 }
 
 type SettingsTab = "provider" | "media" | "web" | "files" | "context" | "tools" | "voice" | "advanced";
@@ -178,14 +182,35 @@ function permissionEffectLabel(effect: string) {
 }
 
 function permissionScopeLabel(scope: string) {
+  if (scope === "user") return "User";
   if (scope === "session") return "Session";
   if (scope === "project") return "Project";
   return "Once";
 }
 
+function permissionRiskLabel(risk: string) {
+  if (risk === "read_only") return "Read only";
+  if (risk === "mutating") return "Writes";
+  if (risk === "external") return "Network";
+  if (risk === "privileged") return "System";
+  return risk;
+}
+
 function formatTime(ms: number) {
   if (!ms) return "-";
   return new Date(ms).toLocaleString();
+}
+
+function downloadTextFile(fileName: string, text: string, type = "application/json") {
+  const blob = new Blob([text], { type });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = fileName;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 0);
 }
 
 function nextMcpServerName(servers: McpServerConfig[]) {
@@ -326,13 +351,64 @@ function ContextMetric({ label, value }: { label: string; value: number }) {
   return (
     <div className="rounded-lg border border-[#e5e8ed] bg-white px-3 py-2">
       <div className="text-[11px] text-[#8a9099]">{label}</div>
-      <div className="mt-1 text-[15px] font-semibold text-[#202124]">{value}</div>
+      <div className="mt-1 text-[15px] font-semibold text-[#202124]">{value.toLocaleString()}</div>
     </div>
   );
 }
 
-export default function SettingsDialog({ open, settings, packs, agentPanel, onClose, onSave }: Props) {
+function PromptSectionList({ sections }: { sections: ContextPanelState["prompt_sections"] }) {
+  if (!sections.length) return null;
+  const ordered = [...sections].sort((a, b) => b.priority - a.priority);
+  return (
+    <div className="mt-3 overflow-hidden rounded-lg border border-[#e2e5ea] bg-white">
+      <div className="grid grid-cols-[1fr_auto_auto] gap-3 border-b border-[#eceff3] bg-[#fbfcfd] px-3 py-2 text-[11px] font-medium uppercase tracking-wide text-[#7a8088]">
+        <span>Prompt Sections</span>
+        <span>Priority</span>
+        <span>Chars</span>
+      </div>
+      <div className="max-h-52 overflow-y-auto">
+        {ordered.map((section) => (
+          <div
+            key={section.id}
+            className="grid grid-cols-[1fr_auto_auto] items-center gap-3 border-b border-[#f0f2f5] px-3 py-2 text-[12px] last:border-b-0"
+          >
+            <div className="min-w-0">
+              <div className="truncate font-medium text-[#202124]">{section.title}</div>
+              <div className="mt-0.5 text-[11px] text-[#8a9099]">
+                {section.included ? "Included" : "Skipped"}
+                {section.truncated ? " / truncated" : ""}
+              </div>
+            </div>
+            <span className="rounded-md bg-[#eef1f5] px-2 py-1 font-mono text-[11px] text-[#59616d]">
+              {section.priority}
+            </span>
+            <span className="font-mono text-[11px] tabular-nums text-[#59616d]">
+              {section.chars.toLocaleString()}
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+export default function SettingsDialog({
+  open,
+  settings,
+  packs,
+  agentPanel,
+  onClose,
+  onSave,
+  onAgentPanelChange,
+}: Props) {
   const [form, setForm] = useState<Settings>(settings);
+  const [agentState, setAgentState] = useState<AgentPanelState>(agentPanel);
+  const [agentFile, setAgentFile] = useState<AgentEditorFile | null>(null);
+  const [agentJson, setAgentJson] = useState("");
+  const [agentFileName, setAgentFileName] = useState("");
+  const [agentValidation, setAgentValidation] = useState<AgentValidationResult | null>(null);
+  const [agentBusy, setAgentBusy] = useState(false);
+  const [agentStatus, setAgentStatus] = useState("");
   const [activeTab, setActiveTab] = useState<SettingsTab>("provider");
   const [ocrStatus, setOcrStatus] = useState<OcrModelStatus | null>(null);
   const [ocrProgress, setOcrProgress] = useState<OcrDownloadProgress | null>(null);
@@ -340,6 +416,12 @@ export default function SettingsDialog({ open, settings, packs, agentPanel, onCl
   const [ocrError, setOcrError] = useState("");
   const [permissionState, setPermissionState] = useState<PermissionPanelState | null>(null);
   const [permissionBusy, setPermissionBusy] = useState(false);
+  const [permissionDraft, setPermissionDraft] = useState<{
+    tool: string;
+    effect: PermissionEffect;
+    scope: Exclude<PermissionScope, "once">;
+    reason: string;
+  }>({ tool: "shell", effect: "ask", scope: "session", reason: "" });
   const [mcpState, setMcpState] = useState<McpPanelState | null>(null);
   const [mcpBusy, setMcpBusy] = useState(false);
   const [mcpError, setMcpError] = useState("");
@@ -350,15 +432,17 @@ export default function SettingsDialog({ open, settings, packs, agentPanel, onCl
   const [webdavBusy, setWebdavBusy] = useState(false);
   const [webdavStatus, setWebdavStatus] = useState("");
   const [webdavFiles, setWebdavFiles] = useState<WebDavBackupFile[]>([]);
+  const agentImportInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (open) {
       setForm(settings);
+      setAgentState(agentPanel);
       setWebdavStatus("");
       setWebdavFiles([]);
       setMcpError("");
     }
-  }, [open, settings]);
+  }, [open, settings, agentPanel]);
 
   useEffect(() => {
     if (!open) return;
@@ -448,6 +532,14 @@ export default function SettingsDialog({ open, settings, packs, agentPanel, onCl
     () => webSearchProviders.find((p) => p.value === form.web_search_provider) ?? webSearchProviders[0],
     [form.web_search_provider],
   );
+  const selectedAgentDefinition = useMemo(
+    () => (agentFile ? agentState.definitions.find((agent) => agent.name === agentFile.name) ?? null : null),
+    [agentFile, agentState.definitions],
+  );
+  const selectedPermissionTool = useMemo(
+    () => permissionState?.tools.find((tool) => tool.tool === permissionDraft.tool) ?? null,
+    [permissionDraft.tool, permissionState?.tools],
+  );
 
   if (!open) return null;
 
@@ -477,6 +569,188 @@ export default function SettingsDialog({ open, settings, packs, agentPanel, onCl
       setPermissionState(await api.permissionResetRule(scope, tool));
     } finally {
       setPermissionBusy(false);
+    }
+  }
+
+  async function savePermissionRule() {
+    setPermissionBusy(true);
+    try {
+      setPermissionState(
+        await api.permissionUpsertRule({
+          tool: permissionDraft.tool,
+          effect: permissionDraft.effect,
+          scope: permissionDraft.scope,
+          reason: permissionDraft.reason,
+        }),
+      );
+    } finally {
+      setPermissionBusy(false);
+    }
+  }
+
+  function editPermissionRule(scope: PermissionScope, tool: string, effect: PermissionEffect, reason: string) {
+    if (scope === "once") return;
+    setPermissionDraft({ tool, effect, scope, reason });
+  }
+
+  function setAgentPanelState(next: AgentPanelState) {
+    setAgentState(next);
+    onAgentPanelChange(next);
+  }
+
+  async function refreshAgents() {
+    setAgentBusy(true);
+    setAgentStatus("");
+    try {
+      const next = await api.agentPanelState();
+      setAgentPanelState(next);
+      setAgentStatus("Agent list refreshed.");
+    } catch (err) {
+      setAgentStatus(String(err));
+    } finally {
+      setAgentBusy(false);
+    }
+  }
+
+  async function newAgentTemplate() {
+    setAgentBusy(true);
+    setAgentStatus("");
+    try {
+      const raw = await api.agentTemplateJson();
+      setAgentFile(null);
+      setAgentFileName("researcher.json");
+      setAgentJson(raw);
+      setAgentValidation(await api.agentValidateJson(raw));
+      setAgentStatus("Template ready.");
+    } catch (err) {
+      setAgentStatus(String(err));
+    } finally {
+      setAgentBusy(false);
+    }
+  }
+
+  async function loadAgent(name: string) {
+    setAgentBusy(true);
+    setAgentStatus("");
+    try {
+      const file = await api.agentReadFile(name);
+      setAgentFile(file);
+      setAgentFileName(file.file_name);
+      setAgentJson(file.raw_json);
+      setAgentValidation(await api.agentValidateJson(file.raw_json));
+      setAgentStatus(`Loaded ${file.file_name}.`);
+    } catch (err) {
+      setAgentStatus(String(err));
+    } finally {
+      setAgentBusy(false);
+    }
+  }
+
+  async function validateAgentJson() {
+    setAgentBusy(true);
+    setAgentStatus("");
+    try {
+      const result = await api.agentValidateJson(agentJson);
+      setAgentValidation(result);
+      if (!agentFileName.trim()) setAgentFileName(result.suggested_file_name);
+      setAgentStatus(result.ok ? "Validation passed." : "Validation failed.");
+    } catch (err) {
+      setAgentStatus(String(err));
+    } finally {
+      setAgentBusy(false);
+    }
+  }
+
+  async function saveAgentJson() {
+    setAgentBusy(true);
+    setAgentStatus("");
+    try {
+      const validation = await api.agentValidateJson(agentJson);
+      setAgentValidation(validation);
+      if (!validation.ok) {
+        setAgentStatus("Fix validation errors before saving.");
+        return;
+      }
+      const next = await api.agentSaveFile(agentFileName || validation.suggested_file_name, agentJson);
+      setAgentPanelState(next);
+      setAgentFileName(agentFileName || validation.suggested_file_name);
+      setAgentStatus("Agent saved.");
+    } catch (err) {
+      setAgentStatus(String(err));
+    } finally {
+      setAgentBusy(false);
+    }
+  }
+
+  async function deleteAgentJson(name: string) {
+    if (!window.confirm(`Delete agent ${name}?`)) return;
+    setAgentBusy(true);
+    setAgentStatus("");
+    try {
+      const next = await api.agentDeleteFile(name);
+      setAgentPanelState(next);
+      if (agentFile?.name === name) {
+        setAgentFile(null);
+        setAgentJson("");
+        setAgentFileName("");
+        setAgentValidation(null);
+      }
+      setAgentStatus("Agent deleted.");
+    } catch (err) {
+      setAgentStatus(String(err));
+    } finally {
+      setAgentBusy(false);
+    }
+  }
+
+  async function importAgentJson(file?: File | null) {
+    if (!file) return;
+    setAgentBusy(true);
+    setAgentStatus("");
+    try {
+      const raw = await file.text();
+      const validation = await api.agentValidateJson(raw);
+      setAgentFile(null);
+      setAgentJson(raw);
+      setAgentValidation(validation);
+      setAgentFileName(file.name.endsWith(".json") ? file.name : validation.suggested_file_name);
+      setAgentStatus(validation.ok ? `Imported ${file.name}. Review and save it.` : `Imported ${file.name}; validation failed.`);
+    } catch (err) {
+      setAgentStatus(String(err));
+    } finally {
+      setAgentBusy(false);
+    }
+  }
+
+  function exportCurrentAgentJson() {
+    if (!agentJson.trim()) return;
+    const fileName = agentFileName.trim() || agentValidation?.suggested_file_name || "agent.json";
+    downloadTextFile(fileName, agentJson);
+    setAgentStatus(`Exported ${fileName}.`);
+  }
+
+  async function exportAllAgents() {
+    if (!agentState.definitions.length) return;
+    setAgentBusy(true);
+    setAgentStatus("");
+    try {
+      const files = await Promise.all(agentState.definitions.map((agent) => api.agentReadFile(agent.name)));
+      const payload = {
+        exported_at: new Date().toISOString(),
+        agents_dir: agentState.agents_dir,
+        agents: files.map((file) => ({
+          name: file.name,
+          file_name: file.file_name,
+          path: file.path,
+          json: JSON.parse(file.raw_json),
+        })),
+      };
+      downloadTextFile("demiurge-agents-export.json", JSON.stringify(payload, null, 2));
+      setAgentStatus(`Exported ${files.length} agents.`);
+    } catch (err) {
+      setAgentStatus(String(err));
+    } finally {
+      setAgentBusy(false);
     }
   }
 
@@ -602,7 +876,9 @@ export default function SettingsDialog({ open, settings, packs, agentPanel, onCl
       : null;
   const tokenPct = Math.min(
     100,
-    Math.round(((contextState?.estimated_history_tokens ?? 0) / Math.max(1, contextState?.max_input_tokens ?? 1)) * 100),
+    Math.round(
+      ((contextState?.estimated_history_tokens ?? 0) / Math.max(1, contextState?.history_budget_tokens ?? 1)) * 100,
+    ),
   );
 
   const navItems: { id: SettingsTab; label: string; detail: string }[] = [
@@ -1143,14 +1419,23 @@ export default function SettingsDialog({ open, settings, packs, agentPanel, onCl
                         <ContextMetric label="Assistant" value={contextState?.assistant_messages ?? 0} />
                         <ContextMetric label="Tool" value={contextState?.tool_messages ?? 0} />
                       </div>
+                      <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4">
+                        <ContextMetric label="System chars" value={contextState?.system_prompt_chars ?? 0} />
+                        <ContextMetric label="System tokens" value={contextState?.system_prompt_tokens ?? 0} />
+                        <ContextMetric label="Tools tokens" value={contextState?.tools_tokens ?? 0} />
+                        <ContextMetric label="History budget" value={contextState?.history_budget_tokens ?? 0} />
+                      </div>
                       <div className="mt-3 h-2 overflow-hidden rounded-full bg-[#e8ebef]">
                         <div className="h-full rounded-full bg-[#111827]" style={{ width: `${tokenPct}%` }} />
                       </div>
                       <div className="mt-2 text-[12px] text-[#7a8088]">
-                        Estimated history {contextState?.estimated_history_tokens ?? 0} /{" "}
-                        {contextState?.max_input_tokens ?? form.max_input_tokens} tokens. Summary{" "}
-                        {contextState?.summary_chars ?? 0} chars.
+                        Estimated history {(contextState?.estimated_history_tokens ?? 0).toLocaleString()} /{" "}
+                        {(contextState?.history_budget_tokens ?? form.max_input_tokens).toLocaleString()} tokens. Max input{" "}
+                        {(contextState?.max_input_tokens ?? form.max_input_tokens).toLocaleString()}, reserved output{" "}
+                        {(contextState?.reserved_output_tokens ?? form.reserved_output_tokens).toLocaleString()}. Summary{" "}
+                        {(contextState?.summary_chars ?? 0).toLocaleString()} chars.
                       </div>
+                      <PromptSectionList sections={contextState?.prompt_sections ?? []} />
                     </div>
                   </Section>
                   <Section title="Memory">
@@ -1260,40 +1545,231 @@ export default function SettingsDialog({ open, settings, packs, agentPanel, onCl
                     </div>
                   </Section>
                   <Section title="Custom Agents" description="Agent definitions loaded from the project sandbox.">
-                    <div className="rounded-lg border border-[#e2e5ea] bg-[#fbfcfd] p-3">
-                      <div className="flex items-center justify-between gap-3">
+                    <div className="rounded-lg border border-[#e2e5ea] bg-[#fbfcfd]">
+                      <input
+                        ref={agentImportInputRef}
+                        className="hidden"
+                        type="file"
+                        accept="application/json,.json"
+                        onChange={(e) => {
+                          const file = e.currentTarget.files?.[0];
+                          e.currentTarget.value = "";
+                          void importAgentJson(file);
+                        }}
+                      />
+                      <div className="flex items-center justify-between gap-3 border-b border-[#e8ebef] px-3 py-3">
                         <div className="min-w-0">
                           <div className="text-[13px] font-medium text-[#202124]">
-                            {agentPanel.definitions.length} definitions
+                            {agentState.definitions.length} definitions
                           </div>
                           <div className="mt-1 break-all text-[12px] text-[#7a8088]">
-                            {agentPanel.agents_dir || ".demiurge/agents"}
+                            {agentState.agents_dir || ".demiurge/agents"}
                           </div>
                         </div>
+                        <div className="flex shrink-0 flex-wrap justify-end gap-2">
+                          <button className={secondaryButtonCls} type="button" disabled={agentBusy} onClick={refreshAgents}>
+                            Refresh
+                          </button>
+                          <button
+                            className={secondaryButtonCls}
+                            type="button"
+                            disabled={agentBusy}
+                            onClick={() => agentImportInputRef.current?.click()}
+                          >
+                            Import
+                          </button>
+                          <button
+                            className={secondaryButtonCls}
+                            type="button"
+                            disabled={agentBusy || !agentState.definitions.length}
+                            onClick={exportAllAgents}
+                          >
+                            Export All
+                          </button>
+                          <button className={secondaryButtonCls} type="button" disabled={agentBusy} onClick={newAgentTemplate}>
+                            New Template
+                          </button>
+                        </div>
                       </div>
-                      <div className="mt-3 grid gap-2">
-                        {agentPanel.definitions.length ? (
-                          agentPanel.definitions.slice(0, 6).map((agent) => (
-                            <div key={agent.name} className="rounded-md border border-[#e2e5ea] bg-white p-3">
-                              <div className="truncate text-[13px] font-semibold text-[#202124]">{agent.name}</div>
-                              <div className="mt-1 truncate text-[12px] text-[#7a8088]">
-                                {agent.kind} / {agent.description || agent.path}
+
+                      <div className="grid min-h-[360px] grid-cols-1 gap-0 md:grid-cols-[240px_1fr]">
+                        <div className="border-b border-[#e8ebef] p-2 md:border-b-0 md:border-r">
+                          <div className="max-h-[356px] space-y-1 overflow-y-auto">
+                            {agentState.definitions.length ? (
+                              agentState.definitions.map((agent) => {
+                                const selected = agentFile?.name === agent.name;
+                                return (
+                                  <button
+                                    key={agent.name}
+                                    type="button"
+                                    onClick={() => loadAgent(agent.name)}
+                                    className={`w-full rounded-md px-2.5 py-2 text-left transition hover:bg-white ${
+                                      selected ? "bg-white shadow-sm" : ""
+                                    }`}
+                                  >
+                                    <div className="truncate text-[13px] font-semibold text-[#202124]">{agent.name}</div>
+                                    <div className="mt-0.5 truncate text-[11px] text-[#7a8088]">
+                                      {agent.kind} / {agent.description || agent.path}
+                                    </div>
+                                    <div className="mt-1 flex flex-wrap gap-1 text-[10px] text-[#8a9099]">
+                                      <span className="rounded bg-[#eef1f5] px-1.5 py-0.5">
+                                        runs {agent.runtime.run_count}
+                                      </span>
+                                      <span className="rounded bg-[#eef1f5] px-1.5 py-0.5">
+                                        tokens {agent.runtime.total_tokens.toLocaleString()}
+                                      </span>
+                                      {agent.runtime.error_count > 0 && (
+                                        <span className="rounded bg-[#fff1f0] px-1.5 py-0.5 text-[#b42318]">
+                                          errors {agent.runtime.error_count}
+                                        </span>
+                                      )}
+                                    </div>
+                                    {agent.invalid_tools.length ? (
+                                      <div className="mt-0.5 truncate text-[11px] text-[#b42318]">
+                                        invalid: {agent.invalid_tools.join(", ")}
+                                      </div>
+                                    ) : null}
+                                  </button>
+                                );
+                              })
+                            ) : (
+                              <div className="rounded-md border border-dashed border-[#d8dde5] bg-white p-3 text-[12px] text-[#7a8088]">
+                                No custom agent definitions loaded.
                               </div>
-                              <div className="mt-1 truncate text-[12px] text-[#8a9099]">
-                                tools: {agent.allowed_tools.length ? agent.allowed_tools.join(", ") : "default"}
-                              </div>
-                              {agent.invalid_tools.length ? (
-                                <div className="mt-1 truncate text-[12px] text-[#b42318]">
-                                  invalid: {agent.invalid_tools.join(", ")}
-                                </div>
-                              ) : null}
-                            </div>
-                          ))
-                        ) : (
-                          <div className="rounded-md border border-dashed border-[#d8dde5] bg-white p-4 text-[12px] text-[#7a8088]">
-                            No custom agent definitions loaded.
+                            )}
                           </div>
-                        )}
+                        </div>
+
+                        <div className="min-w-0 p-3">
+                          <div className="grid gap-3 sm:grid-cols-[1fr_auto]">
+                            <Field label="File name">
+                              <input
+                                className={inputCls}
+                                value={agentFileName}
+                                placeholder="researcher.json"
+                                onChange={(e) => setAgentFileName(e.target.value)}
+                              />
+                            </Field>
+                            <div className="mt-[22px] flex flex-wrap gap-2">
+                              <button
+                                className={secondaryButtonCls}
+                                type="button"
+                                disabled={agentBusy || !agentJson.trim()}
+                                onClick={validateAgentJson}
+                              >
+                                Validate
+                              </button>
+                              <button
+                                className={secondaryButtonCls}
+                                type="button"
+                                disabled={agentBusy || !agentJson.trim()}
+                                onClick={exportCurrentAgentJson}
+                              >
+                                Export
+                              </button>
+                              <button
+                                className="inline-flex h-9 items-center justify-center rounded-md bg-[#111827] px-4 text-[12px] font-medium text-white transition hover:bg-[#2b3442] disabled:cursor-not-allowed disabled:bg-[#b8bec8]"
+                                type="button"
+                                disabled={agentBusy || !agentJson.trim()}
+                                onClick={saveAgentJson}
+                              >
+                                Save
+                              </button>
+                            </div>
+                          </div>
+
+                          <textarea
+                            className="mt-3 min-h-[230px] w-full resize-y rounded-md border border-[#d9d9d9] bg-white px-3 py-2 font-mono text-[12px] leading-5 text-[#202124] outline-none transition focus:border-[#7a7f87] focus:ring-2 focus:ring-[#202124]/5"
+                            value={agentJson}
+                            spellCheck={false}
+                            placeholder={'{\n  "name": "researcher"\n}'}
+                            onChange={(e) => {
+                              setAgentJson(e.target.value);
+                              setAgentValidation(null);
+                            }}
+                          />
+
+                          {selectedAgentDefinition && (
+                            <div className="mt-3 grid gap-2 rounded-lg border border-[#e2e5ea] bg-white p-3 text-[12px] text-[#6f7782] sm:grid-cols-4">
+                              <div>
+                                <div className="text-[11px] text-[#8a9099]">Runs</div>
+                                <div className="mt-1 font-semibold text-[#202124]">
+                                  {selectedAgentDefinition.runtime.run_count.toLocaleString()}
+                                </div>
+                              </div>
+                              <div>
+                                <div className="text-[11px] text-[#8a9099]">Tokens</div>
+                                <div className="mt-1 font-semibold text-[#202124]">
+                                  {selectedAgentDefinition.runtime.total_tokens.toLocaleString()}
+                                </div>
+                              </div>
+                              <div>
+                                <div className="text-[11px] text-[#8a9099]">Errors</div>
+                                <div className="mt-1 font-semibold text-[#202124]">
+                                  {selectedAgentDefinition.runtime.error_count.toLocaleString()}
+                                </div>
+                              </div>
+                              <div>
+                                <div className="text-[11px] text-[#8a9099]">Last Used</div>
+                                <div className="mt-1 font-semibold text-[#202124]">
+                                  {formatTime(selectedAgentDefinition.runtime.last_used_at || 0)}
+                                </div>
+                              </div>
+                              {selectedAgentDefinition.runtime.last_error && (
+                                <div className="min-w-0 sm:col-span-4">
+                                  <div className="text-[11px] text-[#8a9099]">Last Error</div>
+                                  <div className="mt-1 break-words text-[#b42318]">
+                                    {selectedAgentDefinition.runtime.last_error}
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          )}
+
+                          <div className="mt-3 flex flex-wrap items-center gap-2">
+                            {agentFile && (
+                              <button
+                                className={secondaryButtonCls}
+                                type="button"
+                                disabled={agentBusy}
+                                onClick={() => deleteAgentJson(agentFile.name)}
+                              >
+                                Delete
+                              </button>
+                            )}
+                            {agentFile?.path && (
+                              <span className="min-w-0 truncate text-[12px] text-[#7a8088]" title={agentFile.path}>
+                                {agentFile.path}
+                              </span>
+                            )}
+                            {agentStatus && <span className="text-[12px] text-[#59616d]">{agentStatus}</span>}
+                          </div>
+
+                          {agentValidation && (
+                            <div
+                              className={`mt-3 rounded-lg border p-3 text-[12px] leading-5 ${
+                                agentValidation.ok
+                                  ? "border-[#cfe8d8] bg-[#f3fbf6] text-[#286444]"
+                                  : "border-[#ffd7d7] bg-[#fff7f7] text-[#b42318]"
+                              }`}
+                            >
+                              <div className="font-semibold">
+                                {agentValidation.ok ? "Validation passed" : "Validation failed"}
+                              </div>
+                              {agentValidation.normalized_name && (
+                                <div>
+                                  {agentValidation.normalized_name} / {agentValidation.suggested_file_name}
+                                </div>
+                              )}
+                              {agentValidation.errors.map((error) => (
+                                <div key={error}>Error: {error}</div>
+                              ))}
+                              {agentValidation.warnings.map((warning) => (
+                                <div key={warning}>Warning: {warning}</div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
                       </div>
                     </div>
                   </Section>
@@ -1498,8 +1974,11 @@ export default function SettingsDialog({ open, settings, packs, agentPanel, onCl
                       {ocrError && <div className="text-[#b42318]">{ocrError}</div>}
                     </div>
                   </Section>
-                  <Section title="Permission Rules" description="Rules remembered from confirmation dialogs.">
-                    <div className="mb-3 flex justify-end">
+                  <Section title="Permission Rules" description="Rule-based allow / deny / ask controls for tool calls.">
+                    <div className="mb-3 flex justify-between gap-3">
+                      <div className="text-[12px] leading-5 text-[#7a8088]">
+                        Resolution order: session rules, project rules, user rules, then the tool default.
+                      </div>
                       <button
                         className={secondaryButtonCls}
                         type="button"
@@ -1509,6 +1988,86 @@ export default function SettingsDialog({ open, settings, packs, agentPanel, onCl
                         Refresh
                       </button>
                     </div>
+
+                    <div className="mb-4 rounded-lg border border-[#e2e5ea] bg-[#fbfcfd] p-3">
+                      <div className="grid gap-3 md:grid-cols-[1fr_140px_140px]">
+                        <Field label="Tool">
+                          <select
+                            className={inputCls}
+                            value={permissionDraft.tool}
+                            onChange={(e) => setPermissionDraft((draft) => ({ ...draft, tool: e.target.value }))}
+                          >
+                            {(permissionState?.tools.length ? permissionState.tools : []).map((tool) => (
+                              <option key={tool.tool} value={tool.tool}>
+                                {tool.tool}
+                              </option>
+                            ))}
+                          </select>
+                        </Field>
+                        <Field label="Effect">
+                          <select
+                            className={inputCls}
+                            value={permissionDraft.effect}
+                            onChange={(e) =>
+                              setPermissionDraft((draft) => ({
+                                ...draft,
+                                effect: e.target.value as PermissionEffect,
+                              }))
+                            }
+                          >
+                            <option value="ask">Ask</option>
+                            <option value="allow">Allow</option>
+                            <option value="deny">Deny</option>
+                          </select>
+                        </Field>
+                        <Field label="Scope">
+                          <select
+                            className={inputCls}
+                            value={permissionDraft.scope}
+                            onChange={(e) =>
+                              setPermissionDraft((draft) => ({
+                                ...draft,
+                                scope: e.target.value as Exclude<PermissionScope, "once">,
+                              }))
+                            }
+                          >
+                            <option value="session">Session</option>
+                            <option value="project">Project</option>
+                            <option value="user">User</option>
+                          </select>
+                        </Field>
+                      </div>
+                      <div className="mt-3 grid gap-3 md:grid-cols-[1fr_auto]">
+                        <Field label="Reason">
+                          <input
+                            className={inputCls}
+                            value={permissionDraft.reason}
+                            placeholder="Why this rule exists"
+                            onChange={(e) => setPermissionDraft((draft) => ({ ...draft, reason: e.target.value }))}
+                          />
+                        </Field>
+                        <button
+                          className="mt-[22px] inline-flex h-9 items-center justify-center rounded-md bg-[#111827] px-4 text-[12px] font-medium text-white transition hover:bg-[#2b3442] disabled:cursor-not-allowed disabled:bg-[#b8bec8]"
+                          type="button"
+                          disabled={permissionBusy || !permissionDraft.tool}
+                          onClick={savePermissionRule}
+                        >
+                          Save Rule
+                        </button>
+                      </div>
+                      {selectedPermissionTool && (
+                        <div className="mt-3 rounded-md border border-[#e8ebef] bg-white p-3 text-[12px] leading-5 text-[#6f7782]">
+                          <div className="font-medium text-[#202124]">
+                            {permissionRiskLabel(selectedPermissionTool.risk)} / default{" "}
+                            {permissionEffectLabel(selectedPermissionTool.default_effect)} /{" "}
+                            {permissionScopeLabel(selectedPermissionTool.default_scope)}
+                          </div>
+                          <div className="mt-1">{selectedPermissionTool.description}</div>
+                          <div className="mt-1 text-[#8a9099]">{selectedPermissionTool.default_reason}</div>
+                        </div>
+                      )}
+                    </div>
+
                     <div className="space-y-2">
                       {permissionState?.rules.length ? (
                         permissionState.rules.map((rule) => (
@@ -1522,6 +2081,14 @@ export default function SettingsDialog({ open, settings, packs, agentPanel, onCl
                                 </div>
                                 <div className="mt-1 text-[12px] leading-5 text-[#8a9099]">{rule.reason}</div>
                               </div>
+                              <button
+                                className={secondaryButtonCls}
+                                type="button"
+                                disabled={permissionBusy || rule.scope === "once"}
+                                onClick={() => editPermissionRule(rule.scope, rule.tool, rule.effect, rule.reason)}
+                              >
+                                Edit
+                              </button>
                               <button
                                 className={secondaryButtonCls}
                                 type="button"
