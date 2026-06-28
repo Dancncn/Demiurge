@@ -117,6 +117,7 @@ Demiurge/
 | `llm/*` | OpenAI-compatible/local/Anthropic/Gemini provider adapters | `stream_completion()` |
 | `mcp/mod.rs` | stdio MCP Manager、server lifecycle、tool/resource discovery、resource read、动态 tool definition 与调用分发 | `ensure_initialized()` / `call_tool()` / `read_resource()` |
 | `tools/mod.rs` | 工具注册表、schema 输出、权限 metadata、统一执行入口 | `registry()` / `execute()` |
+| `tools/web_common.rs` | Web Search / Fetch 共享 JSON/SSE 解析、HTML/text 清洗、source markdown 输出、source-quality 计数和 Exa MCP 调用外壳 | `parse_json_payloads()` / `append_source_lines()` / `call_exa_mcp()` |
 | `tools/shell.rs` | shell 风险分类、policy state、standard/strict/sandboxed isolation、平台 process containment 和 sandbox wrapper | `run()` / `preview()` / `policy_state()` |
 | `permission/mod.rs` | 权限模式决策、confirm 工具的前后端确认往返、权限审计 | `decide_for_mode()` / `confirm()` |
 | `pack/mod.rs` | 角色包加载和默认包落地 | `load_pack()` |
@@ -323,6 +324,8 @@ workflow 定义放在沙盒 `.demiurge/workflows/*.json`。运行时支持：
 - `exa`
 
 `web_fetch` 用于单 URL 抓取，支持 `source=direct|exa`、`context_max_characters` 和 Exa `livecrawl=fallback|always|never`。`web_search` 的 Exa adapter 使用同一组 `livecrawl` 策略，并支持 `search_type=auto|fast|deep`。
+
+`tools/web_common.rs` 承载两个工具共用的边界逻辑：JSON/SSE payload 解析、HTML/text 清洗、URL/title/domain 规范化、统一 `WebSource`、Sources/Links markdown 行生成、source-quality 链接计数，以及 Exa MCP endpoint/key/env fallback/request envelope。`web_search` 和 `web_fetch` 只保留各自 provider 参数组装、结果抽取和 direct fetch 逻辑，避免来源提示、截断和 Exa 边缘行为在两个 adapter 中漂移。
 
 外部 adapter 环境变量与 keyring：
 

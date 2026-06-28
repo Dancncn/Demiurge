@@ -16,6 +16,7 @@ Demiurge 当前已经从 MVP 进入 Agent 能力打磨阶段。下面把现有 T
 - [x] **Shell 工具**：确认弹窗、沙箱 cwd、超时、输出截断、执行前预览。
 - [x] **Shell / 进程隔离加强**：shell policy state 可视化展示 env allowlist、strict deny 风险和命令模式；执行层使用独立进程组/进程树并在超时时终止整棵进程树；新增 `sandboxed` isolation，在 macOS 走 `sandbox-exec`、Linux/WSL 走 `bubblewrap`，不可用时 fail closed；补齐联网、依赖安装、外部执行、提权和破坏性命令策略测试。
 - [x] **Web Search / Fetch**：Bing、DuckDuckGo fallback、Tavily、Brave、Exa adapter，结果过滤、缓存、context cap、Sources 提醒；`web_fetch` 支持 direct 抓取与 Exa `livecrawl` 抓取。
+- [x] **WebFetch / WebSearch adapter 去重**：抽取共享 JSON/SSE 解析、HTML/text 清洗、source markdown 输出、source-quality 计数和 Exa MCP 调用外壳，减少 `web_fetch` / `web_search` adapter 重复。
 - [x] **权限系统**：一次/会话/项目级确认，危险操作 audit log。
 - [x] **上下文管理**：system prompt 分层、项目指令、角色设定、工作区环境、会话摘要、memory、token-aware 裁剪。
 - [x] **Context Collapse**：`/compact`、`context_inspect`、`context_collapse`。
@@ -62,7 +63,7 @@ Demiurge 当前已经从 MVP 进入 Agent 能力打磨阶段。下面把现有 T
 
 - [x] **设置连接测试**：验证 provider、base_url、model、LLM key、Web Search key 和 WebDAV 连接是否可用。
 - [x] **细粒度上下文可视化**：展示 system/tools/history/output reserve、summary、memory、预算消耗和 prompt section 细节。
-- [ ] **WebFetch / WebSearch adapter 去重**：抽取共享解析、清洗和来源处理模块，减少重复代码，让来源质量提示和 provider 边缘行为更一致。
+- [x] **WebFetch / WebSearch adapter 去重**：抽取共享解析、清洗和来源处理模块，减少重复代码，让来源质量提示和 provider 边缘行为更一致。
 - [ ] **OCR 体验补全**：补齐模型源选择、下载进度、缺模型引导和国内镜像文档。
 - [ ] **角色包头像与导入器**：读取 `manifest.avatar` 替换默认头像；创建拖拽 zip 导入器，解压到 `packs/` 并校验 manifest，避免提交具体受版权保护的角色资产、语音/美术资产或人格设定。
 - [ ] **更多内置工具**：增加 `list_dir`、`http_get`、`clipboard`、包脚本等 typed tools，并配置合适权限分级；继续优先 typed tools，shell 保持后置和强确认。
