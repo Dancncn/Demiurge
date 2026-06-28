@@ -2,6 +2,7 @@
 mod agent;
 mod credentials;
 mod llm;
+mod media;
 mod ocr;
 mod pack;
 mod permission;
@@ -18,12 +19,15 @@ use std::time::Duration;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, PhysicalSize, Size, State};
 use tokio::sync::oneshot;
 
 use agent::conversation::Message;
 use permission::{PermissionResponse, PermissionRule};
 use store::{Session, SessionMeta, SessionStore, Settings};
+
+const DEFAULT_WINDOW_WIDTH: u32 = 1811;
+const DEFAULT_WINDOW_HEIGHT: u32 = 1213;
 
 /// 全局共享状态。路径类字段在 setup() 里填充（需要 AppHandle 才能拿到 app_data_dir）。
 pub struct AppState {
@@ -309,6 +313,7 @@ fn save_settings(state: State<'_, AppState>, settings: Settings) -> Result<(), S
     credentials::save_api_key(&settings.api_key)?;
     credentials::save_web_search_api_keys(&settings)?;
     credentials::save_webdav_password(&settings.webdav_password)?;
+    credentials::save_media_api_key(&settings.media_api_key)?;
     *state.settings.lock().unwrap() = settings.clone();
     let dir = state.data_dir.lock().unwrap().clone();
     store::save_settings(&dir, &settings)
@@ -583,6 +588,22 @@ fn ocr_image_bytes(state: State<'_, AppState>, bytes: Vec<u8>) -> Result<String,
     ocr::recognize_rgba(state.inner(), img).map(|frame| frame.text)
 }
 
+#[tauri::command]
+async fn media_generate_image(
+    state: State<'_, AppState>,
+    request: media::ImageGenerationRequest,
+) -> Result<media::ImageGenerationResult, String> {
+    media::generate_image(state.inner(), request).await
+}
+
+#[tauri::command]
+async fn media_synthesize_speech(
+    state: State<'_, AppState>,
+    request: media::SpeechSynthesisRequest,
+) -> Result<media::SpeechSynthesisResult, String> {
+    media::synthesize_speech(state.inner(), request).await
+}
+
 fn webdav_auth(req: reqwest::RequestBuilder, config: &WebDavConfig) -> reqwest::RequestBuilder {
     let username = config.username.trim();
     if username.is_empty() {
@@ -801,6 +822,14 @@ pub fn run() {
     tauri::Builder::default()
         .manage(AppState::new(http))
         .setup(|app| {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.set_size(Size::Physical(PhysicalSize {
+                    width: DEFAULT_WINDOW_WIDTH,
+                    height: DEFAULT_WINDOW_HEIGHT,
+                }));
+                let _ = window.center();
+            }
+
             let dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&dir)?;
             let sandbox = dir.join("sandbox");
@@ -853,6 +882,8 @@ pub fn run() {
             rename_session,
             open_sandbox,
             ocr_image_bytes,
+            media_generate_image,
+            media_synthesize_speech,
             ocr_model_status,
             ocr_download_models,
             workflow_panel_state,

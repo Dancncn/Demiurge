@@ -129,7 +129,14 @@ impl ProviderProfile {
 
     pub const fn for_kind(kind: ProviderKind) -> Self {
         match kind {
-            ProviderKind::OpenAiCompatible => ProviderProfile::openai_compatible(),
+            ProviderKind::DeepSeek
+            | ProviderKind::DashScope
+            | ProviderKind::OpenAi
+            | ProviderKind::OpenRouter
+            | ProviderKind::Glm
+            | ProviderKind::MiniMax
+            | ProviderKind::Custom
+            | ProviderKind::OpenAiCompatible => ProviderProfile::openai_compatible(),
             ProviderKind::Local => ProviderProfile::local_openai_compatible(),
             ProviderKind::Anthropic => ProviderProfile::anthropic(),
             ProviderKind::Gemini => ProviderProfile::gemini(),
@@ -149,7 +156,14 @@ pub async fn stream_completion(
     cancel: &AtomicBool,
 ) -> Result<AssistantTurn, String> {
     match cfg.provider {
-        ProviderKind::OpenAiCompatible => {
+        ProviderKind::DeepSeek
+        | ProviderKind::DashScope
+        | ProviderKind::OpenAi
+        | ProviderKind::OpenRouter
+        | ProviderKind::Glm
+        | ProviderKind::MiniMax
+        | ProviderKind::Custom
+        | ProviderKind::OpenAiCompatible => {
             openai::stream_completion_with_profile(
                 client,
                 cfg,
@@ -201,7 +215,7 @@ mod tests {
     #[test]
     fn provider_profile_matches_kind() {
         assert_eq!(
-            ProviderProfile::for_kind(ProviderKind::OpenAiCompatible).tool_schema_dialect,
+            ProviderProfile::for_kind(ProviderKind::DeepSeek).tool_schema_dialect,
             ToolSchemaDialect::OpenAiCompatible
         );
         assert!(ProviderProfile::for_kind(ProviderKind::OpenAiCompatible).requires_api_key);

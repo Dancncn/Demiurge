@@ -5,6 +5,8 @@ import type {
   ConfirmRequestEvent,
   ContextPanelState,
   GoalProgressEvent,
+  ImageGenerationRequest,
+  ImageGenerationResult,
   Message,
   MemoryPanelState,
   OcrDownloadProgress,
@@ -15,6 +17,8 @@ import type {
   PermissionPanelState,
   SessionList,
   Settings,
+  SpeechSynthesisRequest,
+  SpeechSynthesisResult,
   ToolEndEvent,
   ToolStartEvent,
   WebDavBackupFile,
@@ -73,6 +77,11 @@ export const ocrDownloadModels = (source: OcrModelSource) =>
   invoke<OcrModelStatus>("ocr_download_models", { source });
 export const listenOcrDownloadProgress = (handler: (e: OcrDownloadProgress) => void) =>
   listen<OcrDownloadProgress>("ocr-download-progress", (e) => handler(e.payload));
+
+export const mediaGenerateImage = (request: ImageGenerationRequest) =>
+  invoke<ImageGenerationResult>("media_generate_image", { request });
+export const mediaSynthesizeSpeech = (request: SpeechSynthesisRequest) =>
+  invoke<SpeechSynthesisResult>("media_synthesize_speech", { request });
 
 export const workflowPanelState = () => invoke<WorkflowPanelState>("workflow_panel_state");
 export const workflowRun = (name: string) => invoke<string>("workflow_run", { name });

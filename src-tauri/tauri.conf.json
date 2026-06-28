@@ -14,10 +14,10 @@
       {
         "label": "main",
         "title": "Demiurge",
-        "width": 1120,
-        "height": 720,
-        "minWidth": 720,
-        "minHeight": 480,
+        "width": 1811,
+        "height": 1213,
+        "minWidth": 980,
+        "minHeight": 680,
         "resizable": true,
         "center": true
       }

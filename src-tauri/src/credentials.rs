@@ -15,6 +15,7 @@ const TAVILY_API_KEY_ACCOUNT: &str = "web_search_tavily_api_key";
 const BRAVE_SEARCH_API_KEY_ACCOUNT: &str = "web_search_brave_api_key";
 const EXA_API_KEY_ACCOUNT: &str = "web_search_exa_api_key";
 const WEBDAV_PASSWORD_ACCOUNT: &str = "webdav_password";
+const MEDIA_API_KEY_ACCOUNT: &str = "media_api_key";
 
 #[derive(Clone, Copy)]
 enum SecretKind {
@@ -23,6 +24,7 @@ enum SecretKind {
     Brave,
     Exa,
     WebDav,
+    Media,
 }
 
 impl SecretKind {
@@ -33,6 +35,7 @@ impl SecretKind {
             SecretKind::Brave => BRAVE_SEARCH_API_KEY_ACCOUNT,
             SecretKind::Exa => EXA_API_KEY_ACCOUNT,
             SecretKind::WebDav => WEBDAV_PASSWORD_ACCOUNT,
+            SecretKind::Media => MEDIA_API_KEY_ACCOUNT,
         }
     }
 
@@ -43,6 +46,7 @@ impl SecretKind {
             SecretKind::Brave => "Brave Search API Key",
             SecretKind::Exa => "Exa API Key",
             SecretKind::WebDav => "WebDAV Password",
+            SecretKind::Media => "Media API Key",
         }
     }
 }
@@ -109,6 +113,14 @@ pub fn save_webdav_password(secret: &str) -> Result<(), String> {
     save_secret(SecretKind::WebDav, secret)
 }
 
+pub fn load_media_api_key() -> Result<Option<String>, String> {
+    load_secret(SecretKind::Media)
+}
+
+pub fn save_media_api_key(secret: &str) -> Result<(), String> {
+    save_secret(SecretKind::Media, secret)
+}
+
 /// Load API keys from keyring, migrating legacy plaintext keys if present.
 pub fn hydrate_or_migrate_settings(dir: &Path, settings: &mut Settings) -> Result<(), String> {
     let legacy_plaintext = settings.api_key.trim().to_string();
@@ -116,10 +128,12 @@ pub fn hydrate_or_migrate_settings(dir: &Path, settings: &mut Settings) -> Resul
     let legacy_brave = settings.brave_search_api_key.trim().to_string();
     let legacy_exa = settings.exa_api_key.trim().to_string();
     let legacy_webdav_password = settings.webdav_password.trim().to_string();
+    let legacy_media = settings.media_api_key.trim().to_string();
     let has_legacy_plaintext = !legacy_plaintext.is_empty();
     let has_legacy_web_key =
         !legacy_tavily.is_empty() || !legacy_brave.is_empty() || !legacy_exa.is_empty();
     let has_legacy_webdav_password = !legacy_webdav_password.is_empty();
+    let has_legacy_media = !legacy_media.is_empty();
 
     if has_legacy_plaintext {
         save_api_key(&legacy_plaintext)?;
@@ -156,7 +170,14 @@ pub fn hydrate_or_migrate_settings(dir: &Path, settings: &mut Settings) -> Resul
         settings.webdav_password = secret;
     }
 
-    if has_legacy_plaintext || has_legacy_web_key || has_legacy_webdav_password {
+    if has_legacy_media {
+        save_secret(SecretKind::Media, &legacy_media)?;
+        settings.media_api_key = legacy_media;
+    } else if let Some(secret) = load_media_api_key()? {
+        settings.media_api_key = secret;
+    }
+
+    if has_legacy_plaintext || has_legacy_web_key || has_legacy_webdav_password || has_legacy_media {
         store::save_settings(dir, settings)?;
     }
     Ok(())
