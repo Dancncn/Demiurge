@@ -136,6 +136,7 @@ pub async fn run_manual_dream(
             decision: decision.clone(),
             summary: "将整理并覆盖沙盒内的长期记忆文件 `.demiurge/memory.md`。".to_string(),
             preview: Some(preview),
+            affected_paths: vec![".demiurge/memory.md".to_string()],
         },
     )
     .await;

@@ -2,7 +2,7 @@ import { memo, useEffect, useRef, useState } from "react";
 import type { DisplayItem } from "../lib/types";
 import { Markdown } from "./Markdown";
 import ToolCard from "./ToolCard";
-import { CheckIcon, CopyIcon } from "./Icons";
+import { CheckIcon, CopyIcon, RotateCwIcon } from "./Icons";
 
 const AVATAR = "/demiurge.png";
 
@@ -35,10 +35,18 @@ const AssistantMessage = memo(function AssistantMessage({
   text,
   streaming,
   error,
+  errorTitle,
+  errorHint,
+  retryText,
+  onRetry,
 }: {
   text: string;
   streaming: boolean;
   error?: boolean;
+  errorTitle?: string;
+  errorHint?: string;
+  retryText?: string;
+  onRetry?: (text: string) => void;
 }) {
   const [copied, setCopied] = useState(false);
   async function copy() {
@@ -57,7 +65,21 @@ const AssistantMessage = memo(function AssistantMessage({
       <div className="min-w-0 max-w-[82%]">
         <div className="py-0.5 text-[14px] leading-[1.6]">
           {error ? (
-            <div className="rounded-lg border border-[#fde68a] bg-[#fffbeb] px-4 py-3 text-[13px] text-[#92400e]">{text}</div>
+            <div className="rounded-lg border border-[#fde68a] bg-[#fffbeb] px-4 py-3 text-[13px] text-[#92400e]">
+              <div className="font-semibold text-[#7a3b00]">{errorTitle || "Request failed"}</div>
+              <div className="mt-1 whitespace-pre-wrap">{text}</div>
+              {errorHint && <div className="mt-2 text-[#8a5a00]">{errorHint}</div>}
+              {retryText && onRetry && (
+                <button
+                  type="button"
+                  onClick={() => onRetry(retryText)}
+                  className="mt-3 inline-flex h-8 items-center gap-2 rounded-md border border-[#f2d7a5] bg-white px-2.5 text-xs font-medium text-[#7a3b00] transition hover:bg-[#fff8e8]"
+                >
+                  <RotateCwIcon size={14} />
+                  Retry
+                </button>
+              )}
+            </div>
           ) : (
             <Markdown text={text} streaming={streaming} />
           )}
@@ -66,7 +88,7 @@ const AssistantMessage = memo(function AssistantMessage({
               <button
                 type="button"
                 onClick={copy}
-                title="复制"
+                title="Copy"
                 className="grid h-8 w-8 place-items-center rounded-md transition hover:bg-[#eef1f5] hover:text-[#202124]"
               >
                 {copied ? <CheckIcon size={16} /> : <CopyIcon size={16} />}
@@ -85,9 +107,10 @@ type Props = {
   greeting: string;
   suggestions: string[];
   onSuggestionClick: (text: string) => void;
+  onRetry: (text: string) => void;
 };
 
-export function MessageList({ items, thinking, greeting, suggestions, onSuggestionClick }: Props) {
+export function MessageList({ items, thinking, greeting, suggestions, onSuggestionClick, onRetry }: Props) {
   const bottomRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
@@ -127,7 +150,16 @@ export function MessageList({ items, thinking, greeting, suggestions, onSuggesti
               item.kind === "user" ? (
                 <UserMessage key={item.id} text={item.text} />
               ) : item.kind === "assistant" ? (
-                <AssistantMessage key={item.id} text={item.text} streaming={item.streaming} error={item.error} />
+                <AssistantMessage
+                  key={item.id}
+                  text={item.text}
+                  streaming={item.streaming}
+                  error={item.error}
+                  errorTitle={item.errorTitle}
+                  errorHint={item.errorHint}
+                  retryText={item.retryText}
+                  onRetry={onRetry}
+                />
               ) : (
                 <ToolCard
                   key={item.id}
@@ -135,8 +167,12 @@ export function MessageList({ items, thinking, greeting, suggestions, onSuggesti
                   args={item.args}
                   status={item.status}
                   result={item.result}
+                  preview={item.preview}
                   description={item.description}
                   risk={item.risk}
+                  duration_ms={item.duration_ms}
+                  error_hint={item.error_hint}
+                  source_quality={item.source_quality}
                 />
               ),
             )}
@@ -144,7 +180,7 @@ export function MessageList({ items, thinking, greeting, suggestions, onSuggesti
               <article className="cf-message-in flex justify-start">
                 <img src={AVATAR} alt="AI" className="mr-3 mt-0.5 size-7 shrink-0 rounded-md border border-[#dfe3e8] bg-white object-contain" />
                 <div className="py-1.5">
-                  <ThinkingDots label="正在思考…" />
+                  <ThinkingDots label="Thinking..." />
                 </div>
               </article>
             )}

@@ -57,6 +57,45 @@ export function StopIcon({ size = 20, ...props }: IconProps) {
   );
 }
 
+export function PauseIcon(props: IconProps) {
+  return (
+    <Icon strokeWidth={2} {...props}>
+      <path d="M8 5v14" />
+      <path d="M16 5v14" />
+    </Icon>
+  );
+}
+
+export function PlayIcon(props: IconProps) {
+  return (
+    <svg width={props.size ?? 20} height={props.size ?? 20} viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" {...props}>
+      <path d="M8 5.8v12.4c0 .8.9 1.3 1.6.9l9.4-6.2a1.1 1.1 0 0 0 0-1.8L9.6 4.9A1.05 1.05 0 0 0 8 5.8Z" />
+    </svg>
+  );
+}
+
+export function RotateCwIcon(props: IconProps) {
+  return (
+    <Icon strokeWidth={1.9} {...props}>
+      <path d="M21 12a9 9 0 1 1-2.64-6.36" />
+      <path d="M21 3v6h-6" />
+    </Icon>
+  );
+}
+
+export function TargetIcon(props: IconProps) {
+  return (
+    <Icon strokeWidth={1.7} {...props}>
+      <circle cx="12" cy="12" r="8" />
+      <circle cx="12" cy="12" r="3" />
+      <path d="M12 2v3" />
+      <path d="M12 19v3" />
+      <path d="M2 12h3" />
+      <path d="M19 12h3" />
+    </Icon>
+  );
+}
+
 export function CopyIcon(props: IconProps) {
   return (
     <Icon strokeWidth={1.7} {...props}>
