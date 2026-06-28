@@ -8,6 +8,7 @@ struct Args {
     prompt: String,
     label: Option<String>,
     agent_type: Option<String>,
+    agent_name: Option<String>,
     context_mode: Option<String>,
 }
 
@@ -19,6 +20,7 @@ pub async fn run(state: &crate::AppState, args: Value) -> Result<String, String>
             prompt: args.prompt,
             label: args.label,
             agent_type: args.agent_type,
+            agent_name: args.agent_name,
             context_mode: SubagentContextMode::parse(args.context_mode.as_deref()),
         },
     )

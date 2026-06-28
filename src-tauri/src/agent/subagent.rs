@@ -4,6 +4,7 @@ use std::sync::atomic::Ordering;
 use serde_json::{json, Value};
 
 use super::conversation::Message;
+use super::custom;
 use super::prompt;
 use crate::{llm, pack, store, tools};
 
@@ -26,6 +27,7 @@ pub struct SubagentRequest {
     pub prompt: String,
     pub label: Option<String>,
     pub agent_type: Option<String>,
+    pub agent_name: Option<String>,
     pub context_mode: SubagentContextMode,
 }
 
@@ -65,11 +67,34 @@ pub async fn run(state: &crate::AppState, req: SubagentRequest) -> Result<String
     let session_summary = session.as_ref().and_then(|s| s.summary.as_deref());
     let label = req.label.as_deref().unwrap_or("subagent");
     let agent_type = req.agent_type.as_deref().unwrap_or("general");
+    let template = req
+        .agent_name
+        .as_deref()
+        .and_then(|name| custom::load_agent(state, name).ok())
+        .or_else(|| custom::load_agent(state, agent_type).ok());
+    let template_block = template
+        .as_ref()
+        .map(|agent| {
+            format!(
+                "## 自定义 Agent 模板\nname: {}\nkind: {:?}\nallowed_tools: {}\n\n### prompt\n{}\n\n### handoff_format\n{}\n",
+                agent.name,
+                agent.kind,
+                if agent.allowed_tools.is_empty() {
+                    "只读默认工具".to_string()
+                } else {
+                    agent.allowed_tools.join(", ")
+                },
+                agent.prompt.trim(),
+                agent.handoff_format.trim()
+            )
+        })
+        .unwrap_or_default();
     let user = format!(
         "# 子 Agent 任务\n\
          label: {label}\n\
          agent_type: {agent_type}\n\n\
          ## 指令\n\
+         {template_block}\n\
          {}\n\n\
          ## 子 Agent 运行约束\n\
          - 你是 Demiurge 的只读子 Agent，最终输出会返回给主 Agent。\n\
@@ -84,6 +109,22 @@ pub async fn run(state: &crate::AppState, req: SubagentRequest) -> Result<String
     );
 
     let profile = llm::ProviderProfile::for_kind(settings.provider);
+    let template_tool_names = template
+        .as_ref()
+        .map(|agent| {
+            agent
+                .allowed_tools
+                .iter()
+                .filter(|tool| READ_ONLY_TOOLS.contains(&tool.as_str()))
+                .map(String::as_str)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let readonly_tool_names: &[&str] = if template_tool_names.is_empty() {
+        READ_ONLY_TOOLS
+    } else {
+        &template_tool_names
+    };
     let (tool_schema, mut msgs) = match req.context_mode {
         SubagentContextMode::Fork => {
             let system = prompt::build(state, &settings, &persona_text, session_summary);
@@ -95,7 +136,7 @@ pub async fn run(state: &crate::AppState, req: SubagentRequest) -> Result<String
             }
             msgs.push(Message::user(user));
             (
-                tools::main_schemas_json_for(profile.tool_schema_dialect),
+                tools::schemas_json_for_names(profile.tool_schema_dialect, readonly_tool_names),
                 msgs,
             )
         }
@@ -113,7 +154,7 @@ pub async fn run(state: &crate::AppState, req: SubagentRequest) -> Result<String
                 &format!("## 父会话上下文\n{parent_context}\n\n## 指令"),
             );
             (
-                tools::schemas_json_for_names(profile.tool_schema_dialect, READ_ONLY_TOOLS),
+                tools::schemas_json_for_names(profile.tool_schema_dialect, readonly_tool_names),
                 vec![Message::system(system), Message::user(user)],
             )
         }

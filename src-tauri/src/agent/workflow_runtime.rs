@@ -87,6 +87,7 @@ enum WorkflowStep {
         prompt: String,
         label: Option<String>,
         agent_type: Option<String>,
+        agent: Option<String>,
         context_mode: Option<String>,
     },
     Parallel {
@@ -301,6 +302,7 @@ fn run_step<'a>(
                 prompt,
                 label,
                 agent_type,
+                agent,
                 context_mode,
             } => {
                 run_agent_step(
@@ -311,6 +313,7 @@ fn run_step<'a>(
                     prompt,
                     label,
                     agent_type,
+                    agent,
                     context_mode,
                 )
                 .await?;
@@ -364,6 +367,7 @@ async fn run_agent_step(
     prompt: String,
     label: Option<String>,
     agent_type: Option<String>,
+    agent_name: Option<String>,
     context_mode: Option<String>,
 ) -> Result<(), String> {
     let id = next_agent_id(state, run_id);
@@ -373,7 +377,7 @@ async fn run_agent_step(
         state,
         run_id,
         "agent_started",
-        json!({ "agent_id": id, "label": label, "phase": phase, "prompt": prompt }),
+        json!({ "agent_id": id, "label": label, "phase": phase, "prompt": prompt, "agent": agent_name.clone() }),
     );
     let mode = SubagentContextMode::parse(context_mode.as_deref());
     let result = subagent::run(
@@ -382,6 +386,7 @@ async fn run_agent_step(
             prompt,
             label: Some(label.clone()),
             agent_type,
+            agent_name,
             context_mode: mode,
         },
     )

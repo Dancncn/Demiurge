@@ -375,7 +375,8 @@ pub fn registry() -> Vec<ToolDefinition> {
                 "properties": {
                     "prompt": { "type": "string", "description": "给子 Agent 的明确任务指令。必须包含范围、目标和期望输出。" },
                     "label": { "type": "string", "description": "可选：3-6 个词的短标签，用于区分多个子 Agent。" },
-                    "agent_type": { "type": "string", "description": "可选：探索类型，如 Explore、Reviewer、Verifier、Critic、Planner。" },
+                    "agent_type": { "type": "string", "description": "可选：探索类型，如 Explore、Reviewer、Verifier、Critic、Planner。也会尝试匹配 .demiurge/agents/*.json。" },
+                    "agent_name": { "type": "string", "description": "可选：.demiurge/agents/*.json 中的自定义 Agent 名称，优先于 agent_type。" },
                     "context_mode": { "type": "string", "description": "可选：brief、recent 或 fork。brief 只给摘要和少量最近消息；recent 给更多最近消息；fork 继承父消息并用 placeholder 修复未配对 tool_call。默认 brief。" }
                 },
                 "required": ["prompt"]
