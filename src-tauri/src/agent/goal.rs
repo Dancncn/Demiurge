@@ -40,6 +40,28 @@ pub struct GoalState {
     pub budget_limit_notified: bool,
 }
 
+#[derive(Clone, Debug, Serialize)]
+pub struct GoalPanelState {
+    pub objective: String,
+    pub status: String,
+    pub status_label: String,
+    pub token_budget: Option<usize>,
+    pub tokens_used: usize,
+    pub token_remaining: Option<usize>,
+    pub elapsed: String,
+    pub elapsed_ms: u64,
+    pub turns_executed: usize,
+    pub max_turns: usize,
+    pub blocked_attempts: usize,
+    pub last_block_reason: Option<String>,
+    pub created_at: u64,
+    pub updated_at: u64,
+    pub can_pause: bool,
+    pub can_resume: bool,
+    pub can_continue: bool,
+    pub can_clear: bool,
+}
+
 pub enum GoalSlashOutcome {
     Respond(String),
     Query {
@@ -245,6 +267,35 @@ pub fn active_goal(state: &crate::AppState) -> Option<GoalState> {
     store
         .get(&store.active)
         .and_then(|session| session.goal.clone())
+}
+
+pub fn panel_state(state: &crate::AppState) -> Option<GoalPanelState> {
+    active_goal(state).map(|goal| panel_state_from_goal(&goal))
+}
+
+pub fn panel_state_from_goal(goal: &GoalState) -> GoalPanelState {
+    GoalPanelState {
+        objective: goal.objective.clone(),
+        status: status_value(&goal.status).to_string(),
+        status_label: status_label(&goal.status).to_string(),
+        token_budget: goal.token_budget,
+        tokens_used: goal.tokens_used,
+        token_remaining: goal
+            .token_budget
+            .map(|budget| budget.saturating_sub(goal.tokens_used)),
+        elapsed: format_elapsed(goal),
+        elapsed_ms: active_elapsed_ms(goal),
+        turns_executed: goal.turns_executed,
+        max_turns: MAX_GOAL_TURNS,
+        blocked_attempts: goal.blocked_attempts,
+        last_block_reason: goal.last_block_reason.clone(),
+        created_at: goal.created_at,
+        updated_at: goal.updated_at,
+        can_pause: goal.status == GoalStatus::Active,
+        can_resume: goal.status == GoalStatus::Paused,
+        can_continue: goal.status == GoalStatus::MaxTurns,
+        can_clear: true,
+    }
 }
 
 pub fn set_goal(
@@ -755,5 +806,37 @@ mod tests {
             budget_limit_notified: false,
         };
         assert_eq!(format_elapsed(&goal), "1m 5s");
+    }
+
+    #[test]
+    fn panel_state_exposes_budget_and_controls() {
+        let goal = GoalState {
+            objective: "ship it".to_string(),
+            status: GoalStatus::Paused,
+            token_budget: Some(100),
+            tokens_used: 40,
+            start_time: 0,
+            paused_at: Some(0),
+            accumulated_active_ms: 2_000,
+            blocked_attempts: 1,
+            last_block_reason: Some("waiting".to_string()),
+            created_at: 10,
+            updated_at: 20,
+            turns_executed: 3,
+            budget_limit_notified: false,
+        };
+
+        let panel = panel_state_from_goal(&goal);
+
+        assert_eq!(panel.objective, "ship it");
+        assert_eq!(panel.status, "paused");
+        assert_eq!(panel.status_label, "Paused");
+        assert_eq!(panel.token_remaining, Some(60));
+        assert_eq!(panel.elapsed, "2s");
+        assert_eq!(panel.turns_executed, 3);
+        assert!(!panel.can_pause);
+        assert!(panel.can_resume);
+        assert!(!panel.can_continue);
+        assert!(panel.can_clear);
     }
 }

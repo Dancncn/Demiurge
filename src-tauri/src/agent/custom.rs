@@ -31,7 +31,7 @@ pub struct AgentBudget {
     pub max_total_tokens: Option<usize>,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AgentFile {
     pub name: Option<String>,
     #[serde(default)]
@@ -70,6 +70,23 @@ pub struct AgentPanelState {
     pub agents_dir: String,
 }
 
+#[derive(Clone, Debug, Serialize)]
+pub struct AgentEditorFile {
+    pub name: String,
+    pub file_name: String,
+    pub path: String,
+    pub raw_json: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct AgentValidationResult {
+    pub ok: bool,
+    pub errors: Vec<String>,
+    pub warnings: Vec<String>,
+    pub normalized_name: String,
+    pub suggested_file_name: String,
+}
+
 #[derive(Clone, Debug)]
 pub struct ResolvedAgents {
     pub definitions: Vec<AgentDefinitionInfo>,
@@ -94,6 +111,78 @@ pub fn panel_state(state: &crate::AppState) -> AgentPanelState {
         definitions: list_definitions(state),
         agents_dir: dir.to_string_lossy().to_string(),
     }
+}
+
+pub fn template_json() -> String {
+    let template = serde_json::json!({
+        "name": "researcher",
+        "description": "Explore the codebase and return concise evidence.",
+        "kind": "template",
+        "prompt": "You are a focused read-only researcher. Inspect relevant files, cite concrete paths, and hand off findings with risks and verification notes.",
+        "allowed_tools": ["read_file", "grep", "glob", "git_status", "web_fetch", "web_search"],
+        "budget": {
+            "max_input_tokens": 16000,
+            "reserved_output_tokens": 2000,
+            "max_steps": 6,
+            "max_total_tokens": 12000
+        },
+        "handoff_format": "Return: findings, evidence, risks, and suggested next actions.",
+        "members": []
+    });
+    serde_json::to_string_pretty(&template).unwrap_or_else(|_| "{}".to_string())
+}
+
+pub fn validate_raw(raw_json: &str) -> AgentValidationResult {
+    validate_agent_json(raw_json)
+}
+
+pub fn read_editor_file(state: &crate::AppState, name: &str) -> Result<AgentEditorFile, String> {
+    let dir = ensure_dir(state)?;
+    let path = find_agent_path(&dir, name).ok_or_else(|| format!("Agent `{name}` not found."))?;
+    let raw_json =
+        fs::read_to_string(&path).map_err(|e| format!("Failed to read agent JSON: {e}"))?;
+    let def = definition_from_path(&path, &valid_tool_names())?;
+    let file_name = path
+        .file_name()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_else(|| format!("{}.json", sanitize_name(&def.name)));
+    Ok(AgentEditorFile {
+        name: def.name,
+        file_name,
+        path: path.to_string_lossy().to_string(),
+        raw_json,
+    })
+}
+
+pub fn save_editor_file(
+    state: &crate::AppState,
+    file_name: &str,
+    raw_json: &str,
+) -> Result<AgentPanelState, String> {
+    let validation = validate_agent_json(raw_json);
+    if !validation.ok {
+        return Err(validation.errors.join("\n"));
+    }
+    let dir = ensure_dir(state)?;
+    let safe_file_name = safe_agent_file_name(if file_name.trim().is_empty() {
+        &validation.suggested_file_name
+    } else {
+        file_name
+    })?;
+    let path = dir.join(safe_file_name);
+    let parsed: serde_json::Value =
+        serde_json::from_str(raw_json).map_err(|e| format!("Invalid agent JSON: {e}"))?;
+    let formatted =
+        serde_json::to_string_pretty(&parsed).map_err(|e| format!("Failed to format JSON: {e}"))?;
+    fs::write(&path, formatted).map_err(|e| format!("Failed to save agent JSON: {e}"))?;
+    Ok(panel_state(state))
+}
+
+pub fn delete_editor_file(state: &crate::AppState, name: &str) -> Result<AgentPanelState, String> {
+    let dir = ensure_dir(state)?;
+    let path = find_agent_path(&dir, name).ok_or_else(|| format!("Agent `{name}` not found."))?;
+    fs::remove_file(&path).map_err(|e| format!("Failed to delete agent JSON: {e}"))?;
+    Ok(panel_state(state))
 }
 
 pub fn list_definitions(state: &crate::AppState) -> Vec<AgentDefinitionInfo> {
@@ -248,6 +337,83 @@ fn find_agent_path(dir: &Path, requested: &str) -> Option<PathBuf> {
     None
 }
 
+fn validate_agent_json(raw_json: &str) -> AgentValidationResult {
+    let mut errors = Vec::new();
+    let mut warnings = Vec::new();
+    let parsed = match serde_json::from_str::<AgentFile>(raw_json) {
+        Ok(parsed) => parsed,
+        Err(err) => {
+            return AgentValidationResult {
+                ok: false,
+                errors: vec![format!("Invalid JSON: {err}")],
+                warnings,
+                normalized_name: String::new(),
+                suggested_file_name: "agent.json".to_string(),
+            };
+        }
+    };
+
+    let name = parsed.name.unwrap_or_default().trim().to_string();
+    if name.is_empty() {
+        errors.push("Agent name is required.".to_string());
+    }
+    if parsed.kind == AgentKind::Template && parsed.prompt.trim().is_empty() {
+        warnings.push("Template agents usually need a prompt.".to_string());
+    }
+    if parsed.kind == AgentKind::Team && parsed.members.is_empty() {
+        warnings.push("Team agents should list at least one member.".to_string());
+    }
+    if parsed.kind == AgentKind::Template && !parsed.members.is_empty() {
+        warnings
+            .push("Template agents ignore members; use kind \"team\" for composition.".to_string());
+    }
+    let valid_tools = valid_tool_names();
+    let invalid_tools = parsed
+        .allowed_tools
+        .iter()
+        .filter(|tool| !valid_tools.contains(*tool))
+        .cloned()
+        .collect::<Vec<_>>();
+    if !invalid_tools.is_empty() {
+        warnings.push(format!(
+            "Unknown tools will be ignored: {}",
+            invalid_tools.join(", ")
+        ));
+    }
+    if let Some(budget) = parsed.budget {
+        if budget
+            .reserved_output_tokens
+            .zip(budget.max_input_tokens)
+            .map(|(reserved, max_input)| reserved >= max_input)
+            .unwrap_or(false)
+        {
+            errors.push("reserved_output_tokens must be lower than max_input_tokens.".to_string());
+        }
+        if budget.max_steps == Some(0) {
+            errors.push("max_steps must be greater than 0.".to_string());
+        }
+    }
+
+    let suggested_file_name =
+        safe_agent_file_name(&name).unwrap_or_else(|_| "agent.json".to_string());
+    AgentValidationResult {
+        ok: errors.is_empty(),
+        errors,
+        warnings,
+        normalized_name: name,
+        suggested_file_name,
+    }
+}
+
+fn safe_agent_file_name(input: &str) -> Result<String, String> {
+    let trimmed = input.trim().trim_end_matches(".json");
+    let safe = sanitize_name(trimmed);
+    if safe.is_empty() {
+        return Err("Agent file name cannot be empty.".to_string());
+    }
+    Ok(format!("{safe}.json"))
+}
+
 fn sanitize_name(name: &str) -> String {
     name.trim()
         .chars()
@@ -332,5 +498,31 @@ mod tests {
         assert_eq!(budget.max_input_tokens, Some(4000));
         assert_eq!(budget.max_total_tokens, Some(12000));
         assert_eq!(budget.max_steps, Some(3));
+    }
+
+    #[test]
+    fn template_agent_json_is_valid() {
+        let validation = validate_agent_json(&template_json());
+        assert!(validation.ok, "{:?}", validation.errors);
+        assert_eq!(validation.suggested_file_name, "researcher.json");
+    }
+
+    #[test]
+    fn validation_requires_name() {
+        let validation = validate_agent_json(r#"{ "prompt": "work" }"#);
+        assert!(!validation.ok);
+        assert!(validation.errors.iter().any(|error| error.contains("name")));
+    }
+
+    #[test]
+    fn validation_rejects_invalid_budget_shape() {
+        let validation = validate_agent_json(
+            r#"{
+              "name": "bad-budget",
+              "budget": { "max_input_tokens": 1000, "reserved_output_tokens": 1000, "max_steps": 0 }
+            }"#,
+        );
+        assert!(!validation.ok);
+        assert_eq!(validation.errors.len(), 2);
     }
 }

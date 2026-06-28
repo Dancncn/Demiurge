@@ -351,6 +351,7 @@ pub async fn run_turn_with_options(
             let args: serde_json::Value =
                 serde_json::from_str(&tc.function.arguments).unwrap_or_else(|_| json!({}));
             let tool_def = tools::definition_for(&name);
+            let preview = tools::confirmation_preview(state, &name, args.clone());
 
             let _ = app.emit(
                 "tool-start",
@@ -363,6 +364,7 @@ pub async fn run_turn_with_options(
                     "permission_effect": tool_def.as_ref().map(|t| t.permission.effect),
                     "concurrency": tool_def.as_ref().map(|t| t.concurrency),
                     "output_policy": tool_def.as_ref().map(|t| t.output_policy),
+                    "preview": preview,
                 }),
             );
             if let Some(run_id) = &options.workflow_run_id {
@@ -391,7 +393,6 @@ pub async fn run_turn_with_options(
                         .as_ref()
                         .map(|t| t.risk)
                         .unwrap_or(tools::ToolRisk::Privileged);
-                    let preview = tools::confirmation_preview(state, &name, args.clone());
                     let summary = tools::permission_summary(&name, &args);
                     let response = permission::confirm(
                         app,
@@ -403,7 +404,7 @@ pub async fn run_turn_with_options(
                             risk,
                             decision: decision.clone(),
                             summary,
-                            preview,
+                            preview: preview.clone(),
                         },
                     )
                     .await;
@@ -426,20 +427,26 @@ pub async fn run_turn_with_options(
             };
 
             let interrupted = state.cancel.load(Ordering::Relaxed);
-            let result = if !allowed && interrupted {
-                "[已被用户中断]".to_string()
+            let (result, tool_ok, denied) = if !allowed && interrupted {
+                ("[Interrupted before execution]".to_string(), false, true)
             } else if !allowed {
-                "[用户拒绝了该操作]".to_string()
+                ("[User denied this operation]".to_string(), false, true)
             } else {
                 match tools::execute(state, &name, args.clone()).await {
-                    Ok(s) => s,
-                    Err(e) => format!("错误：{e}"),
+                    Ok(s) => (s, true, false),
+                    Err(e) => (format!("Error: {e}"), false, false),
                 }
             };
 
             let _ = app.emit(
                 "tool-end",
-                json!({ "tool_call_id": tc.id, "name": name, "ok": allowed, "result": truncate_ui(&result) }),
+                json!({
+                    "tool_call_id": tc.id,
+                    "name": name,
+                    "ok": tool_ok,
+                    "denied": denied,
+                    "result": truncate_ui(&result),
+                }),
             );
             if let Some(run_id) = &options.workflow_run_id {
                 let _ = workflow_journal::append(
@@ -449,7 +456,8 @@ pub async fn run_turn_with_options(
                     json!({
                         "tool_call_id": tc.id.clone(),
                         "name": name.clone(),
-                        "ok": allowed,
+                        "ok": tool_ok,
+                        "denied": denied,
                         "result": truncate_ui(&result),
                     }),
                 );

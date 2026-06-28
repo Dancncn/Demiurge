@@ -418,6 +418,132 @@ fn agent_panel_state(state: State<'_, AppState>) -> agent::custom::AgentPanelSta
 }
 
 #[tauri::command]
+fn agent_template_json() -> String {
+    agent::custom::template_json()
+}
+
+#[tauri::command]
+fn agent_validate_json(raw_json: String) -> agent::custom::AgentValidationResult {
+    agent::custom::validate_raw(&raw_json)
+}
+
+#[tauri::command]
+fn agent_read_file(
+    state: State<'_, AppState>,
+    name: String,
+) -> Result<agent::custom::AgentEditorFile, String> {
+    agent::custom::read_editor_file(state.inner(), &name)
+}
+
+#[tauri::command]
+fn agent_save_file(
+    state: State<'_, AppState>,
+    file_name: String,
+    raw_json: String,
+) -> Result<agent::custom::AgentPanelState, String> {
+    let panel = agent::custom::save_editor_file(state.inner(), &file_name, &raw_json)?;
+    Ok(panel)
+}
+
+#[tauri::command]
+fn agent_delete_file(
+    state: State<'_, AppState>,
+    name: String,
+) -> Result<agent::custom::AgentPanelState, String> {
+    agent::custom::delete_editor_file(state.inner(), &name)
+}
+
+#[tauri::command]
+fn goal_panel_state(state: State<'_, AppState>) -> Option<agent::goal::GoalPanelState> {
+    agent::goal::panel_state(state.inner())
+}
+
+#[tauri::command]
+fn goal_pause(state: State<'_, AppState>) -> Result<Option<agent::goal::GoalPanelState>, String> {
+    let paused = agent::goal::pause_goal(state.inner()).is_some();
+    if !paused {
+        return Err("Current goal cannot be paused.".to_string());
+    }
+    state.persist_sessions();
+    Ok(agent::goal::panel_state(state.inner()))
+}
+
+#[tauri::command]
+async fn goal_resume(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Option<agent::goal::GoalPanelState>, String> {
+    let st = state.inner();
+    if st.busy.swap(true, Ordering::SeqCst) {
+        return Err("Demiurge is already processing a turn.".to_string());
+    }
+    let result = async {
+        let Some(goal) = agent::goal::resume_goal(st) else {
+            return Err("No paused goal to resume.".to_string());
+        };
+        st.persist_sessions();
+        run_goal_control_turn(&app, st, "[Goal resumed]", goal).await
+    }
+    .await;
+    st.busy.store(false, Ordering::SeqCst);
+    result
+}
+
+#[tauri::command]
+async fn goal_continue(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Option<agent::goal::GoalPanelState>, String> {
+    let st = state.inner();
+    if st.busy.swap(true, Ordering::SeqCst) {
+        return Err("Demiurge is already processing a turn.".to_string());
+    }
+    let result = async {
+        let Some(goal) = agent::goal::continue_from_max_turns(st) else {
+            return Err("Current goal is not waiting for continue.".to_string());
+        };
+        st.persist_sessions();
+        run_goal_control_turn(&app, st, "[Goal continued]", goal).await
+    }
+    .await;
+    st.busy.store(false, Ordering::SeqCst);
+    result
+}
+
+#[tauri::command]
+fn goal_clear(state: State<'_, AppState>) -> Option<agent::goal::GoalPanelState> {
+    agent::goal::clear_goal(state.inner());
+    state.persist_sessions();
+    agent::goal::panel_state(state.inner())
+}
+
+async fn run_goal_control_turn(
+    app: &AppHandle,
+    state: &AppState,
+    stored_user_text: &str,
+    goal: agent::goal::GoalState,
+) -> Result<Option<agent::goal::GoalPanelState>, String> {
+    let hidden_text = stored_user_text.to_string();
+    agent::run_turn_with_options(
+        app,
+        state,
+        hidden_text.clone(),
+        agent::TurnOptions {
+            system_overlay: Some(agent::goal::build_continuation_prompt(&goal)),
+            stored_user_text: Some(hidden_text),
+            workflow_run_id: None,
+            agent_names: Vec::new(),
+            token_budget: None,
+        },
+    )
+    .await?;
+    if !state.cancel.load(Ordering::Relaxed) {
+        agent::goal::drive_after_turn(app, state).await?;
+    }
+    Ok(agent::goal::panel_state(state))
+}
+
+#[tauri::command]
 fn memory_panel_state(state: State<'_, AppState>) -> agent::memory::MemoryPanelState {
     let sandbox = state.sandbox_dir.lock().unwrap().clone();
     agent::memory::panel_state(&sandbox)
@@ -869,6 +995,16 @@ pub fn run() {
             permission_reset_rule,
             list_packs,
             agent_panel_state,
+            agent_template_json,
+            agent_validate_json,
+            agent_read_file,
+            agent_save_file,
+            agent_delete_file,
+            goal_panel_state,
+            goal_pause,
+            goal_resume,
+            goal_continue,
+            goal_clear,
             memory_panel_state,
             memory_update_entry,
             memory_delete_entry,

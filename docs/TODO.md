@@ -44,7 +44,7 @@ Demiurge 当前已经从 MVP 进入 Agent 能力打磨阶段。下面把现有 T
 
 ## P1 / 高杠杆 Agent 与工作流体验
 
-- [ ] **Goal 状态栏与控制**：显示当前 goal、状态、预算、pause/resume/continue/clear 控制，并让自动续写进度与可恢复状态更加透明。
+- [x] **Goal 状态栏与控制**：显示当前 goal、状态、预算、pause/resume/continue/clear 控制，并让自动续写进度与可恢复状态更加透明。
 - [ ] **进度与错误可见性**：细化 Web Search、长 workflow、Goal continuation 的 progress UI；改进 LLM、网络、工具错误展示，提供更友好的失败说明、重试按钮、错误 retry 线索和 source-quality hints。
 - [ ] **多 Agent 证据包强校验**：把 evidence packet 从提示词约束升级为 provider-level structured output / JSON Schema 校验；严格按自定义 Agent `handoff_format` 校验，并增加专门 judge/synthesizer 回合做多 reviewer 综合，而不只做确定性合并。
 - [ ] **Agent JSON 编辑器**：在 UI 中创建、编辑、校验 `.demiurge/agents/*.json`，提供示例模板、schema validation、导入/导出，以及更完整的 per-agent runtime statistics。

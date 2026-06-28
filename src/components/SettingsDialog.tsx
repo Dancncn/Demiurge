@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import * as api from "../lib/api";
 import type {
+  AgentEditorFile,
   AgentPanelState,
+  AgentValidationResult,
   ContextPanelState,
   MemoryPanelState,
   OcrDownloadProgress,
@@ -25,6 +27,7 @@ interface Props {
   agentPanel: AgentPanelState;
   onClose: () => void;
   onSave: (s: Settings) => void;
+  onAgentPanelChange: (state: AgentPanelState) => void;
 }
 
 type SettingsTab = "provider" | "media" | "web" | "files" | "context" | "tools" | "voice" | "advanced";
@@ -272,8 +275,23 @@ function ContextMetric({ label, value }: { label: string; value: number }) {
   );
 }
 
-export default function SettingsDialog({ open, settings, packs, agentPanel, onClose, onSave }: Props) {
+export default function SettingsDialog({
+  open,
+  settings,
+  packs,
+  agentPanel,
+  onClose,
+  onSave,
+  onAgentPanelChange,
+}: Props) {
   const [form, setForm] = useState<Settings>(settings);
+  const [agentState, setAgentState] = useState<AgentPanelState>(agentPanel);
+  const [agentFile, setAgentFile] = useState<AgentEditorFile | null>(null);
+  const [agentJson, setAgentJson] = useState("");
+  const [agentFileName, setAgentFileName] = useState("");
+  const [agentValidation, setAgentValidation] = useState<AgentValidationResult | null>(null);
+  const [agentBusy, setAgentBusy] = useState(false);
+  const [agentStatus, setAgentStatus] = useState("");
   const [activeTab, setActiveTab] = useState<SettingsTab>("provider");
   const [ocrStatus, setOcrStatus] = useState<OcrModelStatus | null>(null);
   const [ocrProgress, setOcrProgress] = useState<OcrDownloadProgress | null>(null);
@@ -292,10 +310,11 @@ export default function SettingsDialog({ open, settings, packs, agentPanel, onCl
   useEffect(() => {
     if (open) {
       setForm(settings);
+      setAgentState(agentPanel);
       setWebdavStatus("");
       setWebdavFiles([]);
     }
-  }, [open, settings]);
+  }, [open, settings, agentPanel]);
 
   useEffect(() => {
     if (!open) return;
@@ -390,6 +409,116 @@ export default function SettingsDialog({ open, settings, packs, agentPanel, onCl
       setPermissionState(await api.permissionResetRule(scope, tool));
     } finally {
       setPermissionBusy(false);
+    }
+  }
+
+  function setAgentPanelState(next: AgentPanelState) {
+    setAgentState(next);
+    onAgentPanelChange(next);
+  }
+
+  async function refreshAgents() {
+    setAgentBusy(true);
+    setAgentStatus("");
+    try {
+      const next = await api.agentPanelState();
+      setAgentPanelState(next);
+      setAgentStatus("Agent list refreshed.");
+    } catch (err) {
+      setAgentStatus(String(err));
+    } finally {
+      setAgentBusy(false);
+    }
+  }
+
+  async function newAgentTemplate() {
+    setAgentBusy(true);
+    setAgentStatus("");
+    try {
+      const raw = await api.agentTemplateJson();
+      setAgentFile(null);
+      setAgentFileName("researcher.json");
+      setAgentJson(raw);
+      setAgentValidation(await api.agentValidateJson(raw));
+      setAgentStatus("Template ready.");
+    } catch (err) {
+      setAgentStatus(String(err));
+    } finally {
+      setAgentBusy(false);
+    }
+  }
+
+  async function loadAgent(name: string) {
+    setAgentBusy(true);
+    setAgentStatus("");
+    try {
+      const file = await api.agentReadFile(name);
+      setAgentFile(file);
+      setAgentFileName(file.file_name);
+      setAgentJson(file.raw_json);
+      setAgentValidation(await api.agentValidateJson(file.raw_json));
+      setAgentStatus(`Loaded ${file.file_name}.`);
+    } catch (err) {
+      setAgentStatus(String(err));
+    } finally {
+      setAgentBusy(false);
+    }
+  }
+
+  async function validateAgentJson() {
+    setAgentBusy(true);
+    setAgentStatus("");
+    try {
+      const result = await api.agentValidateJson(agentJson);
+      setAgentValidation(result);
+      if (!agentFileName.trim()) setAgentFileName(result.suggested_file_name);
+      setAgentStatus(result.ok ? "Validation passed." : "Validation failed.");
+    } catch (err) {
+      setAgentStatus(String(err));
+    } finally {
+      setAgentBusy(false);
+    }
+  }
+
+  async function saveAgentJson() {
+    setAgentBusy(true);
+    setAgentStatus("");
+    try {
+      const validation = await api.agentValidateJson(agentJson);
+      setAgentValidation(validation);
+      if (!validation.ok) {
+        setAgentStatus("Fix validation errors before saving.");
+        return;
+      }
+      const next = await api.agentSaveFile(agentFileName || validation.suggested_file_name, agentJson);
+      setAgentPanelState(next);
+      setAgentFileName(agentFileName || validation.suggested_file_name);
+      setAgentStatus("Agent saved.");
+    } catch (err) {
+      setAgentStatus(String(err));
+    } finally {
+      setAgentBusy(false);
+    }
+  }
+
+  async function deleteAgentJson(name: string) {
+    if (!window.confirm(`Delete agent ${name}?`)) return;
+    setAgentBusy(true);
+    setAgentStatus("");
+    try {
+      const next = await api.agentDeleteFile(name);
+      setAgentPanelState(next);
+      if (agentFile?.name === name) {
+        setAgentFile(null);
+        setAgentJson("");
+        setAgentFileName("");
+        setAgentValidation(null);
+      }
+      setAgentStatus("Agent deleted.");
+    } catch (err) {
+      setAgentStatus(String(err));
+    } finally {
+      setAgentBusy(false);
     }
   }
 
@@ -1112,40 +1241,146 @@ export default function SettingsDialog({ open, settings, packs, agentPanel, onCl
                     </div>
                   </Section>
                   <Section title="Custom Agents" description="Agent definitions loaded from the project sandbox.">
-                    <div className="rounded-lg border border-[#e2e5ea] bg-[#fbfcfd] p-3">
-                      <div className="flex items-center justify-between gap-3">
+                    <div className="rounded-lg border border-[#e2e5ea] bg-[#fbfcfd]">
+                      <div className="flex items-center justify-between gap-3 border-b border-[#e8ebef] px-3 py-3">
                         <div className="min-w-0">
                           <div className="text-[13px] font-medium text-[#202124]">
-                            {agentPanel.definitions.length} definitions
+                            {agentState.definitions.length} definitions
                           </div>
                           <div className="mt-1 break-all text-[12px] text-[#7a8088]">
-                            {agentPanel.agents_dir || ".demiurge/agents"}
+                            {agentState.agents_dir || ".demiurge/agents"}
                           </div>
                         </div>
+                        <div className="flex shrink-0 gap-2">
+                          <button className={secondaryButtonCls} type="button" disabled={agentBusy} onClick={refreshAgents}>
+                            Refresh
+                          </button>
+                          <button className={secondaryButtonCls} type="button" disabled={agentBusy} onClick={newAgentTemplate}>
+                            New Template
+                          </button>
+                        </div>
                       </div>
-                      <div className="mt-3 grid gap-2">
-                        {agentPanel.definitions.length ? (
-                          agentPanel.definitions.slice(0, 6).map((agent) => (
-                            <div key={agent.name} className="rounded-md border border-[#e2e5ea] bg-white p-3">
-                              <div className="truncate text-[13px] font-semibold text-[#202124]">{agent.name}</div>
-                              <div className="mt-1 truncate text-[12px] text-[#7a8088]">
-                                {agent.kind} / {agent.description || agent.path}
+
+                      <div className="grid min-h-[360px] grid-cols-1 gap-0 md:grid-cols-[240px_1fr]">
+                        <div className="border-b border-[#e8ebef] p-2 md:border-b-0 md:border-r">
+                          <div className="max-h-[356px] space-y-1 overflow-y-auto">
+                            {agentState.definitions.length ? (
+                              agentState.definitions.map((agent) => {
+                                const selected = agentFile?.name === agent.name;
+                                return (
+                                  <button
+                                    key={agent.name}
+                                    type="button"
+                                    onClick={() => loadAgent(agent.name)}
+                                    className={`w-full rounded-md px-2.5 py-2 text-left transition hover:bg-white ${
+                                      selected ? "bg-white shadow-sm" : ""
+                                    }`}
+                                  >
+                                    <div className="truncate text-[13px] font-semibold text-[#202124]">{agent.name}</div>
+                                    <div className="mt-0.5 truncate text-[11px] text-[#7a8088]">
+                                      {agent.kind} / {agent.description || agent.path}
+                                    </div>
+                                    {agent.invalid_tools.length ? (
+                                      <div className="mt-0.5 truncate text-[11px] text-[#b42318]">
+                                        invalid: {agent.invalid_tools.join(", ")}
+                                      </div>
+                                    ) : null}
+                                  </button>
+                                );
+                              })
+                            ) : (
+                              <div className="rounded-md border border-dashed border-[#d8dde5] bg-white p-3 text-[12px] text-[#7a8088]">
+                                No custom agent definitions loaded.
                               </div>
-                              <div className="mt-1 truncate text-[12px] text-[#8a9099]">
-                                tools: {agent.allowed_tools.length ? agent.allowed_tools.join(", ") : "default"}
-                              </div>
-                              {agent.invalid_tools.length ? (
-                                <div className="mt-1 truncate text-[12px] text-[#b42318]">
-                                  invalid: {agent.invalid_tools.join(", ")}
-                                </div>
-                              ) : null}
-                            </div>
-                          ))
-                        ) : (
-                          <div className="rounded-md border border-dashed border-[#d8dde5] bg-white p-4 text-[12px] text-[#7a8088]">
-                            No custom agent definitions loaded.
+                            )}
                           </div>
-                        )}
+                        </div>
+
+                        <div className="min-w-0 p-3">
+                          <div className="grid gap-3 sm:grid-cols-[1fr_auto]">
+                            <Field label="File name">
+                              <input
+                                className={inputCls}
+                                value={agentFileName}
+                                placeholder="researcher.json"
+                                onChange={(e) => setAgentFileName(e.target.value)}
+                              />
+                            </Field>
+                            <div className="mt-[22px] flex gap-2">
+                              <button
+                                className={secondaryButtonCls}
+                                type="button"
+                                disabled={agentBusy || !agentJson.trim()}
+                                onClick={validateAgentJson}
+                              >
+                                Validate
+                              </button>
+                              <button
+                                className="inline-flex h-9 items-center justify-center rounded-md bg-[#111827] px-4 text-[12px] font-medium text-white transition hover:bg-[#2b3442] disabled:cursor-not-allowed disabled:bg-[#b8bec8]"
+                                type="button"
+                                disabled={agentBusy || !agentJson.trim()}
+                                onClick={saveAgentJson}
+                              >
+                                Save
+                              </button>
+                            </div>
+                          </div>
+
+                          <textarea
+                            className="mt-3 min-h-[230px] w-full resize-y rounded-md border border-[#d9d9d9] bg-white px-3 py-2 font-mono text-[12px] leading-5 text-[#202124] outline-none transition focus:border-[#7a7f87] focus:ring-2 focus:ring-[#202124]/5"
+                            value={agentJson}
+                            spellCheck={false}
+                            placeholder={'{\n  "name": "researcher"\n}'}
+                            onChange={(e) => {
+                              setAgentJson(e.target.value);
+                              setAgentValidation(null);
+                            }}
+                          />
+
+                          <div className="mt-3 flex flex-wrap items-center gap-2">
+                            {agentFile && (
+                              <button
+                                className={secondaryButtonCls}
+                                type="button"
+                                disabled={agentBusy}
+                                onClick={() => deleteAgentJson(agentFile.name)}
+                              >
+                                Delete
+                              </button>
+                            )}
+                            {agentFile?.path && (
+                              <span className="min-w-0 truncate text-[12px] text-[#7a8088]" title={agentFile.path}>
+                                {agentFile.path}
+                              </span>
+                            )}
+                            {agentStatus && <span className="text-[12px] text-[#59616d]">{agentStatus}</span>}
+                          </div>
+
+                          {agentValidation && (
+                            <div
+                              className={`mt-3 rounded-lg border p-3 text-[12px] leading-5 ${
+                                agentValidation.ok
+                                  ? "border-[#cfe8d8] bg-[#f3fbf6] text-[#286444]"
+                                  : "border-[#ffd7d7] bg-[#fff7f7] text-[#b42318]"
+                              }`}
+                            >
+                              <div className="font-semibold">
+                                {agentValidation.ok ? "Validation passed" : "Validation failed"}
+                              </div>
+                              {agentValidation.normalized_name && (
+                                <div>
+                                  {agentValidation.normalized_name} / {agentValidation.suggested_file_name}
+                                </div>
+                              )}
+                              {agentValidation.errors.map((error) => (
+                                <div key={error}>Error: {error}</div>
+                              ))}
+                              {agentValidation.warnings.map((warning) => (
+                                <div key={warning}>Warning: {warning}</div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
                       </div>
                     </div>
                   </Section>

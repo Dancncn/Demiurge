@@ -6,6 +6,8 @@ import type {
   AgentPanelState,
   ConfirmRequestEvent,
   DisplayItem,
+  GoalPanelState,
+  GoalProgressEvent,
   Message,
   PackManifest,
   PermissionScope,
@@ -15,6 +17,7 @@ import type {
 import { MessageList } from "./components/MessageList";
 import { Sidebar, type AppView } from "./components/Sidebar";
 import { Composer } from "./components/Composer";
+import GoalBar, { type GoalAction } from "./components/GoalBar";
 import ConfirmDialog from "./components/ConfirmDialog";
 import SettingsDialog from "./components/SettingsDialog";
 import WorkflowsPanel from "./components/WorkflowsPanel";
@@ -90,6 +93,8 @@ export default function App() {
   const [settings, setSettings] = useState<Settings | null>(null);
   const [packs, setPacks] = useState<PackManifest[]>([]);
   const [agentPanel, setAgentPanel] = useState<AgentPanelState>({ definitions: [], agents_dir: "" });
+  const [goalPanel, setGoalPanel] = useState<GoalPanelState | null>(null);
+  const [goalProgress, setGoalProgress] = useState<GoalProgressEvent | null>(null);
   const [selectedAgentNames, setSelectedAgentNames] = useState<string[]>([]);
   const [sessions, setSessions] = useState<SessionMeta[]>([]);
   const [activeId, setActiveId] = useState("");
@@ -135,16 +140,18 @@ export default function App() {
   useEffect(() => {
     (async () => {
       try {
-        const [s, ps, agents, list, hist] = await Promise.all([
+        const [s, ps, agents, goal, list, hist] = await Promise.all([
           api.getSettings(),
           api.listPacks(),
           api.agentPanelState(),
+          api.goalPanelState(),
           api.listSessions(),
           api.getHistory(),
         ]);
         setSettings(s);
         setPacks(ps);
         setAgentPanel(agents);
+        setGoalPanel(goal);
         setSessions(list.sessions);
         setActiveId(list.active);
         setItems(buildHistory(hist));
@@ -159,6 +166,14 @@ export default function App() {
       const list = await api.listSessions();
       setSessions(list.sessions);
       setActiveId(list.active);
+    } catch (e) {
+      console.error(e);
+    }
+  }
+
+  async function refreshGoalPanel() {
+    try {
+      setGoalPanel(await api.goalPanelState());
     } catch (e) {
       console.error(e);
     }
@@ -205,10 +220,12 @@ export default function App() {
           }
           curAssistantId.current = null;
           setBusy(false);
+          void refreshGoalPanel();
         },
         onAssistantInterrupted: () => {
           finalizeAssistant();
           setBusy(false);
+          void refreshGoalPanel();
         },
         onToolStart: (e) => {
           finalizeAssistant();
@@ -223,6 +240,7 @@ export default function App() {
               name: e.name,
               args: e.args,
               status: "running",
+              preview: e.preview,
               description: e.description,
               risk: e.risk,
               permission_effect: e.permission_effect,
@@ -235,13 +253,15 @@ export default function App() {
           setItems((p) =>
             p.map((it) =>
               it.kind === "tool" && (it.id === id || it.tool_call_id === e.tool_call_id)
-                ? { ...it, status: e.ok ? "done" : "denied", result: e.result }
+                ? { ...it, status: e.denied ? "denied" : e.ok ? "done" : "failed", result: e.result }
                 : it,
             ),
           );
         },
         onConfirmRequest: (e) => setConfirmReq(e),
         onGoalProgress: (e) => {
+          setGoalProgress(e);
+          void refreshGoalPanel();
           setItems((p) => [
             ...p,
             {
@@ -312,6 +332,7 @@ export default function App() {
     } finally {
       setBusy(false);
       void refreshSessions();
+      void refreshGoalPanel();
     }
     return true;
   }
@@ -324,6 +345,36 @@ export default function App() {
       await api.respondConfirm(id, allow, scope);
     } catch (e) {
       console.error("Failed to respond to confirmation", e);
+    }
+  }
+
+  async function handleGoalAction(action: GoalAction) {
+    if ((action === "resume" || action === "continue") && busy) return;
+    setGoalProgress(null);
+    if (action === "resume" || action === "continue") {
+      setActiveView("chat");
+      setBusy(true);
+    }
+    try {
+      const next =
+        action === "pause"
+          ? await api.goalPause()
+          : action === "resume"
+            ? await api.goalResume()
+            : action === "continue"
+              ? await api.goalContinue()
+              : await api.goalClear();
+      setGoalPanel(next);
+      await refreshSessions();
+    } catch (err) {
+      const nid = genId();
+      setItems((p) => [
+        ...p,
+        { id: nid, kind: "assistant", text: `Warning: ${String(err)}`, streaming: false, error: true },
+      ]);
+    } finally {
+      if (action === "resume" || action === "continue") setBusy(false);
+      void refreshGoalPanel();
     }
   }
 
@@ -341,7 +392,10 @@ export default function App() {
     }
     resetTurnRefs();
     setItems([]);
+    setGoalPanel(null);
+    setGoalProgress(null);
     await refreshSessions();
+    await refreshGoalPanel();
     requestAnimationFrame(() => textareaRef.current?.focus());
   }
 
@@ -350,6 +404,7 @@ export default function App() {
       const hist = await api.getHistory();
       resetTurnRefs();
       setItems(buildHistory(hist));
+      await refreshGoalPanel();
     } catch (e) {
       console.error(e);
     }
@@ -360,6 +415,7 @@ export default function App() {
     try {
       await api.selectSession(id);
       setActiveId(id);
+      setGoalProgress(null);
       await loadActiveHistory();
     } catch (e) {
       console.error(e);
@@ -383,6 +439,7 @@ export default function App() {
       await api.deleteSession(id);
       await refreshSessions();
       await loadActiveHistory();
+      setGoalProgress(null);
     } catch (e) {
       console.error(e);
     }
@@ -569,6 +626,8 @@ export default function App() {
                 </button>
               </header>
 
+              <GoalBar goal={goalPanel} busy={busy} progress={goalProgress} onAction={handleGoalAction} />
+
               <MessageList
                 items={items}
                 thinking={thinking}
@@ -612,6 +671,7 @@ export default function App() {
           agentPanel={agentPanel}
           onClose={() => setSettingsOpen(false)}
           onSave={handleSaveSettings}
+          onAgentPanelChange={setAgentPanel}
         />
       )}
     </main>

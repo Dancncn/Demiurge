@@ -66,7 +66,7 @@ const AssistantMessage = memo(function AssistantMessage({
               <button
                 type="button"
                 onClick={copy}
-                title="复制"
+                title="Copy"
                 className="grid h-8 w-8 place-items-center rounded-md transition hover:bg-[#eef1f5] hover:text-[#202124]"
               >
                 {copied ? <CheckIcon size={16} /> : <CopyIcon size={16} />}
@@ -135,6 +135,7 @@ export function MessageList({ items, thinking, greeting, suggestions, onSuggesti
                   args={item.args}
                   status={item.status}
                   result={item.result}
+                  preview={item.preview}
                   description={item.description}
                   risk={item.risk}
                 />
@@ -144,7 +145,7 @@ export function MessageList({ items, thinking, greeting, suggestions, onSuggesti
               <article className="cf-message-in flex justify-start">
                 <img src={AVATAR} alt="AI" className="mr-3 mt-0.5 size-7 shrink-0 rounded-md border border-[#dfe3e8] bg-white object-contain" />
                 <div className="py-1.5">
-                  <ThinkingDots label="正在思考…" />
+                  <ThinkingDots label="Thinking..." />
                 </div>
               </article>
             )}

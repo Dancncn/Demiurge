@@ -2,8 +2,11 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
   AgentPanelState,
+  AgentEditorFile,
+  AgentValidationResult,
   ConfirmRequestEvent,
   ContextPanelState,
+  GoalPanelState,
   GoalProgressEvent,
   ImageGenerationRequest,
   ImageGenerationResult,
@@ -41,6 +44,17 @@ export const permissionResetRule = (scope: PermissionScope, tool: string) =>
   invoke<PermissionPanelState>("permission_reset_rule", { scope, tool });
 export const listPacks = () => invoke<PackManifest[]>("list_packs");
 export const agentPanelState = () => invoke<AgentPanelState>("agent_panel_state");
+export const agentTemplateJson = () => invoke<string>("agent_template_json");
+export const agentValidateJson = (rawJson: string) => invoke<AgentValidationResult>("agent_validate_json", { rawJson });
+export const agentReadFile = (name: string) => invoke<AgentEditorFile>("agent_read_file", { name });
+export const agentSaveFile = (fileName: string, rawJson: string) =>
+  invoke<AgentPanelState>("agent_save_file", { fileName, rawJson });
+export const agentDeleteFile = (name: string) => invoke<AgentPanelState>("agent_delete_file", { name });
+export const goalPanelState = () => invoke<GoalPanelState | null>("goal_panel_state");
+export const goalPause = () => invoke<GoalPanelState | null>("goal_pause");
+export const goalResume = () => invoke<GoalPanelState | null>("goal_resume");
+export const goalContinue = () => invoke<GoalPanelState | null>("goal_continue");
+export const goalClear = () => invoke<GoalPanelState | null>("goal_clear");
 export const getHistory = () => invoke<Message[]>("get_history");
 export const contextPanelState = () => invoke<ContextPanelState>("context_panel_state");
 export const memoryPanelState = () => invoke<MemoryPanelState>("memory_panel_state");

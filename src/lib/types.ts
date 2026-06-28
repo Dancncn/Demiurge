@@ -218,6 +218,36 @@ export interface ContextPanelState {
   reserved_output_tokens: number;
 }
 
+export type GoalStatus =
+  | "active"
+  | "paused"
+  | "blocked"
+  | "budget_limited"
+  | "usage_limited"
+  | "max_turns"
+  | "complete";
+
+export interface GoalPanelState {
+  objective: string;
+  status: GoalStatus;
+  status_label: string;
+  token_budget: number | null;
+  tokens_used: number;
+  token_remaining: number | null;
+  elapsed: string;
+  elapsed_ms: number;
+  turns_executed: number;
+  max_turns: number;
+  blocked_attempts: number;
+  last_block_reason: string | null;
+  created_at: number;
+  updated_at: number;
+  can_pause: boolean;
+  can_resume: boolean;
+  can_continue: boolean;
+  can_clear: boolean;
+}
+
 export interface PackManifest {
   id: string;
   name: string;
@@ -250,6 +280,21 @@ export interface AgentDefinitionInfo {
 export interface AgentPanelState {
   definitions: AgentDefinitionInfo[];
   agents_dir: string;
+}
+
+export interface AgentEditorFile {
+  name: string;
+  file_name: string;
+  path: string;
+  raw_json: string;
+}
+
+export interface AgentValidationResult {
+  ok: boolean;
+  errors: string[];
+  warnings: string[];
+  normalized_name: string;
+  suggested_file_name: string;
 }
 
 export interface SessionMeta {
@@ -299,11 +344,13 @@ export interface ToolStartEvent {
   risk?: ToolRisk;
   permission_effect?: PermissionEffect;
   concurrency?: ToolConcurrency;
+  preview?: string;
 }
 export interface ToolEndEvent {
   tool_call_id: string;
   name: string;
   ok: boolean;
+  denied?: boolean;
   result: string;
 }
 export interface ConfirmRequestEvent {
@@ -337,8 +384,9 @@ export type DisplayItem =
       tool_call_id?: string;
       name: string;
       args: unknown;
-      status: "running" | "done" | "denied";
+      status: "running" | "done" | "denied" | "failed";
       result?: string;
+      preview?: string;
       description?: string;
       risk?: ToolRisk;
       permission_effect?: PermissionEffect;
