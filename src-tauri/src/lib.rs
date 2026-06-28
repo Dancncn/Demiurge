@@ -13,7 +13,8 @@ mod tools;
 mod voice;
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -120,14 +121,52 @@ struct ContextPanelState {
     assistant_messages: usize,
     tool_messages: usize,
     summary_chars: usize,
+    summary_tokens: usize,
     system_prompt_chars: usize,
     system_prompt_tokens: usize,
     estimated_history_tokens: usize,
     tools_tokens: usize,
     history_budget_tokens: usize,
+    history_remaining_tokens: usize,
+    history_over_budget_tokens: usize,
     max_input_tokens: usize,
     reserved_output_tokens: usize,
+    input_budget_used_tokens: usize,
+    input_budget_remaining_tokens: usize,
+    projected_total_tokens: usize,
+    prompt_section_tokens: usize,
+    budget_items: Vec<ContextBudgetItem>,
+    history_buckets: Vec<ContextHistoryBucket>,
+    memory_sources: Vec<ContextMemorySource>,
     prompt_sections: Vec<agent::prompt::PromptSectionReport>,
+}
+
+#[derive(Serialize)]
+struct ContextBudgetItem {
+    id: String,
+    label: String,
+    tokens: usize,
+    limit_tokens: Option<usize>,
+    detail: String,
+}
+
+#[derive(Serialize)]
+struct ContextHistoryBucket {
+    role: String,
+    label: String,
+    messages: usize,
+    tokens: usize,
+}
+
+#[derive(Serialize)]
+struct ContextMemorySource {
+    id: String,
+    label: String,
+    path: String,
+    exists: bool,
+    chars: usize,
+    tokens: usize,
+    entries: usize,
 }
 
 #[derive(Deserialize)]
@@ -830,6 +869,7 @@ fn context_panel_state(state: State<'_, AppState>) -> ContextPanelState {
     };
 
     let packs_dir = state.packs_dir.lock().unwrap().clone();
+    let sandbox_dir = state.sandbox_dir.lock().unwrap().clone();
     let persona_text = pack::load_pack(&packs_dir, &settings.current_pack)
         .map(|p| p.persona_text)
         .unwrap_or_default();
@@ -843,21 +883,233 @@ fn context_panel_state(state: State<'_, AppState>) -> ContextPanelState {
     };
     let budget =
         agent::budget::history_budget(&settings, &prompt_build.text, &tools_schema, &messages);
+    let summary_text = summary.as_deref().unwrap_or_default();
+    let summary_chars = summary_text.chars().count();
+    let summary_tokens = agent::budget::estimate_text_tokens(summary_text);
+    let prompt_section_tokens = prompt_build
+        .sections
+        .iter()
+        .map(|section| section.tokens)
+        .sum::<usize>();
+    let input_budget_used_tokens = budget
+        .system_tokens
+        .saturating_add(budget.tools_tokens)
+        .saturating_add(budget.history_tokens);
+    let input_budget_remaining_tokens = budget
+        .max_input_tokens
+        .saturating_sub(input_budget_used_tokens);
+    let projected_total_tokens = input_budget_used_tokens.saturating_add(budget.reserved_output_tokens);
+    let history_remaining_tokens = budget
+        .history_budget_tokens
+        .saturating_sub(budget.history_tokens);
+    let history_over_budget_tokens = budget
+        .history_tokens
+        .saturating_sub(budget.history_budget_tokens);
 
     ContextPanelState {
         message_count: messages.len(),
         user_messages: messages.iter().filter(|m| m.role == "user").count(),
         assistant_messages: messages.iter().filter(|m| m.role == "assistant").count(),
         tool_messages: messages.iter().filter(|m| m.role == "tool").count(),
-        summary_chars: summary.as_deref().unwrap_or_default().chars().count(),
+        summary_chars,
+        summary_tokens,
         system_prompt_chars: prompt_build.prompt_chars,
         system_prompt_tokens: budget.system_tokens,
         estimated_history_tokens: budget.history_tokens,
         tools_tokens: budget.tools_tokens,
         history_budget_tokens: budget.history_budget_tokens,
+        history_remaining_tokens,
+        history_over_budget_tokens,
         max_input_tokens: budget.max_input_tokens,
         reserved_output_tokens: budget.reserved_output_tokens,
+        input_budget_used_tokens,
+        input_budget_remaining_tokens,
+        projected_total_tokens,
+        prompt_section_tokens,
+        budget_items: context_budget_items(&budget),
+        history_buckets: context_history_buckets(&messages),
+        memory_sources: context_memory_sources(&sandbox_dir, &packs_dir, &settings.current_pack),
         prompt_sections: prompt_build.sections,
+    }
+}
+
+fn context_budget_items(budget: &agent::budget::ContextBudget) -> Vec<ContextBudgetItem> {
+    vec![
+        ContextBudgetItem {
+            id: "system".to_string(),
+            label: "System prompt".to_string(),
+            tokens: budget.system_tokens,
+            limit_tokens: Some(budget.max_input_tokens),
+            detail: "Packed persona, instructions, summary, memories, environment and safety sections.".to_string(),
+        },
+        ContextBudgetItem {
+            id: "tools".to_string(),
+            label: "Tool schemas".to_string(),
+            tokens: budget.tools_tokens,
+            limit_tokens: Some(budget.max_input_tokens),
+            detail: "Serialized tool definitions supplied to the provider.".to_string(),
+        },
+        ContextBudgetItem {
+            id: "history".to_string(),
+            label: "History".to_string(),
+            tokens: budget.history_tokens,
+            limit_tokens: Some(budget.history_budget_tokens),
+            detail: "Current session messages before token-aware trimming.".to_string(),
+        },
+        ContextBudgetItem {
+            id: "output_reserve".to_string(),
+            label: "Output reserve".to_string(),
+            tokens: budget.reserved_output_tokens,
+            limit_tokens: Some(budget.max_input_tokens),
+            detail: "Tokens reserved for the model response.".to_string(),
+        },
+    ]
+}
+
+fn context_history_buckets(messages: &[Message]) -> Vec<ContextHistoryBucket> {
+    let mut buckets = [
+        ("system", "System"),
+        ("user", "User"),
+        ("assistant", "Assistant"),
+        ("tool", "Tool"),
+        ("other", "Other"),
+    ]
+    .into_iter()
+    .map(|(role, label)| ContextHistoryBucket {
+        role: role.to_string(),
+        label: label.to_string(),
+        messages: 0,
+        tokens: 0,
+    })
+    .collect::<Vec<_>>();
+
+    for message in messages {
+        let idx = match message.role.as_str() {
+            "system" => 0,
+            "user" => 1,
+            "assistant" => 2,
+            "tool" => 3,
+            _ => 4,
+        };
+        buckets[idx].messages += 1;
+        buckets[idx].tokens = buckets[idx]
+            .tokens
+            .saturating_add(agent::budget::estimate_message_tokens(message));
+    }
+    buckets
+}
+
+fn context_memory_sources(
+    sandbox_dir: &Path,
+    packs_dir: &Path,
+    pack_id: &str,
+) -> Vec<ContextMemorySource> {
+    [
+        (
+            "project",
+            "Project memory",
+            sandbox_dir.join("memory.md"),
+        ),
+        (
+            "local",
+            "Local memory",
+            sandbox_dir.join(".demiurge").join("memory.md"),
+        ),
+        (
+            "pack",
+            "Pack memory",
+            packs_dir.join(pack_id).join("memory.md"),
+        ),
+    ]
+    .into_iter()
+    .map(|(id, label, path)| context_memory_source(id, label, &path))
+    .collect()
+}
+
+fn context_memory_source(id: &str, label: &str, path: &Path) -> ContextMemorySource {
+    let raw = fs::read_to_string(path).unwrap_or_default();
+    let exists = path.is_file();
+    let chars = raw.chars().count();
+    let tokens = agent::budget::estimate_text_tokens(&raw);
+    let entries = raw
+        .lines()
+        .filter(|line| line.trim_start().starts_with("- ["))
+        .count();
+    ContextMemorySource {
+        id: id.to_string(),
+        label: label.to_string(),
+        path: path.to_string_lossy().to_string(),
+        exists,
+        chars,
+        tokens,
+        entries,
+    }
+}
+
+#[cfg(test)]
+mod context_panel_tests {
+    use super::*;
+
+    #[test]
+    fn context_history_buckets_group_roles_and_tokens() {
+        let messages = vec![
+            Message::user("hello"),
+            Message::assistant_text("world"),
+            Message::tool_result("call_1", "read_file", "tool output"),
+        ];
+        let buckets = context_history_buckets(&messages);
+
+        let user = buckets.iter().find(|bucket| bucket.role == "user").unwrap();
+        assert_eq!(user.messages, 1);
+        assert!(user.tokens > 0);
+
+        let assistant = buckets
+            .iter()
+            .find(|bucket| bucket.role == "assistant")
+            .unwrap();
+        assert_eq!(assistant.messages, 1);
+        assert!(assistant.tokens > 0);
+
+        let tool = buckets.iter().find(|bucket| bucket.role == "tool").unwrap();
+        assert_eq!(tool.messages, 1);
+        assert!(tool.tokens > 0);
+    }
+
+    #[test]
+    fn context_memory_sources_report_existing_memory_files() {
+        let root = std::env::temp_dir().join(format!(
+            "demiurge_context_panel_{}",
+            crate::store::now_millis()
+        ));
+        let packs = root.join("packs");
+        let sandbox = root.join("sandbox");
+        let pack = packs.join("default");
+        fs::create_dir_all(sandbox.join(".demiurge")).unwrap();
+        fs::create_dir_all(&pack).unwrap();
+        fs::write(sandbox.join("memory.md"), "- [project] remember this\n").unwrap();
+        fs::write(
+            sandbox.join(".demiurge").join("memory.md"),
+            "- [user] local preference\n- [project] local fact\n",
+        )
+        .unwrap();
+        fs::write(pack.join("memory.md"), "pack note").unwrap();
+
+        let sources = context_memory_sources(&sandbox, &packs, "default");
+
+        let project = sources.iter().find(|source| source.id == "project").unwrap();
+        assert!(project.exists);
+        assert_eq!(project.entries, 1);
+        assert!(project.tokens > 0);
+
+        let local = sources.iter().find(|source| source.id == "local").unwrap();
+        assert!(local.exists);
+        assert_eq!(local.entries, 2);
+
+        let pack = sources.iter().find(|source| source.id == "pack").unwrap();
+        assert!(pack.exists);
+        assert_eq!(pack.entries, 0);
+
+        let _ = fs::remove_dir_all(root);
     }
 }
 

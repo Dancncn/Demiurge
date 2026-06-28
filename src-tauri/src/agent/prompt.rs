@@ -28,6 +28,8 @@ pub struct PromptSectionReport {
     pub title: String,
     pub priority: u8,
     pub chars: usize,
+    pub original_chars: usize,
+    pub tokens: usize,
     pub included: bool,
     pub truncated: bool,
 }
@@ -175,12 +177,15 @@ fn assemble_drafts(base: &str, drafts: Vec<SectionDraft>, max_context_chars: usi
     let mut reports = Vec::with_capacity(drafts.len());
     for (idx, draft) in drafts.iter().enumerate() {
         if let Some(decision) = &decisions[idx] {
+            let chars = char_count(&decision.body);
             push_section(&mut out, draft.title, &decision.body);
             reports.push(PromptSectionReport {
                 id: draft.id.to_string(),
                 title: draft.title.to_string(),
                 priority: draft.priority,
-                chars: char_count(&decision.body),
+                chars,
+                original_chars: char_count(draft.body.trim()),
+                tokens: super::budget::estimate_text_tokens(&decision.body),
                 included: true,
                 truncated: decision.truncated,
             });
@@ -190,6 +195,8 @@ fn assemble_drafts(base: &str, drafts: Vec<SectionDraft>, max_context_chars: usi
                 title: draft.title.to_string(),
                 priority: draft.priority,
                 chars: 0,
+                original_chars: char_count(draft.body.trim()),
+                tokens: 0,
                 included: false,
                 truncated: false,
             });
