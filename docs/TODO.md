@@ -6,6 +6,7 @@ Demiurge 当前已经从 MVP 进入 Agent 能力打磨阶段。下面把现有 T
 
 - [x] **桌面应用骨架**：Tauri + Rust 后端、React 前端、会话 UI、设置页、工具卡片、确认弹窗。
 - [x] **流式 Agent Loop**：模型流式输出、工具调用、工具结果回填、多轮循环、用户中断。
+- [x] **Session Engine 成熟化**：后端集中 turn runtime state、入口互斥、中断状态和最近回合记录；`TurnEventEmitter` 同时发送 legacy assistant/tool 事件与统一 `agent-event`；`SessionTurnStore` 收敛会话写入和持久化；前端 busy/cancel 状态由 `session-engine-updated` 驱动。
 - [x] **Provider Adapter**：OpenAI-compatible、local、Anthropic、Gemini。
 - [x] **Provider Capability Profile 2.0 first slice**：集中 provider capability flags、tool schema dialect、structured output 能力标记和 provider body-builder gating。
 - [x] **工具注册表**：统一 metadata、JSON Schema、权限策略、并发属性和输出属性。
@@ -41,7 +42,7 @@ Demiurge 当前已经从 MVP 进入 Agent 能力打磨阶段。下面把现有 T
 - [x] **Provider Capability Profile 2.0**：在 first slice 基础上完成 prompt caching、thinking、parallel tool calls、max token 差异、structured output/schema dialect、provider-specific token budgets 的统一建模，并把 runner/budget 层切到 profile helper。
 - [ ] **Workflow durable run**：把 live run 从进程内状态升级为跨进程 durable background execution，能够在应用重启后恢复真实 run 状态、取消状态、预算状态和进度，而不只是生成 resume overlay。
 - [ ] **Shell / 进程隔离加强**：从 policy-level 约束推进到 OS-level process isolation；补齐平台 sandbox、可视化 allowlist/denylist、联网/依赖安装/外部执行策略，并深测 macOS/Linux 跨平台安全策略。
-- [ ] **Session Engine 成熟化**：引入或继续拆分 Session Engine，覆盖 turn management、多 tool-call loop、状态、取消、重试、错误、前端事件、store decoupling、React transcript/tool event rendering 与 Rust backend event stream。
+- [x] **Session Engine 成熟化**：引入或继续拆分 Session Engine，覆盖 turn management、多 tool-call loop、状态、取消、重试、错误、前端事件、store decoupling、React transcript/tool event rendering 与 Rust backend event stream。
 
 ## P1 / 高杠杆 Agent 与工作流体验
 
