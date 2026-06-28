@@ -3,9 +3,10 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use super::web_common::{
-    cap_chars_with_flag as cap_chars_with_flag_common, cap_chars_with_marker, clean_plain_text,
-    clean_plain_text_preserve_lines, env_first, extract_title, html_to_text, looks_like_html,
-    parse_choice, parse_json_payloads, parse_optional_choice, title_from_url, SOURCE_REMINDER_EN,
+    append_source_lines, cap_chars_with_flag as cap_chars_with_flag_common, cap_chars_with_marker,
+    clean_plain_text, clean_plain_text_preserve_lines, env_first, extract_title, html_to_text,
+    looks_like_html, parse_choice, parse_json_payloads, parse_optional_choice, title_from_url,
+    WebSource, SOURCE_REMINDER_EN,
 };
 
 const DEFAULT_CONTEXT_MAX_CHARS: usize = 20_000;
@@ -227,16 +228,17 @@ fn collect_document_fields(
 
 fn format_document(doc: &FetchDocument, context_max: usize) -> String {
     let mut out = format!(
-        "Web fetch result\n\nTitle: {}\nURL: {}\nSource adapter: {}\nTruncated: {}\n\nContent:\n{}\n\nSources:\n- [{}]({})\n\n{}",
+        "Web fetch result\n\nTitle: {}\nURL: {}\nSource adapter: {}\nTruncated: {}\n\nContent:\n{}\n\nSources:\n",
         doc.title,
         doc.url,
         doc.source,
         doc.truncated,
         doc.content,
-        doc.title,
-        doc.url,
-        SOURCE_REMINDER_EN,
     );
+    let sources = [WebSource::new(doc.title.clone(), doc.url.clone(), None)];
+    append_source_lines(&mut out, &sources, false, None);
+    out.push('\n');
+    out.push_str(SOURCE_REMINDER_EN);
     out = cap_chars(out, context_max.saturating_add(600));
     out
 }

@@ -6,6 +6,70 @@ pub(super) const SOURCE_REMINDER_EN: &str =
 pub(super) const SOURCE_REMINDER_ZH: &str =
     "REMINDER: 如果你回答用户问题时使用了联网信息，必须在回答末尾用 markdown 链接列出 Sources。";
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct WebSource {
+    pub title: String,
+    pub url: String,
+    pub snippet: Option<String>,
+}
+
+impl WebSource {
+    pub(super) fn new(title: String, url: String, snippet: Option<String>) -> Self {
+        Self {
+            title,
+            url,
+            snippet,
+        }
+    }
+}
+
+pub(super) fn push_web_source(
+    out: &mut Vec<WebSource>,
+    title: Option<&str>,
+    url: Option<&str>,
+    snippet: Option<String>,
+) {
+    let Some(url) = url.map(clean_extracted_url).filter(|s| is_http_url(s)) else {
+        return;
+    };
+    let title = title
+        .map(clean_plain_text)
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| title_from_url(&url));
+    let snippet = snippet
+        .map(|s| clean_plain_text(&s))
+        .filter(|s| !s.is_empty());
+    out.push(WebSource::new(title, url, snippet));
+}
+
+pub(super) fn dedupe_sources_by_url(sources: &mut Vec<WebSource>) {
+    let mut seen = std::collections::HashSet::new();
+    sources.retain(|source| seen.insert(source.url.clone()));
+}
+
+pub(super) fn append_source_lines(
+    out: &mut String,
+    sources: &[WebSource],
+    numbered: bool,
+    max_chars: Option<usize>,
+) {
+    for (idx, source) in sources.iter().enumerate() {
+        if numbered {
+            out.push_str(&format!("{}. [{}]({})", idx + 1, source.title, source.url));
+        } else {
+            out.push_str(&format!("- [{}]({})", source.title, source.url));
+        }
+        if let Some(snippet) = &source.snippet {
+            out.push_str(": ");
+            out.push_str(snippet);
+        }
+        out.push('\n');
+        if max_chars.is_some_and(|max| out.chars().count() >= max) {
+            break;
+        }
+    }
+}
+
 pub(super) fn parse_choice<'a>(
     value: Option<&str>,
     field: &str,
@@ -271,5 +335,21 @@ data: [DONE]
         assert!(domain_matches("docs.example.com", "example.com"));
         assert!(domain_matches("www.example.com", "https://example.com/"));
         assert!(!domain_matches("badexample.com", "example.com"));
+    }
+
+    #[test]
+    fn formats_source_lines_consistently() {
+        let sources = vec![WebSource::new(
+            "Example".into(),
+            "https://example.com".into(),
+            Some("Snippet".into()),
+        )];
+        let mut numbered = String::new();
+        append_source_lines(&mut numbered, &sources, true, None);
+        assert_eq!(numbered, "1. [Example](https://example.com): Snippet\n");
+
+        let mut bullets = String::new();
+        append_source_lines(&mut bullets, &sources, false, None);
+        assert_eq!(bullets, "- [Example](https://example.com): Snippet\n");
     }
 }

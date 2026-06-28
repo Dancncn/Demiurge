@@ -5,10 +5,10 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use super::web_common::{
-    cap_chars_with_marker, clean_extracted_url, clean_html_inline, clean_plain_text,
-    collect_text_segments, decode_html_entities, domain_matches, env_first, is_http_url,
-    normalize_domain_list, parse_json_payloads, parse_optional_choice, title_from_url,
-    SOURCE_REMINDER_EN, SOURCE_REMINDER_ZH,
+    append_source_lines, cap_chars_with_marker, clean_html_inline, collect_text_segments,
+    decode_html_entities, dedupe_sources_by_url, domain_matches, env_first, normalize_domain_list,
+    parse_json_payloads, parse_optional_choice, push_web_source, WebSource, SOURCE_REMINDER_EN,
+    SOURCE_REMINDER_ZH,
 };
 
 const DEFAULT_NUM_RESULTS: usize = 8;
@@ -30,12 +30,7 @@ struct Args {
     search_type: Option<String>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct SearchResult {
-    title: String,
-    url: String,
-    snippet: Option<String>,
-}
+type SearchResult = WebSource;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Adapter {
@@ -119,7 +114,7 @@ pub async fn run(state: &crate::AppState, args: Value) -> Result<String, String>
     };
 
     results = filter_domains(results, allowed, blocked);
-    dedupe_by_url(&mut results);
+    dedupe_sources_by_url(&mut results);
     results.truncate(limit);
 
     Ok(format_results(query, &results, context_max))
@@ -352,11 +347,7 @@ fn extract_bing_results(html: &str) -> Vec<SearchResult> {
             .map(|m| clean_html_inline(m.as_str()))
             .filter(|s| !s.is_empty());
 
-        results.push(SearchResult {
-            title,
-            url,
-            snippet,
-        });
+        results.push(SearchResult::new(title, url, snippet));
     }
     results
 }
@@ -365,14 +356,15 @@ fn extract_duckduckgo_results(v: &Value) -> Vec<SearchResult> {
     let mut results = Vec::new();
     if let (Some(title), Some(url)) = (v["Heading"].as_str(), v["AbstractURL"].as_str()) {
         if !title.is_empty() && !url.is_empty() {
-            results.push(SearchResult {
-                title: title.to_string(),
-                url: url.to_string(),
-                snippet: v["AbstractText"]
+            push_web_source(
+                &mut results,
+                Some(title),
+                Some(url),
+                v["AbstractText"]
                     .as_str()
                     .filter(|s| !s.is_empty())
                     .map(|s| s.to_string()),
-            });
+            );
         }
     }
     if let Some(items) = v["RelatedTopics"].as_array() {
@@ -387,11 +379,7 @@ fn collect_duckduckgo_topic(it: &Value, out: &mut Vec<SearchResult>) {
     if let (Some(text), Some(url)) = (it["Text"].as_str(), it["FirstURL"].as_str()) {
         if !text.is_empty() && !url.is_empty() {
             let (title, snippet) = split_duckduckgo_text(text);
-            out.push(SearchResult {
-                title,
-                url: url.to_string(),
-                snippet,
-            });
+            push_web_source(out, Some(&title), Some(url), snippet);
             return;
         }
     }
@@ -444,7 +432,7 @@ fn extract_exa_results(raw: &str) -> Result<Vec<SearchResult>, String> {
             }
         }
     }
-    dedupe_by_url(&mut results);
+    dedupe_sources_by_url(&mut results);
     Ok(results)
 }
 
@@ -502,30 +490,7 @@ fn push_result_from_value(v: &Value, out: &mut Vec<SearchResult>) {
             "raw_content",
         ],
     );
-    push_result(out, title, url, snippet);
-}
-
-fn push_result(
-    out: &mut Vec<SearchResult>,
-    title: Option<&str>,
-    url: Option<&str>,
-    snippet: Option<String>,
-) {
-    let Some(url) = url.map(clean_extracted_url).filter(|s| is_http_url(s)) else {
-        return;
-    };
-    let title = title
-        .map(clean_plain_text)
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| title_from_url(&url));
-    let snippet = snippet
-        .map(|s| clean_plain_text(&s))
-        .filter(|s| !s.is_empty());
-    out.push(SearchResult {
-        title,
-        url,
-        snippet,
-    });
+    push_web_source(out, title, url, snippet);
 }
 
 fn first_str<'a>(v: &'a Value, keys: &[&str]) -> Option<&'a str> {
@@ -562,7 +527,7 @@ fn extract_results_from_text(text: &str) -> Vec<SearchResult> {
     let md_re =
         Regex::new(r#"\[([^\]\n]{1,200})\]\((https?://[^\s\)]+)\)(?::\s*([^\n]+))?"#).unwrap();
     for cap in md_re.captures_iter(text) {
-        push_result(
+        push_web_source(
             &mut results,
             cap.get(1).map(|m| m.as_str()),
             cap.get(2).map(|m| m.as_str()),
@@ -577,7 +542,7 @@ fn extract_results_from_text(text: &str) -> Vec<SearchResult> {
         let trimmed = line.trim();
         if let Some(value) = strip_label(trimmed, &["title"]) {
             if url.is_some() {
-                push_result(
+                push_web_source(
                     &mut results,
                     title.as_deref(),
                     url.as_deref(),
@@ -589,7 +554,7 @@ fn extract_results_from_text(text: &str) -> Vec<SearchResult> {
             title = Some(value.to_string());
         } else if let Some(value) = strip_label(trimmed, &["url", "link"]) {
             if url.is_some() {
-                push_result(
+                push_web_source(
                     &mut results,
                     title.as_deref(),
                     url.as_deref(),
@@ -605,7 +570,7 @@ fn extract_results_from_text(text: &str) -> Vec<SearchResult> {
         }
     }
     if url.is_some() {
-        push_result(
+        push_web_source(
             &mut results,
             title.as_deref(),
             url.as_deref(),
@@ -615,9 +580,9 @@ fn extract_results_from_text(text: &str) -> Vec<SearchResult> {
 
     let url_re = Regex::new(r#"https?://[^\s\)\]\}>,]+"#).unwrap();
     for cap in url_re.captures_iter(text) {
-        push_result(&mut results, None, cap.get(0).map(|m| m.as_str()), None);
+        push_web_source(&mut results, None, cap.get(0).map(|m| m.as_str()), None);
     }
-    dedupe_by_url(&mut results);
+    dedupe_sources_by_url(&mut results);
     results
 }
 
@@ -691,11 +656,6 @@ fn filter_domains(
         .collect()
 }
 
-fn dedupe_by_url(results: &mut Vec<SearchResult>) {
-    let mut seen = std::collections::HashSet::new();
-    results.retain(|r| seen.insert(r.url.clone()));
-}
-
 fn format_results(query: &str, results: &[SearchResult], context_max: usize) -> String {
     if results.is_empty() {
         return format!(
@@ -705,17 +665,7 @@ fn format_results(query: &str, results: &[SearchResult], context_max: usize) -> 
     }
 
     let mut out = format!("Web search results for query: \"{query}\"\n\nLinks:\n");
-    for (idx, result) in results.iter().enumerate() {
-        out.push_str(&format!("{}. [{}]({})", idx + 1, result.title, result.url));
-        if let Some(snippet) = &result.snippet {
-            out.push_str(": ");
-            out.push_str(snippet);
-        }
-        out.push('\n');
-        if out.chars().count() >= context_max {
-            break;
-        }
-    }
+    append_source_lines(&mut out, results, true, Some(context_max));
     out.push('\n');
     out.push_str(SOURCE_REMINDER_EN);
     cap_chars(out, context_max)
