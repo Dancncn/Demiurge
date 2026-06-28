@@ -182,6 +182,25 @@ pub fn hydrate_persisted_runs(state: &crate::AppState) {
     runs.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
 }
 
+pub fn resume_overlay(state: &crate::AppState, run_id: &str) -> Result<String, String> {
+    match workflow_journal::resume_overlay(state, run_id) {
+        Ok(overlay) => Ok(overlay),
+        Err(journal_err) => {
+            let sandbox = state.sandbox_dir.lock().unwrap().clone();
+            let Some(run) = read_run_state_in_root(&sandbox, run_id) else {
+                return Err(journal_err);
+            };
+            let snapshot = serde_json::to_string_pretty(&run)
+                .map_err(|e| format!("序列化 workflow state 失败：{e}"))?;
+            Ok(format!(
+                "你正在恢复 Ultracode workflow run `{run_id}`。\n\
+                 该 run 没有可读取的 journal tail，但找到了 durable state snapshot。请先根据 snapshot 复盘已完成事项、未完成事项和下一步，然后继续执行；不要重复已经完成的安全操作。\n\n\
+                 ```json\n{snapshot}\n```"
+            ))
+        }
+    }
+}
+
 pub fn list_definitions(state: &crate::AppState) -> Vec<WorkflowDefinitionInfo> {
     let Ok(dir) = ensure_dir(state) else {
         return Vec::new();
@@ -767,6 +786,11 @@ fn list_persisted_run_states(state: &crate::AppState) -> Vec<WorkflowRunProgress
     list_run_states_in_root(&sandbox)
 }
 
+fn read_run_state_in_root(root: &Path, run_id: &str) -> Option<WorkflowRunProgress> {
+    read_run_state_file(&workflow_journal::run_dir(root, run_id).join(RUN_STATE_FILE))
+        .map(normalize_restored_run)
+}
+
 fn list_run_states_in_root(root: &Path) -> Vec<WorkflowRunProgress> {
     let runs_dir = root.join(workflow_journal::JOURNAL_DIR);
     let Ok(entries) = fs::read_dir(runs_dir) else {
@@ -989,6 +1013,48 @@ mod tests {
             .as_deref()
             .unwrap_or_default()
             .contains("no live task"));
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn resume_overlay_falls_back_to_state_snapshot() {
+        let root = std::env::temp_dir().join(format!(
+            "demiurge_workflow_resume_state_{}",
+            store::new_session_id()
+        ));
+        let state = crate::AppState::new(reqwest::Client::new());
+        *state.sandbox_dir.lock().unwrap() = root.clone();
+        let run = WorkflowRunProgress {
+            run_id: "wf_resume_state".to_string(),
+            name: "resume-state".to_string(),
+            status: WorkflowStatus::Failed,
+            cancel_requested: false,
+            current_phase: Some("verify".to_string()),
+            agents: Vec::new(),
+            logs: vec!["failed at verify".to_string()],
+            journal_path: workflow_journal::run_dir(&root, "wf_resume_state")
+                .join("journal.jsonl")
+                .to_string_lossy()
+                .to_string(),
+            started_at: 10,
+            updated_at: 20,
+            error: Some("verification failed".to_string()),
+            budget: budget::TokenBudgetState {
+                total: Some(100),
+                used_exact: 30,
+                used_estimated: 0,
+            },
+            steps_total: 5,
+            steps_done: 3,
+        };
+        write_run_state_in_root(&root, &run).unwrap();
+
+        let overlay = resume_overlay(&state, "wf_resume_state").unwrap();
+
+        assert!(overlay.contains("durable state snapshot"));
+        assert!(overlay.contains("wf_resume_state"));
+        assert!(overlay.contains("\"steps_done\": 3"));
 
         let _ = std::fs::remove_dir_all(root);
     }

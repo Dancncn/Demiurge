@@ -17,6 +17,8 @@ function statusLabel(status: WorkflowStatus) {
   switch (status) {
     case "running":
       return "running";
+    case "stale_running":
+      return "stale";
     case "done":
       return "done";
     case "failed":
@@ -32,6 +34,8 @@ function statusClass(status: WorkflowStatus) {
   switch (status) {
     case "running":
       return "bg-[#D77757]";
+    case "stale_running":
+      return "bg-[#b7791f]";
     case "done":
       return "bg-[#2f9e44]";
     case "failed":
@@ -228,6 +232,7 @@ function RunDetail({
   const doneAgents = run.agents.filter((agent) => agent.status === "done").length;
   const runningAgents = run.agents.filter((agent) => agent.status === "running").length;
   const failedAgents = run.agents.filter((agent) => agent.status === "failed").length;
+  const isStale = run.status === "stale_running";
   const progressPct = run.steps_total
     ? Math.round((run.steps_done / run.steps_total) * 100)
     : run.agents.length
@@ -235,7 +240,7 @@ function RunDetail({
       : run.status === "done"
         ? 100
         : 0;
-  const canRetry = run.status === "failed" || run.status === "killed";
+  const canRetry = run.status === "failed" || run.status === "killed" || isStale;
   return (
     <div className="space-y-5">
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -275,23 +280,33 @@ function RunDetail({
             }}
             className="h-9 rounded-lg bg-[#242226] px-3 text-sm font-medium text-white transition hover:bg-[#343139] disabled:opacity-50"
           >
-            Resume
+            {isStale ? "Resume in chat" : "Resume"}
           </button>
         </div>
       </div>
 
-      {run.error && (
+      {run.error && !isStale && (
         <div className="rounded-lg border border-[#f1b8b8] bg-[#fff1f1] px-3 py-2 text-sm text-[#9f1d1d]">
           <div className="font-medium">Workflow stopped with an error</div>
           <div className="mt-1 whitespace-pre-wrap text-xs">{run.error}</div>
         </div>
       )}
 
-      <div className="grid gap-3 sm:grid-cols-5">
+      {isStale && (
+        <div className="rounded-lg border border-[#efcf91] bg-[#fff8e8] px-3 py-2 text-sm text-[#7a5311]">
+          <div className="font-medium">Restored from durable state</div>
+          <div className="mt-1 text-xs">
+            This run was active in a previous process. Its progress, budget, and cancellation state were restored, but no live task is attached.
+          </div>
+        </div>
+      )}
+
+      <div className="grid gap-3 sm:grid-cols-6">
         <Metric label="Phase" value={run.current_phase || "-"} />
         <Metric label="Steps" value={run.steps_total ? `${run.steps_done}/${run.steps_total}` : "-"} />
         <Metric label="Agents" value={`${doneAgents}/${run.agents.length}`} />
         <Metric label="Token budget" value={budgetLabel(run.budget)} />
+        <Metric label="Cancel" value={run.cancel_requested ? "requested" : "-"} />
         <Metric label="Updated" value={String(run.updated_at)} />
       </div>
 
@@ -303,7 +318,13 @@ function RunDetail({
         <div className="h-2 overflow-hidden rounded-full bg-[#f0edf2]">
           <div
             className={`h-full rounded-full transition-all ${
-              run.status === "failed" ? "bg-[#d64545]" : run.status === "killed" ? "bg-[#8a8a8a]" : "bg-[#2f9e44]"
+              run.status === "failed"
+                ? "bg-[#d64545]"
+                : run.status === "killed"
+                  ? "bg-[#8a8a8a]"
+                  : run.status === "stale_running"
+                    ? "bg-[#b7791f]"
+                    : "bg-[#2f9e44]"
             }`}
             style={{ width: `${progressPct}%` }}
           />

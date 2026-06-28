@@ -210,7 +210,7 @@ export interface VoiceStatus {
   reason: string;
 }
 
-export type WorkflowStatus = "running" | "done" | "failed" | "killed" | "journaled";
+export type WorkflowStatus = "running" | "stale_running" | "done" | "failed" | "killed" | "journaled";
 
 export interface WorkflowDefinitionInfo {
   name: string;
@@ -237,6 +237,7 @@ export interface WorkflowRunProgress {
   run_id: string;
   name: string;
   status: WorkflowStatus;
+  cancel_requested: boolean;
   current_phase?: string;
   agents: WorkflowAgentProgress[];
   logs: string[];

@@ -218,15 +218,35 @@ async fn send(app: AppHandle, state: State<'_, AppState>, text: String) -> Resul
         }
     } else if trimmed == "/workflows" {
         should_drive_goal = true;
-        let runs = agent::workflow_journal::list(st);
+        let runs = agent::workflow_runtime::panel_state(st).runs;
         let body = if runs.is_empty() {
-            "暂无 workflow journal。使用 /ultracode <任务> 会自动创建 run。".to_string()
+            "暂无 workflow run。使用 /ultracode <任务> 或 Workflows 面板会自动创建 run。".to_string()
         } else {
             let mut out = String::from("Workflow runs:\n");
             for run in runs.iter().take(20) {
+                let status = match run.status {
+                    agent::workflow_runtime::WorkflowStatus::Running => "running",
+                    agent::workflow_runtime::WorkflowStatus::StaleRunning => "stale_running",
+                    agent::workflow_runtime::WorkflowStatus::Done => "done",
+                    agent::workflow_runtime::WorkflowStatus::Failed => "failed",
+                    agent::workflow_runtime::WorkflowStatus::Killed => "killed",
+                    agent::workflow_runtime::WorkflowStatus::Journaled => "journaled",
+                };
+                let budget = run
+                    .budget
+                    .total
+                    .map(|total| format!(" budget={}/{}", run.budget.used_total(), total))
+                    .unwrap_or_default();
                 out.push_str(&format!(
-                    "- `{}` updated_at={} journal={}\n",
-                    run.run_id, run.updated_at, run.journal_path
+                    "- `{}` status={} steps={}/{} agents={}{} updated_at={} journal={}\n",
+                    run.run_id,
+                    status,
+                    run.steps_done,
+                    run.steps_total,
+                    run.agents.len(),
+                    budget,
+                    run.updated_at,
+                    run.journal_path
                 ));
             }
             out
@@ -238,7 +258,7 @@ async fn send(app: AppHandle, state: State<'_, AppState>, text: String) -> Resul
             .trim_start_matches("/workflow resume ")
             .trim()
             .to_string();
-        let overlay = agent::workflow_journal::resume_overlay(st, &run_id)?;
+        let overlay = agent::workflow_runtime::resume_overlay(st, &run_id)?;
         should_drive_goal = true;
         agent::run_turn_with_options(
             &app,
