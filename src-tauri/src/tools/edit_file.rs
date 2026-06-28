@@ -584,6 +584,7 @@ mod tests {
                 HashMap::<String, oneshot::Sender<PermissionResponse>>::new(),
             ),
             session_permission_rules: Mutex::new(HashMap::<String, PermissionRule>::new()),
+            plan_state: Mutex::new(crate::PlanState::default()),
             edit_undo_stack: Mutex::new(Vec::new()),
             workflow_runs: Mutex::new(Vec::new()),
             workflow_cancels: Mutex::new(HashMap::new()),

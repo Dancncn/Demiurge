@@ -8,7 +8,9 @@ import type {
   DisplayItem,
   Message,
   PackManifest,
+  PermissionMode,
   PermissionScope,
+  PlanState,
   SessionMeta,
   Settings,
 } from "./lib/types";
@@ -30,6 +32,13 @@ const SUGGESTIONS = [
 ];
 
 const DEFAULT_WINDOW_SIZE = { width: 1811, height: 1213 };
+
+const PERMISSION_MODE_LABELS: Record<PermissionMode, string> = {
+  plan: "Plan",
+  default: "Default",
+  auto: "Auto",
+  bypass: "Bypass",
+};
 
 function buildHistory(msgs: Message[]): DisplayItem[] {
   const out: DisplayItem[] = [];
@@ -100,6 +109,7 @@ export default function App() {
   const [agentMenuOpen, setAgentMenuOpen] = useState(false);
   const [workflowsOpen, setWorkflowsOpen] = useState(false);
   const [confirmReq, setConfirmReq] = useState<ConfirmRequestEvent | null>(null);
+  const [planState, setPlanState] = useState<PlanState>({ active: false, approved: false });
 
   const seq = useRef(0);
   const genId = () => `it_${++seq.current}`;
@@ -135,12 +145,13 @@ export default function App() {
   useEffect(() => {
     (async () => {
       try {
-        const [s, ps, agents, list, hist] = await Promise.all([
+        const [s, ps, agents, list, hist, plan] = await Promise.all([
           api.getSettings(),
           api.listPacks(),
           api.agentPanelState(),
           api.listSessions(),
           api.getHistory(),
+          api.planState(),
         ]);
         setSettings(s);
         setPacks(ps);
@@ -148,6 +159,7 @@ export default function App() {
         setSessions(list.sessions);
         setActiveId(list.active);
         setItems(buildHistory(hist));
+        setPlanState(plan);
       } catch (e) {
         console.error("Failed to initialize Demiurge", e);
       }
@@ -261,9 +273,24 @@ export default function App() {
         else un = u;
       });
 
+    let unPlan: UnlistenFn | undefined;
+    let unMode: UnlistenFn | undefined;
+    api.listenPlanUpdated(setPlanState).then((u) => {
+      if (disposed) u();
+      else unPlan = u;
+    });
+    api.listenPermissionModeUpdated((mode) => {
+      setSettings((prev) => (prev ? { ...prev, permission_mode: mode } : prev));
+    }).then((u) => {
+      if (disposed) u();
+      else unMode = u;
+    });
+
     return () => {
       disposed = true;
       un?.();
+      unPlan?.();
+      unMode?.();
     };
   }, []);
 
@@ -407,6 +434,35 @@ export default function App() {
       await api.saveSettings(next);
     } catch (e) {
       console.error(e);
+    }
+  }
+
+
+  async function handleSetPermissionMode(mode: PermissionMode) {
+    try {
+      const next = await api.setPermissionMode(mode);
+      setSettings(next);
+      setPlanState(await api.planState());
+    } catch (e) {
+      console.error("Failed to set permission mode", e);
+    }
+  }
+
+  async function handleApprovePlan() {
+    try {
+      setPlanState(await api.approvePlan());
+      const next = await api.getSettings();
+      setSettings(next);
+    } catch (e) {
+      console.error("Failed to approve plan", e);
+    }
+  }
+
+  async function handleRejectPlan() {
+    try {
+      setPlanState(await api.rejectPlan());
+    } catch (e) {
+      console.error("Failed to reject plan", e);
     }
   }
 
@@ -559,10 +615,45 @@ export default function App() {
                   <span>{busy ? "Processing current turn" : "Ready"}</span>
                 </div>
 
+
+                <div className="ml-auto flex items-center gap-2">
+                  <select
+                    value={settings?.permission_mode ?? "default"}
+                    onChange={(e) => void handleSetPermissionMode(e.target.value as PermissionMode)}
+                    className={`h-8 rounded-md border px-2 text-xs font-medium outline-none transition ${
+                      settings?.permission_mode === "bypass"
+                        ? "border-[#f4b4b4] bg-[#fff0f0] text-[#b42318]"
+                        : settings?.permission_mode === "plan"
+                          ? "border-[#b8d4ff] bg-[#eef5ff] text-[#0b57d0]"
+                          : "border-[#dfe3e8] bg-white text-[#4f5661]"
+                    }`}
+                    title="Permission mode"
+                  >
+                    {(Object.keys(PERMISSION_MODE_LABELS) as PermissionMode[]).map((mode) => (
+                      <option key={mode} value={mode}>
+                        {PERMISSION_MODE_LABELS[mode]}
+                      </option>
+                    ))}
+                  </select>
+                  {planState.path && !planState.approved && (
+                    <div className="hidden items-center gap-1 rounded-md border border-[#b8d4ff] bg-[#eef5ff] px-2 py-1 text-xs text-[#0b57d0] lg:flex">
+                      <span className="max-w-[18vw] truncate" title={planState.path}>
+                        Plan ready: {planState.path}
+                      </span>
+                      <button className="rounded bg-[#0b57d0] px-2 py-1 text-white" onClick={() => void handleApprovePlan()}>
+                        Approve
+                      </button>
+                      <button className="rounded px-2 py-1 text-[#5f6368] hover:bg-white" onClick={() => void handleRejectPlan()}>
+                        Reject
+                      </button>
+                    </div>
+                  )}
+                </div>
+
                 <button
                   onClick={() => setWorkflowsOpen(true)}
                   title="Workflows"
-                  className="ml-auto inline-flex h-8 shrink-0 items-center gap-2 rounded-md px-2.5 text-[12px] font-medium text-[#4f5661] transition hover:bg-[#eef1f5]"
+                  className="inline-flex h-8 shrink-0 items-center gap-2 rounded-md px-2.5 text-[12px] font-medium text-[#4f5661] transition hover:bg-[#eef1f5]"
                 >
                   <WrenchIcon size={17} />
                   <span className="hidden sm:inline">Workflows</span>
@@ -603,7 +694,7 @@ export default function App() {
         onClose={() => setWorkflowsOpen(false)}
         onResume={(command) => void handleSend(command)}
       />
-      <ConfirmDialog req={confirmReq} onRespond={handleRespondConfirm} />
+      <ConfirmDialog req={confirmReq} mode={settings?.permission_mode ?? "default"} onRespond={handleRespondConfirm} />
       {settings && (
         <SettingsDialog
           open={settingsOpen}

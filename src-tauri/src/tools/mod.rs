@@ -24,6 +24,7 @@ mod web_fetch;
 mod web_search;
 mod worktree;
 mod write_file;
+mod write_plan;
 
 pub use edit_file::EditUndoEntry;
 
@@ -110,6 +111,7 @@ pub const CORE_TOOL_NAMES: &[&str] = &[
     "grep",
     "git_status",
     "shell",
+    "write_plan",
     "write_file",
     "edit_file",
     "multi_edit",
@@ -235,6 +237,21 @@ pub fn registry() -> Vec<ToolDefinition> {
                     "isolation": { "type": "string", "enum": ["standard", "strict"], "description": "可选：进程隔离策略。standard 为默认轻量隔离；strict 强制清空环境、缩短默认超时，并拒绝联网/依赖安装/破坏性/提权/外部执行类命令。" }
                 },
                 "required": ["command"]
+            }),
+        },
+        ToolDefinition {
+            name: "write_plan",
+            description: "在 Plan Mode 中写入当前实施计划文件。只能写入沙盒 .demiurge/plans/ 下的 Markdown 计划。",
+            risk: ToolRisk::Mutating,
+            concurrency: ToolConcurrency::SerialOnly,
+            permission: PermissionPolicy::ask("会创建一份计划文件，等待用户批准后才进入执行阶段。"),
+            output_policy: ToolOutputPolicy::Inline,
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "content": { "type": "string", "description": "完整 Markdown 实施计划内容" }
+                },
+                "required": ["content"]
             }),
         },
         ToolDefinition {
@@ -708,6 +725,7 @@ pub async fn execute(state: &crate::AppState, name: &str, args: Value) -> Result
         "grep" => grep::run(state, args),
         "git_status" => git_status::run(state, args),
         "shell" => shell::run(state, args),
+        "write_plan" => write_plan::run(state, args),
         "write_file" => write_file::run(state, args),
         "edit_file" => edit_file::run(state, args),
         "multi_edit" => edit_file::multi_run(state, args),
@@ -786,6 +804,7 @@ pub fn permission_summary(name: &str, args: &Value) -> String {
                 )
             }
         }
+        "write_plan" => "将写入 Plan Mode 实施计划文件，等待用户批准。".to_string(),
         "write_file" => {
             let path = str_arg("path");
             format!("将创建或覆盖沙盒内文件：{path}")

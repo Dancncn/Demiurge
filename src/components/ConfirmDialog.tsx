@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
-import type { ConfirmRequestEvent, PermissionScope, ToolRisk } from "../lib/types";
+import type { ConfirmRequestEvent, PermissionMode, PermissionScope, ToolRisk } from "../lib/types";
 
 interface Props {
   req: ConfirmRequestEvent | null;
+  mode: PermissionMode;
   onRespond: (allow: boolean, scope: PermissionScope) => void;
 }
 
@@ -21,7 +22,7 @@ function riskLabel(risk?: ToolRisk) {
   }
 }
 
-export default function ConfirmDialog({ req, onRespond }: Props) {
+export default function ConfirmDialog({ req, mode, onRespond }: Props) {
   const [scope, setScope] = useState<PermissionScope>("once");
 
   useEffect(() => {
@@ -44,6 +45,10 @@ export default function ConfirmDialog({ req, onRespond }: Props) {
               {req.summary}
             </div>
           )}
+          <div>
+            <span className="text-[#9a9a9a]">权限模式：</span>
+            {mode}
+          </div>
           <div>
             <span className="text-[#9a9a9a]">风险：</span>
             {riskLabel(req.risk)}

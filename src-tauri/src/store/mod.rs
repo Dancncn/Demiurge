@@ -28,6 +28,10 @@ fn default_provider() -> ProviderKind {
     ProviderKind::DeepSeek
 }
 
+fn default_permission_mode() -> PermissionMode {
+    PermissionMode::Default
+}
+
 fn default_max_context_chars() -> usize {
     DEFAULT_MAX_CONTEXT_CHARS
 }
@@ -90,6 +94,15 @@ fn default_tts_voice() -> String {
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+pub enum PermissionMode {
+    Plan,
+    Default,
+    Auto,
+    Bypass,
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
 pub enum ProviderKind {
     #[serde(rename = "deepseek")]
     DeepSeek,
@@ -117,6 +130,8 @@ pub enum ProviderKind {
 pub struct Settings {
     #[serde(default = "default_provider")]
     pub provider: ProviderKind,
+    #[serde(default = "default_permission_mode")]
+    pub permission_mode: PermissionMode,
     pub base_url: String,
     pub api_key: String,
     pub model: String,
@@ -179,6 +194,7 @@ impl Default for Settings {
     fn default() -> Self {
         Settings {
             provider: ProviderKind::DeepSeek,
+            permission_mode: PermissionMode::Default,
             // 默认 DeepSeek（OpenAI 兼容）。换 LM Studio 等本地端点只改 base_url + model。
             base_url: "https://api.deepseek.com/v1".to_string(),
             api_key: String::new(),
@@ -368,6 +384,7 @@ mod tests {
         }"#;
         let settings = serde_json::from_str::<Settings>(json).unwrap();
         assert_eq!(settings.provider, ProviderKind::DeepSeek);
+        assert_eq!(settings.permission_mode, PermissionMode::Default);
         assert!(!settings.voice_enabled);
         assert_eq!(settings.voice_stt_backend, "none");
         assert_eq!(settings.voice_tts_backend, "none");
