@@ -15,7 +15,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use serde::Serialize;
+use regex::Regex;
+use serde::{Deserialize, Serialize};
+use serde_json::json;
 use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::sync::oneshot;
 
@@ -92,6 +94,21 @@ struct ContextPanelState {
     estimated_history_tokens: usize,
     max_input_tokens: usize,
     reserved_output_tokens: usize,
+}
+
+#[derive(Deserialize)]
+struct WebDavConfig {
+    url: String,
+    username: String,
+    password: String,
+    path: String,
+}
+
+#[derive(Serialize)]
+struct WebDavBackupFile {
+    file_name: String,
+    modified_time: String,
+    size: u64,
 }
 
 fn session_list(store: &SessionStore) -> SessionList {
@@ -291,9 +308,83 @@ fn get_settings(state: State<'_, AppState>) -> Settings {
 fn save_settings(state: State<'_, AppState>, settings: Settings) -> Result<(), String> {
     credentials::save_api_key(&settings.api_key)?;
     credentials::save_web_search_api_keys(&settings)?;
+    credentials::save_webdav_password(&settings.webdav_password)?;
     *state.settings.lock().unwrap() = settings.clone();
     let dir = state.data_dir.lock().unwrap().clone();
     store::save_settings(&dir, &settings)
+}
+
+#[tauri::command]
+async fn webdav_check_connection(
+    state: State<'_, AppState>,
+    config: WebDavConfig,
+) -> Result<String, String> {
+    webdav_ensure_collection(&state.http, &config).await?;
+    Ok("Connected".to_string())
+}
+
+#[tauri::command]
+async fn webdav_backup_now(
+    state: State<'_, AppState>,
+    config: WebDavConfig,
+) -> Result<String, String> {
+    let client = state.http.clone();
+    webdav_ensure_collection(&client, &config).await?;
+
+    let mut settings = state.settings.lock().unwrap().clone();
+    settings.api_key.clear();
+    settings.tavily_api_key.clear();
+    settings.brave_search_api_key.clear();
+    settings.exa_api_key.clear();
+    settings.webdav_password.clear();
+    let sessions = state.sessions.lock().unwrap().clone();
+    let payload = json!({
+        "app": "Demiurge",
+        "version": env!("CARGO_PKG_VERSION"),
+        "exported_at": store::now_millis(),
+        "settings": settings,
+        "sessions": sessions,
+    });
+    let body = serde_json::to_vec_pretty(&payload).map_err(|e| format!("序列化备份失败：{e}"))?;
+    let file_name = format!("demiurge-backup-{}.json", store::now_millis());
+    let url = webdav_file_url(&config, &file_name)?;
+    let resp = webdav_auth(client.put(url), &config)
+        .header("Content-Type", "application/json")
+        .body(body)
+        .send()
+        .await
+        .map_err(|e| format!("上传 WebDAV 备份失败：{e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("上传 WebDAV 备份失败：HTTP {}", resp.status()));
+    }
+    Ok(file_name)
+}
+
+#[tauri::command]
+async fn webdav_list_backups(
+    state: State<'_, AppState>,
+    config: WebDavConfig,
+) -> Result<Vec<WebDavBackupFile>, String> {
+    let body = webdav_propfind(&state.http, &config, true).await?;
+    Ok(parse_webdav_backup_files(&body))
+}
+
+#[tauri::command]
+async fn webdav_delete_backup(
+    state: State<'_, AppState>,
+    config: WebDavConfig,
+    file_name: String,
+) -> Result<(), String> {
+    validate_backup_file_name(&file_name)?;
+    let url = webdav_file_url(&config, &file_name)?;
+    let resp = webdav_auth(state.http.delete(url), &config)
+        .send()
+        .await
+        .map_err(|e| format!("删除 WebDAV 备份失败：{e}"))?;
+    if resp.status().is_success() || resp.status().as_u16() == 404 {
+        return Ok(());
+    }
+    Err(format!("删除 WebDAV 备份失败：HTTP {}", resp.status()))
 }
 
 #[tauri::command]
@@ -476,6 +567,181 @@ fn open_sandbox(state: State<'_, AppState>) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn ocr_image_bytes(state: State<'_, AppState>, bytes: Vec<u8>) -> Result<String, String> {
+    let img = image::load_from_memory(&bytes)
+        .map_err(|e| format!("读取图片失败：{e}"))?
+        .to_rgba8();
+    ocr::recognize_rgba(state.inner(), img).map(|frame| frame.text)
+}
+
+fn webdav_auth(
+    req: reqwest::RequestBuilder,
+    config: &WebDavConfig,
+) -> reqwest::RequestBuilder {
+    let username = config.username.trim();
+    if username.is_empty() {
+        req
+    } else {
+        req.basic_auth(username.to_string(), Some(config.password.clone()))
+    }
+}
+
+fn webdav_collection_url(config: &WebDavConfig) -> Result<String, String> {
+    let base = config.url.trim().trim_end_matches('/');
+    if !(base.starts_with("http://") || base.starts_with("https://")) {
+        return Err("WebDAV URL must start with http:// or https://.".to_string());
+    }
+    let path = config.path.trim().trim_matches('/');
+    if path.is_empty() {
+        Ok(format!("{base}/"))
+    } else {
+        Ok(format!("{base}/{path}/"))
+    }
+}
+
+fn webdav_file_url(config: &WebDavConfig, file_name: &str) -> Result<String, String> {
+    validate_backup_file_name(file_name)?;
+    Ok(format!("{}{}", webdav_collection_url(config)?, file_name))
+}
+
+fn validate_backup_file_name(file_name: &str) -> Result<(), String> {
+    let valid = file_name.starts_with("demiurge-backup-")
+        && file_name.ends_with(".json")
+        && !file_name.contains('/')
+        && !file_name.contains('\\')
+        && !file_name.contains("..");
+    if valid {
+        Ok(())
+    } else {
+        Err("Invalid backup file name.".to_string())
+    }
+}
+
+async fn webdav_propfind(
+    client: &reqwest::Client,
+    config: &WebDavConfig,
+    depth_one: bool,
+) -> Result<String, String> {
+    let method = reqwest::Method::from_bytes(b"PROPFIND").map_err(|e| e.to_string())?;
+    let resp = webdav_auth(client.request(method, webdav_collection_url(config)?), config)
+        .header("Depth", if depth_one { "1" } else { "0" })
+        .header("Content-Type", "application/xml")
+        .body(
+            r#"<?xml version="1.0" encoding="utf-8" ?>
+<propfind xmlns="DAV:">
+  <prop>
+    <displayname />
+    <getcontentlength />
+    <getlastmodified />
+    <resourcetype />
+  </prop>
+</propfind>"#,
+        )
+        .send()
+        .await
+        .map_err(|e| format!("WebDAV PROPFIND 失败：{e}"))?;
+    let status = resp.status();
+    let body = resp.text().await.unwrap_or_default();
+    if status.is_success() || status.as_u16() == 207 {
+        Ok(body)
+    } else {
+        Err(format!("WebDAV PROPFIND 失败：HTTP {status}"))
+    }
+}
+
+async fn webdav_ensure_collection(
+    client: &reqwest::Client,
+    config: &WebDavConfig,
+) -> Result<(), String> {
+    if webdav_propfind(client, config, false).await.is_ok() {
+        return Ok(());
+    }
+    let method = reqwest::Method::from_bytes(b"MKCOL").map_err(|e| e.to_string())?;
+    let resp = webdav_auth(client.request(method, webdav_collection_url(config)?), config)
+        .send()
+        .await
+        .map_err(|e| format!("创建 WebDAV 目录失败：{e}"))?;
+    if resp.status().is_success() || resp.status().as_u16() == 405 {
+        Ok(())
+    } else {
+        Err(format!("创建 WebDAV 目录失败：HTTP {}", resp.status()))
+    }
+}
+
+fn parse_webdav_backup_files(body: &str) -> Vec<WebDavBackupFile> {
+    let response_re = Regex::new(r"(?is)<[^:>/]*:?response\b[^>]*>.*?</[^:>/]*:?response>")
+        .expect("valid WebDAV response regex");
+    let href_re =
+        Regex::new(r"(?is)<[^:>/]*:?href[^>]*>(.*?)</[^:>/]*:?href>").expect("valid href regex");
+    let modified_re = Regex::new(
+        r"(?is)<[^:>/]*:?getlastmodified[^>]*>(.*?)</[^:>/]*:?getlastmodified>",
+    )
+    .expect("valid modified regex");
+    let size_re =
+        Regex::new(r"(?is)<[^:>/]*:?getcontentlength[^>]*>(.*?)</[^:>/]*:?getcontentlength>")
+            .expect("valid size regex");
+
+    let mut files = Vec::new();
+    for response in response_re.find_iter(body).map(|m| m.as_str()) {
+        let Some(href) = href_re
+            .captures(response)
+            .and_then(|c| c.get(1))
+            .map(|m| xml_unescape(m.as_str()))
+        else {
+            continue;
+        };
+        let file_name = percent_decode(href.trim_end_matches('/').rsplit('/').next().unwrap_or(""));
+        if validate_backup_file_name(&file_name).is_err() {
+            continue;
+        }
+        let modified_time = modified_re
+            .captures(response)
+            .and_then(|c| c.get(1))
+            .map(|m| xml_unescape(m.as_str()))
+            .unwrap_or_default();
+        let size = size_re
+            .captures(response)
+            .and_then(|c| c.get(1))
+            .and_then(|m| m.as_str().trim().parse::<u64>().ok())
+            .unwrap_or(0);
+        files.push(WebDavBackupFile {
+            file_name,
+            modified_time,
+            size,
+        });
+    }
+    files.sort_by(|a, b| b.file_name.cmp(&a.file_name));
+    files
+}
+
+fn xml_unescape(value: &str) -> String {
+    value
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&apos;", "'")
+        .replace("&amp;", "&")
+}
+
+fn percent_decode(value: &str) -> String {
+    let bytes = value.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            if let Ok(hex) = u8::from_str_radix(&value[i + 1..i + 3], 16) {
+                out.push(hex);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).to_string()
+}
+
+#[tauri::command]
 fn ocr_model_status(state: State<'_, AppState>) -> ocr::OcrModelStatus {
     ocr::model_status(state.inner())
 }
@@ -555,6 +821,10 @@ pub fn run() {
             respond_confirm,
             get_settings,
             save_settings,
+            webdav_check_connection,
+            webdav_backup_now,
+            webdav_list_backups,
+            webdav_delete_backup,
             permission_panel_state,
             permission_reset_rule,
             list_packs,
@@ -571,6 +841,7 @@ pub fn run() {
             delete_session,
             rename_session,
             open_sandbox,
+            ocr_image_bytes,
             ocr_model_status,
             ocr_download_models,
             workflow_panel_state,

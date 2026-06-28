@@ -5,6 +5,7 @@ import rehypeHighlight from "rehype-highlight";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import { CheckIcon, CopyIcon } from "./Icons";
+import { MermaidBlock } from "./MermaidBlock";
 
 function extractText(node: ReactNode): string {
   if (typeof node === "string" || typeof node === "number") return String(node);
@@ -29,6 +30,10 @@ function CodeBlock({ children }: ComponentPropsWithoutRef<"pre">) {
   const match = /language-(\w+)/.exec(codeClassName);
   const label = match ? match[1] : "code";
   const code = extractText(codeChildren).replace(/\n$/, "");
+
+  if (label.toLowerCase() === "mermaid") {
+    return <MermaidBlock chart={code} />;
+  }
 
   async function copyCode() {
     try {

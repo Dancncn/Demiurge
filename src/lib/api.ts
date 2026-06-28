@@ -17,6 +17,8 @@ import type {
   Settings,
   ToolEndEvent,
   ToolStartEvent,
+  WebDavBackupFile,
+  WebDavConfig,
   VoiceStatus,
   WorkflowPanelState,
 } from "./types";
@@ -43,6 +45,13 @@ export const memoryUpdateEntry = (id: string, kind: string, text: string) =>
 export const memoryDeleteEntry = (id: string) => invoke<MemoryPanelState>("memory_delete_entry", { id });
 export const memoryDedupeApply = () => invoke<MemoryPanelState>("memory_dedupe_apply");
 export const openSandbox = () => invoke<void>("open_sandbox");
+export const webdavCheckConnection = (config: WebDavConfig) =>
+  invoke<string>("webdav_check_connection", { config });
+export const webdavBackupNow = (config: WebDavConfig) => invoke<string>("webdav_backup_now", { config });
+export const webdavListBackups = (config: WebDavConfig) =>
+  invoke<WebDavBackupFile[]>("webdav_list_backups", { config });
+export const webdavDeleteBackup = (config: WebDavConfig, fileName: string) =>
+  invoke<void>("webdav_delete_backup", { config, fileName });
 
 // 会话管理
 export const listSessions = () => invoke<SessionList>("list_sessions");
@@ -59,6 +68,7 @@ export const voiceSynthesize = (text: string, voiceId?: string) =>
   invoke<string>("voice_synthesize", { text, voiceId });
 
 export const ocrModelStatus = () => invoke<OcrModelStatus>("ocr_model_status");
+export const ocrImageBytes = (bytes: number[]) => invoke<string>("ocr_image_bytes", { bytes });
 export const ocrDownloadModels = (source: OcrModelSource) =>
   invoke<OcrModelStatus>("ocr_download_models", { source });
 export const listenOcrDownloadProgress = (handler: (e: OcrDownloadProgress) => void) =>

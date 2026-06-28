@@ -3,9 +3,8 @@ import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import { fileURLToPath, URL } from "node:url";
 
-// 与 tauri.conf.json 的 devUrl 对齐
-const DEV_PORT = 1420;
-const host = process.env.TAURI_DEV_HOST;
+const DEV_PORT = Number(process.env.DEMIURGE_DEV_PORT ?? process.env.PORT ?? 38741);
+const host = process.env.TAURI_DEV_HOST || process.env.DEMIURGE_DEV_HOST || "127.0.0.1";
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
@@ -17,8 +16,8 @@ export default defineConfig({
   server: {
     port: DEV_PORT,
     strictPort: true,
-    host: host || false,
-    hmr: host ? { protocol: "ws", host, port: DEV_PORT + 1 } : undefined,
+    host,
+    hmr: process.env.TAURI_DEV_HOST ? { protocol: "ws", host, port: DEV_PORT } : undefined,
     watch: {
       ignored: ["**/src-tauri/**"],
     },

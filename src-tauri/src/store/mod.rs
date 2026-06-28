@@ -20,6 +20,10 @@ fn default_web_search_provider() -> String {
     "auto".to_string()
 }
 
+fn default_webdav_path() -> String {
+    "Demiurge".to_string()
+}
+
 fn default_provider() -> ProviderKind {
     ProviderKind::OpenAiCompatible
 }
@@ -107,6 +111,16 @@ pub struct Settings {
     pub brave_search_api_key: String,
     #[serde(default)]
     pub exa_api_key: String,
+    #[serde(default)]
+    pub webdav_enabled: bool,
+    #[serde(default)]
+    pub webdav_url: String,
+    #[serde(default)]
+    pub webdav_username: String,
+    #[serde(default)]
+    pub webdav_password: String,
+    #[serde(default = "default_webdav_path")]
+    pub webdav_path: String,
 }
 
 impl Default for Settings {
@@ -132,6 +146,11 @@ impl Default for Settings {
             tavily_api_key: String::new(),
             brave_search_api_key: String::new(),
             exa_api_key: String::new(),
+            webdav_enabled: false,
+            webdav_url: String::new(),
+            webdav_username: String::new(),
+            webdav_password: String::new(),
+            webdav_path: default_webdav_path(),
         }
     }
 }
@@ -228,6 +247,7 @@ pub fn save_settings(dir: &Path, s: &Settings) -> Result<(), String> {
     safe.tavily_api_key.clear();
     safe.brave_search_api_key.clear();
     safe.exa_api_key.clear();
+    safe.webdav_password.clear();
     let json = serde_json::to_string_pretty(&safe).map_err(|e| e.to_string())?;
     fs::write(&p, json).map_err(|e| e.to_string())
 }
@@ -323,6 +343,7 @@ mod tests {
         assert!(saved.tavily_api_key.is_empty());
         assert!(saved.brave_search_api_key.is_empty());
         assert!(saved.exa_api_key.is_empty());
+        assert!(saved.webdav_password.is_empty());
 
         let _ = std::fs::remove_dir_all(&dir);
     }

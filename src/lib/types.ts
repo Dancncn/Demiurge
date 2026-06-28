@@ -40,6 +40,24 @@ export interface Settings {
   tavily_api_key: string;
   brave_search_api_key: string;
   exa_api_key: string;
+  webdav_enabled: boolean;
+  webdav_url: string;
+  webdav_username: string;
+  webdav_password: string;
+  webdav_path: string;
+}
+
+export interface WebDavConfig {
+  url: string;
+  username: string;
+  password: string;
+  path: string;
+}
+
+export interface WebDavBackupFile {
+  file_name: string;
+  modified_time: string;
+  size: number;
 }
 
 export type OcrModelSource = "modelscope" | "huggingface";
