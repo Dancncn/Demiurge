@@ -4,6 +4,13 @@ use regex::Regex;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
+use super::web_common::{
+    cap_chars_with_marker, clean_extracted_url, clean_html_inline, clean_plain_text,
+    collect_text_segments, decode_html_entities, domain_matches, env_first, is_http_url,
+    normalize_domain_list, parse_json_payloads, parse_optional_choice, title_from_url,
+    SOURCE_REMINDER_EN, SOURCE_REMINDER_ZH,
+};
+
 const DEFAULT_NUM_RESULTS: usize = 8;
 const MAX_NUM_RESULTS: usize = 20;
 const DEFAULT_CONTEXT_MAX_CHARS: usize = 10_000;
@@ -333,7 +340,7 @@ fn extract_bing_results(html: &str) -> Vec<SearchResult> {
         };
         let title = link
             .get(2)
-            .map(|m| clean_html_text(m.as_str()))
+            .map(|m| clean_html_inline(m.as_str()))
             .unwrap_or_default();
         if title.is_empty() {
             continue;
@@ -342,7 +349,7 @@ fn extract_bing_results(html: &str) -> Vec<SearchResult> {
             .iter()
             .find_map(|re| re.captures(block))
             .and_then(|cap| cap.get(1))
-            .map(|m| clean_html_text(m.as_str()))
+            .map(|m| clean_html_inline(m.as_str()))
             .filter(|s| !s.is_empty());
 
         results.push(SearchResult {
@@ -550,64 +557,6 @@ fn first_text(v: &Value, keys: &[&str]) -> Option<String> {
     None
 }
 
-fn parse_json_payloads(raw: &str) -> Vec<Value> {
-    let trimmed = raw.trim();
-    if let Ok(v) = serde_json::from_str::<Value>(trimmed) {
-        return vec![v];
-    }
-
-    let mut values = Vec::new();
-    for line in raw.lines() {
-        let line = line.trim_start();
-        let Some(data) = line.strip_prefix("data:") else {
-            continue;
-        };
-        let data = data.trim();
-        if data.is_empty() || data == "[DONE]" {
-            continue;
-        }
-        if let Ok(v) = serde_json::from_str::<Value>(data) {
-            values.push(v);
-        }
-    }
-    values
-}
-
-fn collect_text_segments(v: &Value) -> Vec<String> {
-    let mut out = Vec::new();
-    collect_text_segments_inner(v, &mut out, 0);
-    out
-}
-
-fn collect_text_segments_inner(v: &Value, out: &mut Vec<String>, depth: usize) {
-    if depth > 8 {
-        return;
-    }
-    match v {
-        Value::Array(items) => {
-            for item in items {
-                collect_text_segments_inner(item, out, depth + 1);
-            }
-        }
-        Value::Object(map) => {
-            for (key, value) in map {
-                let key = key.to_ascii_lowercase();
-                if matches!(
-                    key.as_str(),
-                    "text" | "content" | "markdown" | "answer" | "result"
-                ) {
-                    if let Some(s) = value.as_str().filter(|s| s.contains("http")) {
-                        out.push(s.to_string());
-                    }
-                }
-                collect_text_segments_inner(value, out, depth + 1);
-            }
-        }
-        Value::String(s) if s.contains("http") && s.len() > 20 => out.push(s.to_string()),
-        _ => {}
-    }
-}
-
 fn extract_results_from_text(text: &str) -> Vec<SearchResult> {
     let mut results = Vec::new();
     let md_re =
@@ -682,23 +631,6 @@ fn strip_label<'a>(line: &'a str, labels: &[&str]) -> Option<&'a str> {
     }
 }
 
-fn parse_optional_choice<'a>(
-    value: Option<&str>,
-    field: &str,
-    allowed: &'a [&'a str],
-) -> Result<Option<&'a str>, String> {
-    let Some(value) = value.map(str::trim).filter(|v| !v.is_empty()) else {
-        return Ok(None);
-    };
-    let value = value.to_ascii_lowercase();
-    allowed
-        .iter()
-        .copied()
-        .find(|candidate| *candidate == value)
-        .map(Some)
-        .ok_or_else(|| format!("{field} 只支持：{}", allowed.join(", ")))
-}
-
 fn non_empty(value: &str) -> Option<&str> {
     let value = value.trim();
     if value.is_empty() || value.eq_ignore_ascii_case("auto") {
@@ -734,58 +666,6 @@ fn exa_api_key(state: &crate::AppState) -> Option<String> {
     settings_secret(state, |s| &s.exa_api_key).or_else(|| env_first(&["EXA_API_KEY"]))
 }
 
-fn env_first(keys: &[&str]) -> Option<String> {
-    keys.iter()
-        .filter_map(|key| std::env::var(key).ok())
-        .map(|value| value.trim().to_string())
-        .find(|value| !value.is_empty())
-}
-
-fn normalize_domain_list(domains: &[String]) -> Vec<String> {
-    domains
-        .iter()
-        .map(|d| {
-            d.trim()
-                .trim_start_matches("https://")
-                .trim_start_matches("http://")
-                .trim_start_matches("www.")
-                .trim_matches('/')
-                .to_ascii_lowercase()
-        })
-        .filter(|d| !d.is_empty())
-        .collect()
-}
-
-fn clean_plain_text(text: &str) -> String {
-    text.split_whitespace().collect::<Vec<_>>().join(" ")
-}
-
-fn clean_extracted_url(url: &str) -> String {
-    url.trim()
-        .trim_matches(|c| matches!(c, ')' | ']' | '}' | '>' | '"' | '\'' | ',' | ';' | '.'))
-        .to_string()
-}
-
-fn is_http_url(url: &str) -> bool {
-    url.starts_with("http://") || url.starts_with("https://")
-}
-
-fn title_from_url(url: &str) -> String {
-    reqwest::Url::parse(url)
-        .ok()
-        .and_then(|u| {
-            u.host_str().map(|host| {
-                let path = u.path().trim_matches('/');
-                if path.is_empty() {
-                    host.to_string()
-                } else {
-                    format!("{host}/{path}")
-                }
-            })
-        })
-        .unwrap_or_else(|| url.to_string())
-}
-
 fn filter_domains(
     results: Vec<SearchResult>,
     allowed: &[String],
@@ -811,18 +691,6 @@ fn filter_domains(
         .collect()
 }
 
-fn domain_matches(host: &str, domain: &str) -> bool {
-    let domain = domain
-        .trim()
-        .trim_start_matches("https://")
-        .trim_start_matches("http://")
-        .trim_start_matches("www.")
-        .trim_matches('/')
-        .to_ascii_lowercase();
-    let host = host.trim_start_matches("www.");
-    host == domain || host.ends_with(&format!(".{domain}"))
-}
-
 fn dedupe_by_url(results: &mut Vec<SearchResult>) {
     let mut seen = std::collections::HashSet::new();
     results.retain(|r| seen.insert(r.url.clone()));
@@ -832,7 +700,7 @@ fn format_results(query: &str, results: &[SearchResult], context_max: usize) -> 
     if results.is_empty() {
         return format!(
             "Web search results for query: \"{query}\"\n\nNo search results found.\n\n\
-             REMINDER: 如果你回答用户问题时使用了联网信息，必须在回答末尾用 markdown 链接列出 Sources。"
+             {SOURCE_REMINDER_ZH}"
         );
     }
 
@@ -848,9 +716,8 @@ fn format_results(query: &str, results: &[SearchResult], context_max: usize) -> 
             break;
         }
     }
-    out.push_str(
-        "\nREMINDER: You MUST include relevant sources above in your response using markdown hyperlinks.",
-    );
+    out.push('\n');
+    out.push_str(SOURCE_REMINDER_EN);
     cap_chars(out, context_max)
 }
 
@@ -918,32 +785,8 @@ fn decode_base64_url(input: &str) -> Option<String> {
     String::from_utf8(out).ok()
 }
 
-fn clean_html_text(html: &str) -> String {
-    let tag_re = Regex::new(r"(?is)<[^>]+>").unwrap();
-    let text = tag_re.replace_all(html, "");
-    decode_html_entities(&text)
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
-fn decode_html_entities(s: &str) -> String {
-    s.replace("&amp;", "&")
-        .replace("&quot;", "\"")
-        .replace("&#39;", "'")
-        .replace("&apos;", "'")
-        .replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&nbsp;", " ")
-}
-
 fn cap_chars(s: String, max: usize) -> String {
-    if s.chars().count() <= max {
-        s
-    } else {
-        let head: String = s.chars().take(max).collect();
-        format!("{head}\n…[web_search 输出已按 context_max_characters 截断]")
-    }
+    cap_chars_with_marker(s, max, "…[web_search 输出已按 context_max_characters 截断]")
 }
 
 #[cfg(test)]

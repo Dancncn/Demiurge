@@ -20,6 +20,7 @@ mod screen;
 mod shell;
 mod system_info;
 mod tool_search;
+mod web_common;
 mod web_fetch;
 mod web_search;
 mod worktree;

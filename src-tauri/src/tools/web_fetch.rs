@@ -1,7 +1,12 @@
 //! web_fetch：单 URL 抓取/深抓取工具，输出与 web_search 一致的来源提醒。
-use regex::Regex;
 use serde::Deserialize;
 use serde_json::{json, Value};
+
+use super::web_common::{
+    cap_chars_with_flag as cap_chars_with_flag_common, cap_chars_with_marker, clean_plain_text,
+    clean_plain_text_preserve_lines, env_first, extract_title, html_to_text, looks_like_html,
+    parse_choice, parse_json_payloads, parse_optional_choice, title_from_url, SOURCE_REMINDER_EN,
+};
 
 const DEFAULT_CONTEXT_MAX_CHARS: usize = 20_000;
 const MAX_CONTEXT_MAX_CHARS: usize = 80_000;
@@ -222,7 +227,7 @@ fn collect_document_fields(
 
 fn format_document(doc: &FetchDocument, context_max: usize) -> String {
     let mut out = format!(
-        "Web fetch result\n\nTitle: {}\nURL: {}\nSource adapter: {}\nTruncated: {}\n\nContent:\n{}\n\nSources:\n- [{}]({})\n\nREMINDER: You MUST include relevant sources above in your response using markdown hyperlinks.",
+        "Web fetch result\n\nTitle: {}\nURL: {}\nSource adapter: {}\nTruncated: {}\n\nContent:\n{}\n\nSources:\n- [{}]({})\n\n{}",
         doc.title,
         doc.url,
         doc.source,
@@ -230,6 +235,7 @@ fn format_document(doc: &FetchDocument, context_max: usize) -> String {
         doc.content,
         doc.title,
         doc.url,
+        SOURCE_REMINDER_EN,
     );
     out = cap_chars(out, context_max.saturating_add(600));
     out
@@ -254,133 +260,6 @@ fn normalize_url(url: &str) -> Result<String, String> {
     }
 }
 
-fn parse_choice<'a>(
-    value: Option<&str>,
-    field: &str,
-    allowed: &'a [&'a str],
-    default: &'a str,
-) -> Result<&'a str, String> {
-    let Some(value) = value.map(str::trim).filter(|v| !v.is_empty()) else {
-        return Ok(default);
-    };
-    let value = value.to_ascii_lowercase();
-    allowed
-        .iter()
-        .copied()
-        .find(|candidate| *candidate == value)
-        .ok_or_else(|| format!("{field} 只支持：{}", allowed.join(", ")))
-}
-
-fn parse_optional_choice<'a>(
-    value: Option<&str>,
-    field: &str,
-    allowed: &'a [&'a str],
-) -> Result<Option<&'a str>, String> {
-    let Some(value) = value.map(str::trim).filter(|v| !v.is_empty()) else {
-        return Ok(None);
-    };
-    parse_choice(Some(value), field, allowed, allowed[0]).map(Some)
-}
-
-fn parse_json_payloads(raw: &str) -> Vec<Value> {
-    let trimmed = raw.trim();
-    if let Ok(v) = serde_json::from_str::<Value>(trimmed) {
-        return vec![v];
-    }
-    let mut values = Vec::new();
-    for line in raw.lines() {
-        let line = line.trim_start();
-        let Some(data) = line.strip_prefix("data:") else {
-            continue;
-        };
-        let data = data.trim();
-        if data.is_empty() || data == "[DONE]" {
-            continue;
-        }
-        if let Ok(v) = serde_json::from_str::<Value>(data) {
-            values.push(v);
-        }
-    }
-    values
-}
-
-fn looks_like_html(text: &str) -> bool {
-    let lower = text
-        .chars()
-        .take(300)
-        .collect::<String>()
-        .to_ascii_lowercase();
-    lower.contains("<html") || lower.contains("<!doctype html") || lower.contains("<body")
-}
-
-fn extract_title(html: &str) -> Option<String> {
-    let re = Regex::new(r"(?is)<title[^>]*>(.*?)</title>").unwrap();
-    re.captures(html)
-        .and_then(|cap| cap.get(1))
-        .map(|m| clean_html_text(m.as_str()))
-        .filter(|s| !s.is_empty())
-}
-
-fn html_to_text(html: &str) -> String {
-    let script_re =
-        Regex::new(r"(?is)<(script|style|noscript)[^>]*>.*?</(script|style|noscript)>").unwrap();
-    let html = script_re.replace_all(html, " ");
-    let block_re =
-        Regex::new(r"(?i)</?(p|div|section|article|header|footer|main|br|li|h[1-6]|tr)[^>]*>")
-            .unwrap();
-    let html = block_re.replace_all(&html, "\n");
-    clean_html_text(&html)
-}
-
-fn clean_html_text(html: &str) -> String {
-    let tag_re = Regex::new(r"(?is)<[^>]+>").unwrap();
-    let text = tag_re.replace_all(html, " ");
-    decode_html_entities(&text)
-        .lines()
-        .map(clean_plain_text)
-        .filter(|line| !line.is_empty())
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
-fn clean_plain_text(text: &str) -> String {
-    text.split_whitespace().collect::<Vec<_>>().join(" ")
-}
-
-fn clean_plain_text_preserve_lines(text: &str) -> String {
-    text.lines()
-        .map(clean_plain_text)
-        .filter(|line| !line.is_empty())
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
-fn decode_html_entities(s: &str) -> String {
-    s.replace("&amp;", "&")
-        .replace("&quot;", "\"")
-        .replace("&#39;", "'")
-        .replace("&apos;", "'")
-        .replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&nbsp;", " ")
-}
-
-fn title_from_url(url: &str) -> String {
-    reqwest::Url::parse(url)
-        .ok()
-        .and_then(|u| {
-            u.host_str().map(|host| {
-                let path = u.path().trim_matches('/');
-                if path.is_empty() {
-                    host.to_string()
-                } else {
-                    format!("{host}/{path}")
-                }
-            })
-        })
-        .unwrap_or_else(|| url.to_string())
-}
-
 fn settings_secret(
     state: &crate::AppState,
     key: fn(&crate::store::Settings) -> &String,
@@ -398,32 +277,12 @@ fn exa_api_key(state: &crate::AppState) -> Option<String> {
     settings_secret(state, |s| &s.exa_api_key).or_else(|| env_first(&["EXA_API_KEY"]))
 }
 
-fn env_first(keys: &[&str]) -> Option<String> {
-    keys.iter()
-        .filter_map(|key| std::env::var(key).ok())
-        .map(|value| value.trim().to_string())
-        .find(|value| !value.is_empty())
-}
-
 fn cap_chars_with_flag(s: String, max: usize) -> (String, bool) {
-    if s.chars().count() <= max {
-        (s, false)
-    } else {
-        let head: String = s.chars().take(max).collect();
-        (
-            format!("{head}\n…[web_fetch 输出已按 context_max_characters 截断]"),
-            true,
-        )
-    }
+    cap_chars_with_flag_common(s, max, "…[web_fetch 输出已按 context_max_characters 截断]")
 }
 
 fn cap_chars(s: String, max: usize) -> String {
-    if s.chars().count() <= max {
-        s
-    } else {
-        let head: String = s.chars().take(max).collect();
-        format!("{head}\n…[web_fetch 输出已截断]")
-    }
+    cap_chars_with_marker(s, max, "…[web_fetch 输出已截断]")
 }
 
 #[cfg(test)]
