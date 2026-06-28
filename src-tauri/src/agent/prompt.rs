@@ -84,11 +84,13 @@ pub fn build_with_report_for_input(
     let sandbox = state.sandbox_dir.lock().unwrap().clone();
     let data_dir = state.data_dir.lock().unwrap().clone();
     let packs_dir = state.packs_dir.lock().unwrap().clone();
+    let session_id = state.sessions.lock().unwrap().active.clone();
     let goal_block = super::goal::build_goal_context_block(state);
     let drafts = build_ordered_sections(
         &sandbox,
         &data_dir,
         &packs_dir,
+        &session_id,
         settings,
         persona_text,
         session_summary,
@@ -102,6 +104,7 @@ fn build_ordered_sections(
     root: &Path,
     data_dir: &Path,
     packs_dir: &Path,
+    session_id: &str,
     settings: &Settings,
     persona_text: &str,
     session_summary: Option<&str>,
@@ -126,7 +129,7 @@ fn build_ordered_sections(
             "memories",
             "Memories",
             75,
-            memory_section(root, packs_dir, &settings.current_pack),
+            memory_section(root, data_dir, packs_dir, &settings.current_pack, session_id),
         ),
         section(
             "conversation_summary",
@@ -297,16 +300,21 @@ fn project_section(root: &Path) -> String {
     cap_chars(parts.join("\n\n"), MAX_PROJECT_CHARS)
 }
 
-fn memory_section(root: &Path, packs_dir: &Path, pack_id: &str) -> String {
+fn memory_section(
+    root: &Path,
+    data_dir: &Path,
+    packs_dir: &Path,
+    pack_id: &str,
+    session_id: &str,
+) -> String {
     let mut parts = Vec::new();
-    for (label, path) in [
-        ("Project memory", root.join("memory.md")),
-        ("Local memory", root.join(".demiurge").join("memory.md")),
-        ("Pack memory", packs_dir.join(pack_id).join("memory.md")),
-    ] {
+    for (scope, label, path) in super::memory::scoped_memory_paths(data_dir, root, packs_dir, pack_id, session_id) {
         if let Some(text) = read_limited_text(&path) {
-            parts.push(format!("# {label}\n{}", text.trim()));
+            parts.push(format!("# {label} memory ({scope})\n{}", text.trim()));
         }
+    }
+    if let Some(text) = read_limited_text(&root.join("memory.md")) {
+        parts.push(format!("# Project legacy memory\n{}", text.trim()));
     }
     cap_chars(parts.join("\n\n"), MAX_MEMORY_CHARS)
 }

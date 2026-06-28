@@ -184,6 +184,15 @@ struct WebDavBackupFile {
     size: u64,
 }
 
+fn memory_context(state: &AppState) -> (PathBuf, PathBuf, PathBuf, String, String) {
+    let data_dir = state.data_dir.lock().unwrap().clone();
+    let sandbox_dir = state.sandbox_dir.lock().unwrap().clone();
+    let packs_dir = state.packs_dir.lock().unwrap().clone();
+    let pack_id = state.settings.lock().unwrap().current_pack.clone();
+    let session_id = state.sessions.lock().unwrap().active.clone();
+    (data_dir, sandbox_dir, packs_dir, pack_id, session_id)
+}
+
 fn session_list(store: &SessionStore) -> SessionList {
     let mut metas: Vec<SessionMeta> = store
         .sessions
@@ -826,8 +835,28 @@ async fn run_goal_control_turn(
 
 #[tauri::command]
 fn memory_panel_state(state: State<'_, AppState>) -> agent::memory::MemoryPanelState {
-    let sandbox = state.sandbox_dir.lock().unwrap().clone();
-    agent::memory::panel_state(&sandbox)
+    let (data, sandbox, packs, pack_id, session_id) = memory_context(state.inner());
+    agent::memory::panel_state(&data, &sandbox, &packs, &pack_id, &session_id)
+}
+
+#[tauri::command]
+fn memory_add_entry(
+    state: State<'_, AppState>,
+    scope: String,
+    kind: String,
+    text: String,
+) -> Result<agent::memory::MemoryPanelState, String> {
+    let (data, sandbox, packs, pack_id, session_id) = memory_context(state.inner());
+    agent::memory::add_entry(
+        &data,
+        &sandbox,
+        &packs,
+        &pack_id,
+        &session_id,
+        &scope,
+        &kind,
+        &text,
+    )
 }
 
 #[tauri::command]
@@ -837,8 +866,8 @@ fn memory_update_entry(
     kind: String,
     text: String,
 ) -> Result<agent::memory::MemoryPanelState, String> {
-    let sandbox = state.sandbox_dir.lock().unwrap().clone();
-    agent::memory::update_entry(&sandbox, &id, &kind, &text)
+    let (data, sandbox, packs, pack_id, session_id) = memory_context(state.inner());
+    agent::memory::update_entry(&data, &sandbox, &packs, &pack_id, &session_id, &id, &kind, &text)
 }
 
 #[tauri::command]
@@ -846,16 +875,16 @@ fn memory_delete_entry(
     state: State<'_, AppState>,
     id: String,
 ) -> Result<agent::memory::MemoryPanelState, String> {
-    let sandbox = state.sandbox_dir.lock().unwrap().clone();
-    agent::memory::delete_entry(&sandbox, &id)
+    let (data, sandbox, packs, pack_id, session_id) = memory_context(state.inner());
+    agent::memory::delete_entry(&data, &sandbox, &packs, &pack_id, &session_id, &id)
 }
 
 #[tauri::command]
 fn memory_dedupe_apply(
     state: State<'_, AppState>,
 ) -> Result<agent::memory::MemoryPanelState, String> {
-    let sandbox = state.sandbox_dir.lock().unwrap().clone();
-    agent::memory::apply_dedupe(&sandbox)
+    let (data, sandbox, packs, pack_id, session_id) = memory_context(state.inner());
+    agent::memory::apply_dedupe(&data, &sandbox, &packs, &pack_id, &session_id)
 }
 
 // ---- 会话管理 ----
@@ -888,6 +917,8 @@ fn context_panel_state(state: State<'_, AppState>) -> ContextPanelState {
 
     let packs_dir = state.packs_dir.lock().unwrap().clone();
     let sandbox_dir = state.sandbox_dir.lock().unwrap().clone();
+    let data_dir = state.data_dir.lock().unwrap().clone();
+    let session_id = state.sessions.lock().unwrap().active.clone();
     let persona_text = pack::load_pack(&packs_dir, &settings.current_pack)
         .map(|p| p.persona_text)
         .unwrap_or_default();
@@ -946,7 +977,13 @@ fn context_panel_state(state: State<'_, AppState>) -> ContextPanelState {
         prompt_section_tokens,
         budget_items: context_budget_items(&budget),
         history_buckets: context_history_buckets(&messages),
-        memory_sources: context_memory_sources(&sandbox_dir, &packs_dir, &settings.current_pack),
+        memory_sources: context_memory_sources(
+            &data_dir,
+            &sandbox_dir,
+            &packs_dir,
+            &settings.current_pack,
+            &session_id,
+        ),
         prompt_sections: prompt_build.sections,
     }
 }
@@ -1018,30 +1055,22 @@ fn context_history_buckets(messages: &[Message]) -> Vec<ContextHistoryBucket> {
 }
 
 fn context_memory_sources(
+    data_dir: &Path,
     sandbox_dir: &Path,
     packs_dir: &Path,
     pack_id: &str,
+    session_id: &str,
 ) -> Vec<ContextMemorySource> {
-    [
-        (
-            "project",
-            "Project memory",
-            sandbox_dir.join("memory.md"),
-        ),
-        (
-            "local",
-            "Local memory",
-            sandbox_dir.join(".demiurge").join("memory.md"),
-        ),
-        (
-            "pack",
-            "Pack memory",
-            packs_dir.join(pack_id).join("memory.md"),
-        ),
-    ]
-    .into_iter()
-    .map(|(id, label, path)| context_memory_source(id, label, &path))
-    .collect()
+    let mut sources = agent::memory::scoped_memory_paths(data_dir, sandbox_dir, packs_dir, pack_id, session_id)
+        .into_iter()
+        .map(|(id, label, path)| context_memory_source(&id, &format!("{label} memory"), &path))
+        .collect::<Vec<_>>();
+    sources.push(context_memory_source(
+        "project_legacy",
+        "Project legacy memory",
+        &sandbox_dir.join("memory.md"),
+    ));
+    sources
 }
 
 fn context_memory_source(id: &str, label: &str, path: &Path) -> ContextMemorySource {
@@ -1099,33 +1128,56 @@ mod context_panel_tests {
             "demiurge_context_panel_{}",
             crate::store::now_millis()
         ));
+        let data = root.join("data");
         let packs = root.join("packs");
         let sandbox = root.join("sandbox");
         let pack = packs.join("default");
+        fs::create_dir_all(data.join("memory")).unwrap();
         fs::create_dir_all(sandbox.join(".demiurge")).unwrap();
+        fs::create_dir_all(sandbox.join(".demiurge").join("session-memory")).unwrap();
         fs::create_dir_all(&pack).unwrap();
+        fs::write(data.join("memory").join("user.md"), "- [user] user preference\n").unwrap();
         fs::write(sandbox.join("memory.md"), "- [project] remember this\n").unwrap();
         fs::write(
             sandbox.join(".demiurge").join("memory.md"),
-            "- [user] local preference\n- [project] local fact\n",
+            "- [project] project fact\n",
+        )
+        .unwrap();
+        fs::write(
+            sandbox
+                .join(".demiurge")
+                .join("session-memory")
+                .join("session_1.md"),
+            "- [session] session fact\n",
         )
         .unwrap();
         fs::write(pack.join("memory.md"), "pack note").unwrap();
 
-        let sources = context_memory_sources(&sandbox, &packs, "default");
+        let sources = context_memory_sources(&data, &sandbox, &packs, "default", "session_1");
+
+        let user = sources.iter().find(|source| source.id == "user").unwrap();
+        assert!(user.exists);
+        assert_eq!(user.entries, 1);
 
         let project = sources.iter().find(|source| source.id == "project").unwrap();
         assert!(project.exists);
         assert_eq!(project.entries, 1);
         assert!(project.tokens > 0);
 
-        let local = sources.iter().find(|source| source.id == "local").unwrap();
-        assert!(local.exists);
-        assert_eq!(local.entries, 2);
+        let session = sources.iter().find(|source| source.id == "session").unwrap();
+        assert!(session.exists);
+        assert_eq!(session.entries, 1);
 
         let pack = sources.iter().find(|source| source.id == "pack").unwrap();
         assert!(pack.exists);
         assert_eq!(pack.entries, 0);
+
+        let legacy = sources
+            .iter()
+            .find(|source| source.id == "project_legacy")
+            .unwrap();
+        assert!(legacy.exists);
+        assert_eq!(legacy.entries, 1);
 
         let _ = fs::remove_dir_all(root);
     }
@@ -1520,6 +1572,7 @@ pub fn run() {
             goal_continue,
             goal_clear,
             memory_panel_state,
+            memory_add_entry,
             memory_update_entry,
             memory_delete_entry,
             memory_dedupe_apply,
