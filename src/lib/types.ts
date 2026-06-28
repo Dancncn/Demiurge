@@ -29,10 +29,12 @@ export type ProviderKind =
   | "custom"
   | "open_ai_compatible"
   | "local";
+export type PermissionMode = "plan" | "default" | "auto" | "bypass";
 export type WebSearchProvider = "auto" | "bing" | "duckduckgo" | "tavily" | "brave" | "exa";
 
 export interface Settings {
   provider: ProviderKind;
+  permission_mode: PermissionMode;
   base_url: string;
   api_key: string;
   model: string;
@@ -375,6 +377,15 @@ export interface PermissionPanelState {
   rules: PermissionRuleView[];
   audit: PermissionAuditEntry[];
   tools: PermissionToolView[];
+}
+
+export interface PlanState {
+  active: boolean;
+  approved: boolean;
+  path?: string;
+  content?: string;
+  created_at?: number;
+  approved_at?: number;
 }
 
 // ---- 后端 emit 的事件载荷 ----

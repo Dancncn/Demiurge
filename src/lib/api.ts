@@ -17,7 +17,9 @@ import type {
   OcrModelSource,
   OcrModelStatus,
   PackManifest,
+  PermissionMode,
   PermissionScope,
+  PlanState,
   PermissionPanelState,
   PermissionRuleInput,
   SessionList,
@@ -41,6 +43,10 @@ export const respondConfirm = (id: string, allow: boolean, scope: PermissionScop
   invoke<void>("respond_confirm", { id, allow, scope });
 export const getSettings = () => invoke<Settings>("get_settings");
 export const saveSettings = (settings: Settings) => invoke<void>("save_settings", { settings });
+export const setPermissionMode = (mode: PermissionMode) => invoke<Settings>("set_permission_mode", { mode });
+export const planState = () => invoke<PlanState>("plan_state");
+export const approvePlan = () => invoke<PlanState>("approve_plan");
+export const rejectPlan = () => invoke<PlanState>("reject_plan");
 export const permissionPanelState = () => invoke<PermissionPanelState>("permission_panel_state");
 export const permissionResetRule = (scope: PermissionScope, tool: string) =>
   invoke<PermissionPanelState>("permission_reset_rule", { scope, tool });
@@ -106,6 +112,10 @@ export const workflowRun = (name: string) => invoke<string>("workflow_run", { na
 export const workflowStop = (runId: string) => invoke<void>("workflow_stop", { runId });
 export const listenWorkflowUpdated = (handler: (e: WorkflowPanelState) => void) =>
   listen<WorkflowPanelState>("workflow-updated", (e) => handler(e.payload));
+export const listenPlanUpdated = (handler: (e: PlanState) => void) =>
+  listen<PlanState>("plan-updated", (e) => handler(e.payload));
+export const listenPermissionModeUpdated = (handler: (e: PermissionMode) => void) =>
+  listen<PermissionMode>("permission-mode-updated", (e) => handler(e.payload));
 
 // ---- 事件订阅 ----
 export interface AgentEventHandlers {

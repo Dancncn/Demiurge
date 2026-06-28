@@ -7,7 +7,7 @@ use serde_json::{json, Value};
 use crate::agent::conversation::{FunctionCall, Message, ToolCall};
 use crate::store::Settings;
 
-use super::{require_api_key, AssistantTurn, ProviderProfile, Usage};
+use super::{require_api_key, AssistantTurn, ProviderProfile, StructuredOutputRequest, Usage};
 
 pub async fn stream_completion_with_profile(
     client: &reqwest::Client,
@@ -76,17 +76,39 @@ pub fn build_openai_body(
     tools: &Value,
     profile: ProviderProfile,
 ) -> Result<Value, String> {
+    build_openai_body_with_structured_output(cfg, messages, tools, profile, None)
+}
+
+pub fn build_openai_body_with_structured_output(
+    cfg: &Settings,
+    messages: &[Message],
+    tools: &Value,
+    profile: ProviderProfile,
+    structured_output: Option<&StructuredOutputRequest>,
+) -> Result<Value, String> {
     let mut body = json!({
         "model": cfg.model,
         "messages": messages,
         "stream": profile.supports_streaming,
+        "max_tokens": profile.effective_reserved_output_tokens(cfg),
     });
     if profile.supports_non_empty_tools(tools) {
         body["tools"] = tools.clone();
         body["tool_choice"] = json!("auto");
-        if profile.supports_parallel_tool_calls {
+        if profile.supports_parallel_tool_call_field() {
             body["parallel_tool_calls"] = json!(true);
         }
+    }
+    if let Some(request) = profile.structured_output_request(structured_output) {
+        body["response_format"] = json!({
+            "type": "json_schema",
+            "json_schema": {
+                "name": request.name,
+                "description": request.description,
+                "schema": request.schema,
+                "strict": request.strict,
+            }
+        });
     }
     Ok(body)
 }

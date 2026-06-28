@@ -6,7 +6,7 @@ use serde_json::{json, Value};
 use crate::agent::conversation::{FunctionCall, Message, ToolCall};
 use crate::store::Settings;
 
-use super::{require_api_key, AssistantTurn, ProviderProfile, Usage};
+use super::{require_api_key, AssistantTurn, ProviderProfile, StructuredOutputRequest, Usage};
 
 pub async fn stream_completion(
     client: &reqwest::Client,
@@ -75,6 +75,16 @@ pub fn build_gemini_body(
     tools: &Value,
     profile: ProviderProfile,
 ) -> Result<Value, String> {
+    build_gemini_body_with_structured_output(cfg, messages, tools, profile, None)
+}
+
+pub fn build_gemini_body_with_structured_output(
+    cfg: &Settings,
+    messages: &[Message],
+    tools: &Value,
+    profile: ProviderProfile,
+    structured_output: Option<&StructuredOutputRequest>,
+) -> Result<Value, String> {
     let mut system_parts = Vec::new();
     let mut contents = Vec::new();
 
@@ -140,7 +150,7 @@ pub fn build_gemini_body(
     let mut body = json!({
         "contents": contents,
         "generationConfig": {
-            "maxOutputTokens": profile.effective_max_output_tokens(cfg.reserved_output_tokens)
+            "maxOutputTokens": profile.effective_reserved_output_tokens(cfg)
         }
     });
     if !system_parts.is_empty() {
@@ -148,6 +158,10 @@ pub fn build_gemini_body(
     }
     if profile.supports_non_empty_tools(tools) {
         body["tools"] = tools.clone();
+    }
+    if let Some(request) = profile.structured_output_request(structured_output) {
+        body["generationConfig"]["responseMimeType"] = json!("application/json");
+        body["generationConfig"]["responseSchema"] = request.schema.clone();
     }
     Ok(body)
 }

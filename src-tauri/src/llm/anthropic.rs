@@ -7,7 +7,7 @@ use serde_json::{json, Value};
 use crate::agent::conversation::{FunctionCall, Message, ToolCall};
 use crate::store::Settings;
 
-use super::{require_api_key, AssistantTurn, ProviderProfile, Usage};
+use super::{require_api_key, AssistantTurn, ProviderProfile, StructuredOutputRequest, Usage};
 
 pub async fn stream_completion(
     client: &reqwest::Client,
@@ -76,6 +76,16 @@ pub fn build_anthropic_body(
     tools: &Value,
     profile: ProviderProfile,
 ) -> Result<Value, String> {
+    build_anthropic_body_with_structured_output(cfg, messages, tools, profile, None)
+}
+
+pub fn build_anthropic_body_with_structured_output(
+    cfg: &Settings,
+    messages: &[Message],
+    tools: &Value,
+    profile: ProviderProfile,
+    structured_output: Option<&StructuredOutputRequest>,
+) -> Result<Value, String> {
     let mut system_parts = Vec::new();
     let mut out_messages = Vec::new();
 
@@ -129,7 +139,7 @@ pub fn build_anthropic_body(
 
     let mut body = json!({
         "model": cfg.model,
-        "max_tokens": profile.effective_max_output_tokens(cfg.reserved_output_tokens),
+        "max_tokens": profile.effective_reserved_output_tokens(cfg),
         "stream": profile.supports_streaming,
         "messages": out_messages,
     });
@@ -138,6 +148,16 @@ pub fn build_anthropic_body(
     }
     if profile.supports_non_empty_tools(tools) {
         body["tools"] = tools.clone();
+    }
+    if let Some(request) = profile.structured_output_request(structured_output) {
+        let mut output_tools = tools.as_array().cloned().unwrap_or_default();
+        output_tools.push(json!({
+            "name": request.name,
+            "description": request.description.as_deref().unwrap_or("Return structured output."),
+            "input_schema": request.schema,
+        }));
+        body["tools"] = Value::Array(output_tools);
+        body["tool_choice"] = json!({ "type": "tool", "name": request.name });
     }
     Ok(body)
 }

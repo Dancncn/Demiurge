@@ -169,7 +169,7 @@ pub fn read_editor_file(state: &crate::AppState, name: &str) -> Result<AgentEdit
     let path = find_agent_path(&dir, name).ok_or_else(|| format!("Agent `{name}` not found."))?;
     let raw_json =
         fs::read_to_string(&path).map_err(|e| format!("Failed to read agent JSON: {e}"))?;
-    let def = definition_from_path(&path, &valid_tool_names())?;
+    let def = definition_from_path(&path, &valid_tool_names(state))?;
     let file_name = path
         .file_name()
         .map(|s| s.to_string_lossy().to_string())
@@ -187,7 +187,8 @@ pub fn save_editor_file(
     file_name: &str,
     raw_json: &str,
 ) -> Result<AgentPanelState, String> {
-    let validation = validate_agent_json(raw_json);
+    let valid_tools = valid_tool_names(state);
+    let validation = validate_agent_json_with_tools(raw_json, &valid_tools);
     if !validation.ok {
         return Err(validation.errors.join("\n"));
     }
@@ -220,7 +221,7 @@ pub fn list_definitions(state: &crate::AppState) -> Vec<AgentDefinitionInfo> {
     let Ok(entries) = fs::read_dir(&dir) else {
         return Vec::new();
     };
-    let valid_tools = valid_tool_names();
+    let valid_tools = valid_tool_names(state);
     let stats = load_stats(state).unwrap_or_default();
     let mut out = entries
         .filter_map(Result::ok)
@@ -290,7 +291,7 @@ pub fn record_runtime_error(
 pub fn load_agent(state: &crate::AppState, name: &str) -> Result<AgentDefinitionInfo, String> {
     let dir = ensure_dir(state)?;
     let path = find_agent_path(&dir, name).ok_or_else(|| format!("未找到 Agent `{name}`。"))?;
-    definition_from_path(&path, &valid_tool_names())
+    definition_from_path(&path, &valid_tool_names(state))
 }
 
 pub fn resolve_selected(
@@ -450,6 +451,14 @@ fn find_agent_path(dir: &Path, requested: &str) -> Option<PathBuf> {
 }
 
 fn validate_agent_json(raw_json: &str) -> AgentValidationResult {
+    let valid_tools = core_tool_names();
+    validate_agent_json_with_tools(raw_json, &valid_tools)
+}
+
+fn validate_agent_json_with_tools(
+    raw_json: &str,
+    valid_tools: &HashSet<String>,
+) -> AgentValidationResult {
     let mut errors = Vec::new();
     let mut warnings = Vec::new();
     let parsed = match serde_json::from_str::<AgentFile>(raw_json) {
@@ -479,7 +488,6 @@ fn validate_agent_json(raw_json: &str) -> AgentValidationResult {
         warnings
             .push("Template agents ignore members; use kind \"team\" for composition.".to_string());
     }
-    let valid_tools = valid_tool_names();
     let invalid_tools = parsed
         .allowed_tools
         .iter()
@@ -541,7 +549,14 @@ fn sanitize_name(name: &str) -> String {
         .to_string()
 }
 
-fn valid_tool_names() -> HashSet<String> {
+fn valid_tool_names(state: &crate::AppState) -> HashSet<String> {
+    crate::tools::registry_for_state(state)
+        .into_iter()
+        .map(|tool| tool.name.to_string())
+        .collect()
+}
+
+fn core_tool_names() -> HashSet<String> {
     crate::tools::registry()
         .into_iter()
         .map(|tool| tool.name.to_string())

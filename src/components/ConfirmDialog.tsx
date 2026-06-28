@@ -1,9 +1,10 @@
 import { useEffect, useState } from "react";
-import type { ConfirmRequestEvent, PermissionScope, ToolRisk } from "../lib/types";
+import type { ConfirmRequestEvent, PermissionMode, PermissionScope, ToolRisk } from "../lib/types";
 import DiffPreview from "./DiffPreview";
 
 interface Props {
   req: ConfirmRequestEvent | null;
+  mode: PermissionMode;
   onRespond: (allow: boolean, scope: PermissionScope) => void;
 }
 
@@ -43,7 +44,7 @@ function approvalLabel(tool: string) {
   return "Allow";
 }
 
-export default function ConfirmDialog({ req, onRespond }: Props) {
+export default function ConfirmDialog({ req, mode, onRespond }: Props) {
   const [scope, setScope] = useState<PermissionScope>("once");
 
   useEffect(() => {
@@ -69,6 +70,7 @@ export default function ConfirmDialog({ req, onRespond }: Props) {
                 {req.effect && <span className="rounded-md bg-[#eef1f5] px-2 py-1">Policy: {req.effect}</span>}
                 {req.scope && <span className="rounded-md bg-[#eef1f5] px-2 py-1">Default: {req.scope}</span>}
                 <span className="rounded-md bg-[#eef1f5] px-2 py-1">{sourceLabel(req.source)}</span>
+                <span className="rounded-md bg-[#eef1f5] px-2 py-1">Mode: {mode}</span>
               </div>
             </div>
           </div>

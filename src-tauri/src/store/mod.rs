@@ -28,6 +28,10 @@ fn default_provider() -> ProviderKind {
     ProviderKind::DeepSeek
 }
 
+fn default_permission_mode() -> PermissionMode {
+    PermissionMode::Default
+}
+
 fn default_max_context_chars() -> usize {
     DEFAULT_MAX_CONTEXT_CHARS
 }
@@ -88,6 +92,19 @@ fn default_tts_voice() -> String {
     "Cherry".to_string()
 }
 
+fn default_mcp_servers() -> Vec<crate::mcp::McpServerConfig> {
+    Vec::new()
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PermissionMode {
+    Plan,
+    Default,
+    Auto,
+    Bypass,
+}
+
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ProviderKind {
@@ -117,6 +134,8 @@ pub enum ProviderKind {
 pub struct Settings {
     #[serde(default = "default_provider")]
     pub provider: ProviderKind,
+    #[serde(default = "default_permission_mode")]
+    pub permission_mode: PermissionMode,
     pub base_url: String,
     pub api_key: String,
     pub model: String,
@@ -173,12 +192,15 @@ pub struct Settings {
     pub tts_model: String,
     #[serde(default = "default_tts_voice")]
     pub tts_voice: String,
+    #[serde(default = "default_mcp_servers")]
+    pub mcp_servers: Vec<crate::mcp::McpServerConfig>,
 }
 
 impl Default for Settings {
     fn default() -> Self {
         Settings {
             provider: ProviderKind::DeepSeek,
+            permission_mode: PermissionMode::Default,
             // 默认 DeepSeek（OpenAI 兼容）。换 LM Studio 等本地端点只改 base_url + model。
             base_url: "https://api.deepseek.com/v1".to_string(),
             api_key: String::new(),
@@ -210,6 +232,7 @@ impl Default for Settings {
             image_size: default_image_size(),
             tts_model: default_tts_model(),
             tts_voice: default_tts_voice(),
+            mcp_servers: Vec::new(),
         }
     }
 }
@@ -308,6 +331,13 @@ pub fn save_settings(dir: &Path, s: &Settings) -> Result<(), String> {
     safe.exa_api_key.clear();
     safe.webdav_password.clear();
     safe.media_api_key.clear();
+    for server in &mut safe.mcp_servers {
+        for env in &mut server.env {
+            if env.secret {
+                env.value.clear();
+            }
+        }
+    }
     let json = serde_json::to_string_pretty(&safe).map_err(|e| e.to_string())?;
     fs::write(&p, json).map_err(|e| e.to_string())
 }
@@ -368,6 +398,7 @@ mod tests {
         }"#;
         let settings = serde_json::from_str::<Settings>(json).unwrap();
         assert_eq!(settings.provider, ProviderKind::DeepSeek);
+        assert_eq!(settings.permission_mode, PermissionMode::Default);
         assert!(!settings.voice_enabled);
         assert_eq!(settings.voice_stt_backend, "none");
         assert_eq!(settings.voice_tts_backend, "none");
@@ -381,6 +412,7 @@ mod tests {
         assert_eq!(settings.media_base_url, "https://dashscope.aliyuncs.com");
         assert_eq!(settings.image_model, "qwen-image-2.0");
         assert_eq!(settings.tts_model, "qwen3-tts-flash");
+        assert!(settings.mcp_servers.is_empty());
     }
 
     #[test]
@@ -411,6 +443,37 @@ mod tests {
         assert!(saved.exa_api_key.is_empty());
         assert!(saved.webdav_password.is_empty());
         assert!(saved.media_api_key.is_empty());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn save_settings_does_not_persist_secret_mcp_env_values() {
+        let dir =
+            std::env::temp_dir().join(format!("demiurge_mcp_settings_test_{}", new_session_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let settings = Settings {
+            mcp_servers: vec![crate::mcp::McpServerConfig {
+                name: "secret-server".to_string(),
+                enabled: true,
+                transport: crate::mcp::McpTransportKind::Stdio,
+                command: "cmd".to_string(),
+                args: vec!["/c".to_string(), "echo".to_string(), "ok".to_string()],
+                env: vec![crate::mcp::McpEnvVar {
+                    key: "API_TOKEN".to_string(),
+                    value: "mcp-secret".to_string(),
+                    secret: true,
+                }],
+            }],
+            ..Settings::default()
+        };
+        save_settings(&dir, &settings).unwrap();
+
+        let raw = std::fs::read_to_string(dir.join("settings.json")).unwrap();
+        assert!(!raw.contains("mcp-secret"));
+        let saved = serde_json::from_str::<Settings>(&raw).unwrap();
+        assert_eq!(saved.mcp_servers[0].env[0].value, "");
 
         let _ = std::fs::remove_dir_all(&dir);
     }

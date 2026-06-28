@@ -12,6 +12,7 @@ use tauri::{AppHandle, Emitter};
 use tokio::sync::oneshot;
 
 use crate::store;
+use crate::store::PermissionMode;
 use crate::tools::{PermissionEffect, PermissionPolicy, PermissionScope, ToolRisk};
 
 static SEQ: AtomicU64 = AtomicU64::new(1);
@@ -35,6 +36,7 @@ pub struct PermissionDecision {
     pub scope: PermissionScope,
     pub reason: String,
     pub source: PermissionDecisionSource,
+    pub mode: Option<PermissionMode>,
 }
 
 impl PermissionDecision {
@@ -44,6 +46,7 @@ impl PermissionDecision {
             scope: policy.scope,
             reason: policy.reason.to_string(),
             source: PermissionDecisionSource::ToolDefault,
+            mode: None,
         }
     }
 }
@@ -65,6 +68,8 @@ pub struct PermissionAuditEntry {
     pub scope: PermissionScope,
     pub source: PermissionDecisionSource,
     pub reason: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<PermissionMode>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -170,6 +175,70 @@ pub fn decide(
     PermissionDecision::from_policy(default_policy)
 }
 
+pub fn decide_for_mode(
+    state: &crate::AppState,
+    tool: &str,
+    default_policy: PermissionPolicy,
+    risk: ToolRisk,
+) -> PermissionDecision {
+    let mode = state.settings.lock().unwrap().permission_mode;
+    let plan = state.plan_state.lock().unwrap().clone();
+    let mut decision = match mode {
+        PermissionMode::Default => decide(state, tool, default_policy),
+        PermissionMode::Auto => {
+            if risk == ToolRisk::ReadOnly {
+                PermissionDecision {
+                    effect: PermissionEffect::Allow,
+                    scope: PermissionScope::Once,
+                    reason: "Auto 模式自动允许只读工具。".to_string(),
+                    source: PermissionDecisionSource::ToolDefault,
+                    mode: None,
+                }
+            } else {
+                decide(state, tool, default_policy)
+            }
+        }
+        PermissionMode::Bypass => PermissionDecision {
+            effect: PermissionEffect::Allow,
+            scope: PermissionScope::Once,
+            reason: "Bypass 模式已开启：跳过确认并允许工具执行。".to_string(),
+            source: PermissionDecisionSource::UserOverride,
+            mode: None,
+        },
+        PermissionMode::Plan => {
+            if plan.approved {
+                decide(state, tool, default_policy)
+            } else if risk == ToolRisk::ReadOnly {
+                PermissionDecision {
+                    effect: PermissionEffect::Allow,
+                    scope: PermissionScope::Once,
+                    reason: "Plan Mode 未批准前允许只读探索。".to_string(),
+                    source: PermissionDecisionSource::ToolDefault,
+                    mode: None,
+                }
+            } else if tool == "write_plan" {
+                PermissionDecision {
+                    effect: PermissionEffect::Allow,
+                    scope: PermissionScope::Once,
+                    reason: "Plan Mode 允许写入受限计划文件。".to_string(),
+                    source: PermissionDecisionSource::ToolDefault,
+                    mode: None,
+                }
+            } else {
+                PermissionDecision {
+                    effect: PermissionEffect::Deny,
+                    scope: PermissionScope::Once,
+                    reason: "Plan Mode 未批准前阻止写入、shell、外部发布和系统能力。".to_string(),
+                    source: PermissionDecisionSource::ToolDefault,
+                    mode: None,
+                }
+            }
+        }
+    };
+    decision.mode = Some(mode);
+    decision
+}
+
 pub fn remember_response(
     state: &crate::AppState,
     tool: &str,
@@ -225,6 +294,7 @@ pub fn audit(state: &crate::AppState, tool: &str, decision: &PermissionDecision)
         scope: decision.scope,
         source: decision.source.clone(),
         reason: decision.reason.clone(),
+        mode: decision.mode,
     };
     let _ = append_audit(&data_dir, &entry);
 }
@@ -330,7 +400,7 @@ pub fn upsert_rule(
     if input.scope == PermissionScope::Once {
         return Err("Once scope is only valid for a single confirmation response.".to_string());
     }
-    if crate::tools::definition_for(&input.tool).is_none() {
+    if crate::tools::definition_for_state(state, &input.tool).is_none() {
         return Err(format!("Unknown tool `{}`.", input.tool));
     }
     let reason = if input.reason.trim().is_empty() {
@@ -402,6 +472,7 @@ fn decision_from_rule(rule: PermissionRule) -> PermissionDecision {
         scope: rule.scope,
         reason: rule.reason,
         source: PermissionDecisionSource::UserOverride,
+        mode: None,
     }
 }
 

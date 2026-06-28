@@ -2,6 +2,7 @@
 mod agent;
 mod credentials;
 mod llm;
+pub mod mcp;
 mod media;
 mod ocr;
 mod pack;
@@ -24,7 +25,7 @@ use tokio::sync::oneshot;
 
 use agent::conversation::Message;
 use permission::{PermissionResponse, PermissionRule};
-use store::{Session, SessionMeta, SessionStore, Settings};
+use store::{PermissionMode, Session, SessionMeta, SessionStore, Settings};
 
 const DEFAULT_WINDOW_WIDTH: u32 = 1811;
 const DEFAULT_WINDOW_HEIGHT: u32 = 1213;
@@ -40,10 +41,13 @@ pub struct AppState {
     pub pending_confirms: Mutex<HashMap<String, oneshot::Sender<PermissionResponse>>>,
     /// 本会话内的权限规则：tool -> rule
     pub session_permission_rules: Mutex<HashMap<String, PermissionRule>>,
+    /// 当前计划模式的计划文件状态。
+    pub plan_state: Mutex<PlanState>,
     /// 本进程内最近 edit_file 修改记录，用于 undo_edit 安全撤销
     pub edit_undo_stack: Mutex<Vec<tools::EditUndoEntry>>,
     pub workflow_runs: Mutex<Vec<agent::workflow_runtime::WorkflowRunProgress>>,
     pub workflow_cancels: Mutex<HashMap<String, Arc<AtomicBool>>>,
+    pub mcp: mcp::McpManager,
     /// 用户中断标志
     pub cancel: AtomicBool,
     /// 是否正在处理一轮对话（防止并发 send）
@@ -54,6 +58,22 @@ pub struct AppState {
     pub ocr: ocr::OcrState,
 }
 
+#[derive(Clone, Debug, Default, Serialize)]
+pub struct PlanState {
+    pub active: bool,
+    pub approved: bool,
+    pub path: Option<String>,
+    pub content: Option<String>,
+    pub created_at: Option<u64>,
+    pub approved_at: Option<u64>,
+}
+
+impl PlanState {
+    pub fn reset(&mut self) {
+        *self = PlanState::default();
+    }
+}
+
 impl AppState {
     fn new(http: reqwest::Client) -> Self {
         AppState {
@@ -62,9 +82,11 @@ impl AppState {
             sessions: Mutex::new(SessionStore::default()),
             pending_confirms: Mutex::new(HashMap::new()),
             session_permission_rules: Mutex::new(HashMap::new()),
+            plan_state: Mutex::new(PlanState::default()),
             edit_undo_stack: Mutex::new(Vec::new()),
             workflow_runs: Mutex::new(Vec::new()),
             workflow_cancels: Mutex::new(HashMap::new()),
+            mcp: mcp::McpManager::default(),
             cancel: AtomicBool::new(false),
             busy: AtomicBool::new(false),
             data_dir: Mutex::new(PathBuf::new()),
@@ -395,6 +417,70 @@ async fn webdav_delete_backup(
         return Ok(());
     }
     Err(format!("删除 WebDAV 备份失败：HTTP {}", resp.status()))
+}
+
+#[tauri::command]
+fn set_permission_mode(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    mode: PermissionMode,
+) -> Result<Settings, String> {
+    let next = {
+        let mut settings = state.settings.lock().unwrap();
+        settings.permission_mode = mode;
+        let next = settings.clone();
+        let dir = state.data_dir.lock().unwrap().clone();
+        store::save_settings(&dir, &next)?;
+        next
+    };
+    if mode == PermissionMode::Plan {
+        let mut plan = state.plan_state.lock().unwrap();
+        plan.active = true;
+        plan.approved = false;
+        plan.approved_at = None;
+    }
+    let _ = app.emit("permission-mode-updated", mode);
+    let _ = app.emit("plan-updated", state.plan_state.lock().unwrap().clone());
+    Ok(next)
+}
+
+#[tauri::command]
+fn plan_state(state: State<'_, AppState>) -> PlanState {
+    state.plan_state.lock().unwrap().clone()
+}
+
+#[tauri::command]
+fn approve_plan(app: AppHandle, state: State<'_, AppState>) -> Result<PlanState, String> {
+    let next = {
+        let mut plan = state.plan_state.lock().unwrap();
+        if plan.path.is_none() {
+            return Err("当前没有可批准的计划文件。".to_string());
+        }
+        plan.active = false;
+        plan.approved = true;
+        plan.approved_at = Some(store::now_millis());
+        plan.clone()
+    };
+    {
+        let mut settings = state.settings.lock().unwrap();
+        settings.permission_mode = PermissionMode::Default;
+        let dir = state.data_dir.lock().unwrap().clone();
+        store::save_settings(&dir, &settings)?;
+        let _ = app.emit("permission-mode-updated", settings.permission_mode);
+    }
+    let _ = app.emit("plan-updated", next.clone());
+    Ok(next)
+}
+
+#[tauri::command]
+fn reject_plan(app: AppHandle, state: State<'_, AppState>) -> PlanState {
+    let next = {
+        let mut plan = state.plan_state.lock().unwrap();
+        plan.reset();
+        plan.clone()
+    };
+    let _ = app.emit("plan-updated", next.clone());
+    next
 }
 
 #[tauri::command]
@@ -1006,6 +1092,10 @@ pub fn run() {
             respond_confirm,
             get_settings,
             save_settings,
+            set_permission_mode,
+            plan_state,
+            approve_plan,
+            reject_plan,
             webdav_check_connection,
             webdav_backup_now,
             webdav_list_backups,

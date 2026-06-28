@@ -24,6 +24,7 @@ mod web_fetch;
 mod web_search;
 mod worktree;
 mod write_file;
+mod write_plan;
 
 pub use edit_file::EditUndoEntry;
 
@@ -111,6 +112,7 @@ pub const CORE_TOOL_NAMES: &[&str] = &[
     "grep",
     "git_status",
     "shell",
+    "write_plan",
     "write_file",
     "edit_file",
     "multi_edit",
@@ -236,6 +238,21 @@ pub fn registry() -> Vec<ToolDefinition> {
                     "isolation": { "type": "string", "enum": ["standard", "strict"], "description": "可选：进程隔离策略。standard 为默认轻量隔离；strict 强制清空环境、缩短默认超时，并拒绝联网/依赖安装/破坏性/提权/外部执行类命令。" }
                 },
                 "required": ["command"]
+            }),
+        },
+        ToolDefinition {
+            name: "write_plan",
+            description: "在 Plan Mode 中写入当前实施计划文件。只能写入沙盒 .demiurge/plans/ 下的 Markdown 计划。",
+            risk: ToolRisk::Mutating,
+            concurrency: ToolConcurrency::SerialOnly,
+            permission: PermissionPolicy::ask("会创建一份计划文件，等待用户批准后才进入执行阶段。"),
+            output_policy: ToolOutputPolicy::Inline,
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "content": { "type": "string", "description": "完整 Markdown 实施计划内容" }
+                },
+                "required": ["content"]
             }),
         },
         ToolDefinition {
@@ -602,8 +619,20 @@ pub fn registry() -> Vec<ToolDefinition> {
     ]
 }
 
+pub fn registry_for_state(state: &crate::AppState) -> Vec<ToolDefinition> {
+    let mut defs = registry();
+    defs.extend(crate::mcp::tool_definitions(state));
+    defs
+}
+
 pub fn definition_for(name: &str) -> Option<ToolDefinition> {
     registry().into_iter().find(|t| t.name == name)
+}
+
+pub fn definition_for_state(state: &crate::AppState, name: &str) -> Option<ToolDefinition> {
+    registry_for_state(state)
+        .into_iter()
+        .find(|t| t.name == name)
 }
 
 pub fn deferred_definitions() -> Vec<ToolDefinition> {
@@ -627,8 +656,27 @@ pub fn main_schemas_json_for(dialect: crate::llm::ToolSchemaDialect) -> Value {
     schemas_json_for_names(dialect, CORE_TOOL_NAMES)
 }
 
+pub fn main_schemas_json_for_state(
+    state: &crate::AppState,
+    dialect: crate::llm::ToolSchemaDialect,
+) -> Value {
+    schemas_json_for_defs(dialect, &registry_for_state(state))
+}
+
 pub fn schemas_json_for_names(dialect: crate::llm::ToolSchemaDialect, names: &[&str]) -> Value {
     let defs = registry()
+        .into_iter()
+        .filter(|t| names.contains(&t.name))
+        .collect::<Vec<_>>();
+    schemas_json_for_defs(dialect, &defs)
+}
+
+pub fn schemas_json_for_names_state(
+    state: &crate::AppState,
+    dialect: crate::llm::ToolSchemaDialect,
+    names: &[&str],
+) -> Value {
+    let defs = registry_for_state(state)
         .into_iter()
         .filter(|t| names.contains(&t.name))
         .collect::<Vec<_>>();
@@ -699,9 +747,18 @@ pub fn permission_policy_for(name: &str) -> PermissionPolicy {
         .unwrap_or_else(|| PermissionPolicy::ask("未知工具默认按最高安全级别询问。"))
 }
 
+pub fn permission_policy_for_state(state: &crate::AppState, name: &str) -> PermissionPolicy {
+    definition_for_state(state, name)
+        .map(|t| t.permission)
+        .unwrap_or_else(|| PermissionPolicy::ask("未知工具默认按最高安全级别询问。"))
+}
+
 /// 分发执行。MVP 用 async 函数 + match 充当统一执行入口
 /// （避免为了少数异步工具引入 async-trait 依赖）。
 pub async fn execute(state: &crate::AppState, name: &str, args: Value) -> Result<String, String> {
+    if crate::mcp::is_mcp_tool_name(name) {
+        return crate::mcp::call_tool(state, name, args).await;
+    }
     match name {
         "open_path" => open_path::run(args),
         "read_file" => read_file::run(state, args),
@@ -709,6 +766,7 @@ pub async fn execute(state: &crate::AppState, name: &str, args: Value) -> Result
         "grep" => grep::run(state, args),
         "git_status" => git_status::run(state, args),
         "shell" => shell::run(state, args),
+        "write_plan" => write_plan::run(state, args),
         "write_file" => write_file::run(state, args),
         "edit_file" => edit_file::run(state, args),
         "multi_edit" => edit_file::multi_run(state, args),
@@ -787,6 +845,7 @@ pub fn permission_summary(name: &str, args: &Value) -> String {
                 )
             }
         }
+        "write_plan" => "将写入 Plan Mode 实施计划文件，等待用户批准。".to_string(),
         "write_file" => {
             let path = str_arg("path");
             format!("将创建或覆盖沙盒内文件：{path}")
@@ -879,6 +938,13 @@ pub fn permission_summary(name: &str, args: &Value) -> String {
             .map(|t| format!("{}：{}", t.name, t.permission.reason))
             .unwrap_or_else(|| format!("未知工具 `{name}` 将按最高安全级别处理。")),
     }
+}
+
+pub fn permission_summary_for_state(state: &crate::AppState, name: &str, args: &Value) -> String {
+    if let Some(summary) = crate::mcp::permission_summary(state, name) {
+        return summary;
+    }
+    permission_summary(name, args)
 }
 
 pub fn confirmation_preview(state: &crate::AppState, name: &str, args: Value) -> Option<String> {

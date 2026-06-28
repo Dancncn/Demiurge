@@ -36,8 +36,8 @@ Demiurge 当前已经从 MVP 进入 Agent 能力打磨阶段。下面把现有 T
 ## P0 / 核心架构与安全边界
 
 - [ ] **MCP 集成第一阶段**：实现完整 MCP Manager，优先 stdio server 配置、启动/停止/健康检查、tool discovery、resource 读取、凭据/env/token 管理、工具调用 UI 渲染，并把 MCP 工具接入权限模型与风险分级；后续再扩展 HTTP/SSE、OAuth、MCP-backed skills。
-- [ ] **真实 Plan Mode**：实现用户主导的“先计划、后执行”模式；生成计划文件，在用户批准边界之后才允许写入、shell、外部发布等动作，并支持 plan/default/auto/bypass 等权限模式的清晰切换。
-- [ ] **Provider Capability Profile 2.0 后续**：在 first slice 已集中 provider capability flags、tool schema dialect 与 provider body-builder gating 的基础上，继续统一建模 prompt caching、thinking、parallel tool calls、max token 差异、structured output/schema dialect、provider-specific token budgets；重构 provider request building，避免 runner/tool 层散落 provider-specific conditionals。
+- [x] **真实 Plan Mode**：实现用户主导的“先计划、后执行”模式；生成计划文件，在用户批准边界之后才允许写入、shell、外部发布等动作，并支持 plan/default/auto/bypass 等权限模式的清晰切换。
+- [x] **Provider Capability Profile 2.0**：在 first slice 基础上完成 prompt caching、thinking、parallel tool calls、max token 差异、structured output/schema dialect、provider-specific token budgets 的统一建模，并把 runner/budget 层切到 profile helper。
 - [ ] **Workflow durable run**：把 live run 从进程内状态升级为跨进程 durable background execution，能够在应用重启后恢复真实 run 状态、取消状态、预算状态和进度，而不只是生成 resume overlay。
 - [ ] **Shell / 进程隔离加强**：从 policy-level 约束推进到 OS-level process isolation；补齐平台 sandbox、可视化 allowlist/denylist、联网/依赖安装/外部执行策略，并深测 macOS/Linux 跨平台安全策略。
 - [ ] **Session Engine 成熟化**：引入或继续拆分 Session Engine，覆盖 turn management、多 tool-call loop、状态、取消、重试、错误、前端事件、store decoupling、React transcript/tool event rendering 与 Rust backend event stream。
