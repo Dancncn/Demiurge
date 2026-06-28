@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tauri::Emitter;
 
-use super::budget;
+use super::{budget, session_engine};
 use crate::store;
 
 pub const BLOCKED_CONSECUTIVE_THRESHOLD: usize = 3;
@@ -185,12 +185,10 @@ pub async fn drive_after_turn(
                 if goal.turns_executed >= MAX_GOAL_TURNS {
                     mark_max_turns(state);
                     state.persist_sessions();
-                    let _ = app.emit(
-                        "assistant-done",
-                        format!(
-                            "Goal reached max continuation turns ({MAX_GOAL_TURNS}). Run `/goal continue` to reset and continue."
-                        ),
-                    );
+                    let events = session_engine::TurnEventEmitter::new(app, state);
+                    events.assistant_done(format!(
+                        "Goal reached max continuation turns ({MAX_GOAL_TURNS}). Run `/goal continue` to reset and continue."
+                    ));
                     return Ok(());
                 }
 

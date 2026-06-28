@@ -1,7 +1,7 @@
 use serde::Serialize;
-use tauri::{AppHandle, Emitter};
+use tauri::AppHandle;
 
-use super::{budget, conversation::Message, summary};
+use super::{budget, conversation::Message, session_engine, summary};
 use crate::{llm, store};
 
 const MANUAL_KEEP_RECENT: usize = 12;
@@ -55,7 +55,8 @@ pub async fn run_manual_compact(
             result.after.summary_chars
         )
     };
-    let _ = app.emit("assistant-done", text.clone());
+    let events = session_engine::TurnEventEmitter::new(app, state);
+    events.assistant_done(text.clone());
     Ok(())
 }
 

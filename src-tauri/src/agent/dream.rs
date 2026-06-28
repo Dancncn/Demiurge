@@ -8,9 +8,9 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 
 use serde_json::json;
-use tauri::{AppHandle, Emitter};
+use tauri::AppHandle;
 
-use super::conversation::Message;
+use super::{conversation::Message, session_engine};
 use crate::permission::{self, PermissionDecision, PermissionRequest};
 use crate::store::{self, Settings};
 use crate::{llm, tools};
@@ -28,11 +28,12 @@ pub async fn run_manual_dream(
 
     let settings = state.settings.lock().unwrap().clone();
     let sid = state.sessions.lock().unwrap().active.clone();
+    let events = session_engine::TurnEventEmitter::new(app, state);
     push_message(state, &sid, Message::user(command_text));
     state.persist_sessions();
 
     let mut visible = String::new();
-    emit_delta(app, &mut visible, "开始整理长期记忆...\n\n");
+    emit_delta(&events, &mut visible, "开始整理长期记忆...\n\n");
 
     let sandbox_dir = state.sandbox_dir.lock().unwrap().clone();
     let packs_dir = state.packs_dir.lock().unwrap().clone();
@@ -48,8 +49,8 @@ pub async fn run_manual_dream(
     );
 
     if source.trim().is_empty() {
-        emit_delta(app, &mut visible, "没有找到可整理的记忆材料。");
-        finish(app, state, &sid, visible);
+        emit_delta(&events, &mut visible, "没有找到可整理的记忆材料。");
+        finish(&events, state, &sid, visible);
         return Ok(());
     }
 
@@ -90,33 +91,37 @@ pub async fn run_manual_dream(
     .await?;
 
     if state.cancel.load(Ordering::Relaxed) || turn.finish_reason == "interrupted" {
-        let _ = app.emit("assistant-interrupted", ());
+        events.assistant_interrupted();
         return Ok(());
     }
 
     let next_memory = normalize_memory_output(&turn.content);
     if next_memory.trim().is_empty() {
         emit_delta(
-            app,
+            &events,
             &mut visible,
             "模型没有输出可用的记忆内容，已跳过写入。",
         );
-        finish(app, state, &sid, visible);
+        finish(&events, state, &sid, visible);
         return Ok(());
     }
     if next_memory.len() > MAX_OUTPUT_BYTES {
         emit_delta(
-            app,
+            &events,
             &mut visible,
             "整理后的记忆超过 32 KiB，已跳过写入，避免污染上下文。",
         );
-        finish(app, state, &sid, visible);
+        finish(&events, state, &sid, visible);
         return Ok(());
     }
 
     if normalize_for_compare(&current_memory) == normalize_for_compare(&next_memory) {
-        emit_delta(app, &mut visible, "记忆已经足够干净，没有需要写入的变化。");
-        finish(app, state, &sid, visible);
+        emit_delta(
+            &events,
+            &mut visible,
+            "记忆已经足够干净，没有需要写入的变化。",
+        );
+        finish(&events, state, &sid, visible);
         return Ok(());
     }
 
@@ -143,8 +148,8 @@ pub async fn run_manual_dream(
     let _ = permission::remember_response(state, "dream", &response);
 
     if !response.allow {
-        emit_delta(app, &mut visible, "已取消写入，记忆文件保持不变。");
-        finish(app, state, &sid, visible);
+        emit_delta(&events, &mut visible, "已取消写入，记忆文件保持不变。");
+        finish(&events, state, &sid, visible);
         return Ok(());
     }
 
@@ -154,11 +159,11 @@ pub async fn run_manual_dream(
     fs::write(&memory_path, next_memory).map_err(|e| format!("写入记忆失败：{e}"))?;
 
     emit_delta(
-        app,
+        &events,
         &mut visible,
         "记忆整理完成，已更新沙盒 `.demiurge/memory.md`。",
     );
-    finish(app, state, &sid, visible);
+    finish(&events, state, &sid, visible);
     Ok(())
 }
 
@@ -173,18 +178,23 @@ fn push_message(state: &crate::AppState, sid: &str, msg: Message) {
     }
 }
 
-fn emit_delta(app: &AppHandle, visible: &mut String, text: &str) {
+fn emit_delta(events: &session_engine::TurnEventEmitter<'_>, visible: &mut String, text: &str) {
     if visible.is_empty() {
-        let _ = app.emit("assistant-start", ());
+        events.assistant_start();
     }
     visible.push_str(text);
-    let _ = app.emit("assistant-delta", text);
+    events.assistant_delta(text);
 }
 
-fn finish(app: &AppHandle, state: &crate::AppState, sid: &str, visible: String) {
+fn finish(
+    events: &session_engine::TurnEventEmitter<'_>,
+    state: &crate::AppState,
+    sid: &str,
+    visible: String,
+) {
     push_message(state, sid, Message::assistant_text(visible.clone()));
     state.persist_sessions();
-    let _ = app.emit("assistant-done", visible);
+    events.assistant_done(visible);
 }
 
 fn current_session_snapshot(state: &crate::AppState, sid: &str) -> String {
