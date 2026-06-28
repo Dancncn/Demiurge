@@ -93,7 +93,7 @@ Demiurge/
 
 | 模块 | 职责 | 关键入口 |
 |---|---|---|
-| `lib.rs` | Tauri command 注册、全局 `AppState`、应用初始化、`send` 分发 | `run()` / `send()` |
+| `lib.rs` | Tauri command 注册、全局 `AppState`、应用初始化、`send` 分发和上下文面板聚合 | `run()` / `send()` / `context_panel_state()` |
 | `connection_tests.rs` | Settings 连接测试；用当前表单设置验证 LLM Provider、Web Search 和 WebDAV 以外的网络 key，不要求先保存密钥 | `test_provider()` / `test_web_search()` |
 | `credentials.rs` | keyring 凭据读写，避免 LLM/Web Search/WebDAV/MCP env 密钥落入 settings 明文 | `hydrate_or_migrate_settings()` / `save_mcp_env_secrets()` |
 | `ocr.rs` | OCR 模型路径、模型源、缺模型检查、OCR 推理入口 | `ensure_models()` |
@@ -136,7 +136,7 @@ Demiurge/
 | `components/Markdown.tsx` | GFM、代码块、KaTeX 渲染 |
 | `components/ToolCard.tsx` | tool-start/tool-end 展示，包含 MCP tool/resource 进度摘要 |
 | `components/ConfirmDialog.tsx` | 敏感工具确认，支持 once/session/project scope |
-| `components/SettingsDialog.tsx` | provider、Web Search、MCP server、OCR、语音、WebDAV、权限、记忆审计设置，以及 Provider/Web Search/WebDAV 连接测试 |
+| `components/SettingsDialog.tsx` | provider、Web Search、MCP server、OCR、语音、WebDAV、权限、记忆审计和 Context 可视化设置，以及 Provider/Web Search/WebDAV 连接测试 |
 | `components/WorkflowsPanel.tsx` | workflow 定义、run/stop、agent、phase、log 的 live 状态 |
 
 ## 运行数据目录
@@ -218,6 +218,8 @@ system prompt 由多个 section 组成：
 - 被裁剪的旧消息会进入 rolling summary。
 - `/compact` 可以手动触发。
 - `context_inspect` / `context_collapse` 可以由模型触发。
+
+Settings 的 Context 页通过 `context_panel_state` 展示当前上下文预算和 prompt 组成细节。后端会聚合 system/tools/history/output reserve 的预算占用、history 预算余量与 over-budget 状态、summary 字符数和 token 估算、memory 来源（项目 `memory.md`、`.demiurge/memory.md`、角色包 memory）、history role breakdown，以及每个 prompt section 的优先级、字符数、原始字符数、token 估算、是否纳入和是否截断。前端用预算条、role breakdown 表、memory source 卡片和 prompt section 表渲染这些数据，用于判断上下文压力来自哪里。
 
 ## 工具系统
 

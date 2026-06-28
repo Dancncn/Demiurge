@@ -33,6 +33,7 @@ Demiurge 当前已经从 MVP 进入 Agent 能力打磨阶段。下面把现有 T
 - [x] **API Key 安全存储**：LLM、Tavily、Brave、Exa、WebDAV 密钥使用系统凭据管理器，`settings.json` 只保存密钥引用。
 - [x] **设置与备份**：设置页包含 provider、Web Search、OCR、存储占位和 WebDAV 备份；WebDAV 支持连接检查、手动备份、备份列表、删除。
 - [x] **设置连接测试**：Settings 支持直接验证 LLM Provider/base_url/model/key、Web Search provider/key 和 WebDAV 连接；测试使用当前表单值，不要求先保存密钥。
+- [x] **细粒度上下文可视化**：Settings Context 页展示 system/tools/history/output reserve、summary、memory source、预算消耗、history role breakdown 和 prompt section token/截断细节。
 - [x] **项目记忆审计 UI**：长期记忆可查看、编辑、删除，对应条目自动去重。
 - [x] **自定义 Agent 模板**：`.demiurge/agents/*.json` 支持 prompt、allowed tools、budget、handoff format 和评审定义；前端对话可多选 Agent。
 - [x] **多 Agent 证据包与 reviewer**：`agent_spawn` 支持 `output_format=evidence_packet`、`reviewer_count` 和 `max_total_tokens` 硬预算。
@@ -60,7 +61,7 @@ Demiurge 当前已经从 MVP 进入 Agent 能力打磨阶段。下面把现有 T
 ## P2 / 产品体验与能力补全
 
 - [x] **设置连接测试**：验证 provider、base_url、model、LLM key、Web Search key 和 WebDAV 连接是否可用。
-- [ ] **细粒度上下文可视化**：展示 system/tools/history/output reserve、summary、memory、预算消耗和 prompt section 细节。
+- [x] **细粒度上下文可视化**：展示 system/tools/history/output reserve、summary、memory、预算消耗和 prompt section 细节。
 - [ ] **WebFetch / WebSearch adapter 去重**：抽取共享解析、清洗和来源处理模块，减少重复代码，让来源质量提示和 provider 边缘行为更一致。
 - [ ] **OCR 体验补全**：补齐模型源选择、下载进度、缺模型引导和国内镜像文档。
 - [ ] **角色包头像与导入器**：读取 `manifest.avatar` 替换默认头像；创建拖拽 zip 导入器，解压到 `packs/` 并校验 manifest，避免提交具体受版权保护的角色资产、语音/美术资产或人格设定。
