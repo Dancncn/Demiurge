@@ -47,6 +47,10 @@ impl Usage {
     }
 }
 
+pub(crate) fn merge_usage(slot: &mut Option<Usage>, next: Usage) {
+    *slot = Some(slot.map(|current| current.merge(next)).unwrap_or(next));
+}
+
 /// 一次 LLM 调用的结果。
 pub struct AssistantTurn {
     pub content: String,
@@ -58,6 +62,13 @@ pub struct AssistantTurn {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ToolSchemaDialect {
+    OpenAiCompatible,
+    Anthropic,
+    Gemini,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ProviderAdapterKind {
     OpenAiCompatible,
     Anthropic,
     Gemini,
@@ -114,6 +125,7 @@ pub struct StructuredOutputRequest {
 #[allow(dead_code)]
 #[derive(Clone, Copy, Debug)]
 pub struct ProviderProfile {
+    pub adapter: ProviderAdapterKind,
     pub supports_tools: bool,
     pub supports_streaming: bool,
     pub prompt_cache: PromptCacheCapability,
@@ -130,6 +142,7 @@ pub struct ProviderProfile {
 impl ProviderProfile {
     pub const fn openai_compatible() -> Self {
         ProviderProfile {
+            adapter: ProviderAdapterKind::OpenAiCompatible,
             supports_tools: true,
             supports_streaming: true,
             prompt_cache: PromptCacheCapability::Unsupported,
@@ -162,6 +175,7 @@ impl ProviderProfile {
 
     pub const fn anthropic() -> Self {
         ProviderProfile {
+            adapter: ProviderAdapterKind::Anthropic,
             supports_tools: true,
             supports_streaming: true,
             prompt_cache: PromptCacheCapability::AnthropicCacheControl,
@@ -178,6 +192,7 @@ impl ProviderProfile {
 
     pub const fn gemini() -> Self {
         ProviderProfile {
+            adapter: ProviderAdapterKind::Gemini,
             supports_tools: true,
             supports_streaming: true,
             prompt_cache: PromptCacheCapability::Unsupported,
@@ -212,12 +227,22 @@ impl ProviderProfile {
         self.supports_tools && non_empty_tools(tools)
     }
 
+    pub const fn adapter_kind(self) -> ProviderAdapterKind {
+        self.adapter
+    }
+
     pub fn supports_parallel_tool_call_field(self) -> bool {
-        matches!(self.parallel_tool_calls, ParallelToolCallCapability::OpenAiCompatibleField)
+        matches!(
+            self.parallel_tool_calls,
+            ParallelToolCallCapability::OpenAiCompatibleField
+        )
     }
 
     pub fn supports_structured_output(self) -> bool {
-        !matches!(self.structured_output, StructuredOutputCapability::Unsupported)
+        !matches!(
+            self.structured_output,
+            StructuredOutputCapability::Unsupported
+        )
     }
 
     #[allow(dead_code)]
@@ -270,8 +295,50 @@ impl ProviderProfile {
             ToolSchemaDialect::Gemini => Value::Array(vec![serde_json::json!({
                 "function_declarations": []
             })]),
-            ToolSchemaDialect::OpenAiCompatible | ToolSchemaDialect::Anthropic => Value::Array(vec![]),
+            ToolSchemaDialect::OpenAiCompatible | ToolSchemaDialect::Anthropic => {
+                Value::Array(vec![])
+            }
         }
+    }
+}
+
+pub(crate) fn normalize_finish_reason(
+    adapter: ProviderAdapterKind,
+    raw: &str,
+    has_tool_calls: bool,
+) -> String {
+    if has_tool_calls {
+        return "tool_calls".to_string();
+    }
+
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return "stop".to_string();
+    }
+
+    match adapter {
+        ProviderAdapterKind::OpenAiCompatible => match raw {
+            "stop" => "stop".to_string(),
+            "length" => "length".to_string(),
+            "tool_calls" | "function_call" => "tool_calls".to_string(),
+            "content_filter" => "content_filter".to_string(),
+            "interrupted" => "interrupted".to_string(),
+            other => other.to_ascii_lowercase(),
+        },
+        ProviderAdapterKind::Anthropic => match raw {
+            "end_turn" | "stop_sequence" => "stop".to_string(),
+            "max_tokens" => "length".to_string(),
+            "tool_use" => "tool_calls".to_string(),
+            "interrupted" => "interrupted".to_string(),
+            other => other.to_ascii_lowercase(),
+        },
+        ProviderAdapterKind::Gemini => match raw {
+            "STOP" | "stop" => "stop".to_string(),
+            "MAX_TOKENS" | "max_tokens" => "length".to_string(),
+            "SAFETY" | "BLOCKLIST" | "PROHIBITED_CONTENT" | "SPII" => "content_filter".to_string(),
+            "interrupted" => "interrupted".to_string(),
+            other => other.to_ascii_lowercase(),
+        },
     }
 }
 
@@ -286,34 +353,31 @@ pub async fn stream_completion(
     on_delta: impl FnMut(&str),
     cancel: &AtomicBool,
 ) -> Result<AssistantTurn, String> {
-    match cfg.provider {
-        ProviderKind::DeepSeek
-        | ProviderKind::DashScope
-        | ProviderKind::OpenAi
-        | ProviderKind::OpenRouter
-        | ProviderKind::Glm
-        | ProviderKind::MiniMax
-        | ProviderKind::Custom
-        | ProviderKind::OpenAiCompatible => {
-            openai::stream_completion_with_profile(
-                client,
-                cfg,
-                messages,
-                tools,
-                on_delta,
-                cancel,
-                ProviderProfile::openai_compatible(),
+    let profile = ProviderProfile::for_kind(cfg.provider);
+    match profile.adapter_kind() {
+        ProviderAdapterKind::OpenAiCompatible if cfg.provider == ProviderKind::Local => {
+            local::stream_completion_with_profile(
+                client, cfg, messages, tools, on_delta, cancel, profile,
             )
             .await
         }
-        ProviderKind::Local => {
-            local::stream_completion(client, cfg, messages, tools, on_delta, cancel).await
+        ProviderAdapterKind::OpenAiCompatible => {
+            openai::stream_completion_with_profile(
+                client, cfg, messages, tools, on_delta, cancel, profile,
+            )
+            .await
         }
-        ProviderKind::Anthropic => {
-            anthropic::stream_completion(client, cfg, messages, tools, on_delta, cancel).await
+        ProviderAdapterKind::Anthropic => {
+            anthropic::stream_completion_with_profile(
+                client, cfg, messages, tools, on_delta, cancel, profile,
+            )
+            .await
         }
-        ProviderKind::Gemini => {
-            gemini::stream_completion(client, cfg, messages, tools, on_delta, cancel).await
+        ProviderAdapterKind::Gemini => {
+            gemini::stream_completion_with_profile(
+                client, cfg, messages, tools, on_delta, cancel, profile,
+            )
+            .await
         }
     }
 }
@@ -341,13 +405,21 @@ pub(crate) fn non_empty_tools(tools: &Value) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::store::ProviderKind;
+    use crate::store::{ProviderKind, Settings};
 
     #[test]
     fn provider_profile_matches_kind() {
         assert_eq!(
+            ProviderProfile::for_kind(ProviderKind::DeepSeek).adapter_kind(),
+            ProviderAdapterKind::OpenAiCompatible
+        );
+        assert_eq!(
             ProviderProfile::for_kind(ProviderKind::DeepSeek).tool_schema_dialect,
             ToolSchemaDialect::OpenAiCompatible
+        );
+        assert_eq!(
+            ProviderProfile::for_kind(ProviderKind::Local).adapter_kind(),
+            ProviderAdapterKind::OpenAiCompatible
         );
         assert_eq!(
             ProviderProfile::for_kind(ProviderKind::OpenAiCompatible).structured_output,
@@ -356,8 +428,16 @@ mod tests {
         assert!(ProviderProfile::for_kind(ProviderKind::OpenAiCompatible).requires_api_key);
         assert!(!ProviderProfile::for_kind(ProviderKind::Local).requires_api_key);
         assert_eq!(
+            ProviderProfile::for_kind(ProviderKind::OpenAi).parallel_tool_calls,
+            ParallelToolCallCapability::OpenAiCompatibleField
+        );
+        assert_eq!(
             ProviderProfile::for_kind(ProviderKind::Anthropic).tool_schema_dialect,
             ToolSchemaDialect::Anthropic
+        );
+        assert_eq!(
+            ProviderProfile::for_kind(ProviderKind::Anthropic).adapter_kind(),
+            ProviderAdapterKind::Anthropic
         );
         assert_eq!(
             ProviderProfile::for_kind(ProviderKind::Anthropic).structured_output,
@@ -366,6 +446,10 @@ mod tests {
         assert_eq!(
             ProviderProfile::for_kind(ProviderKind::Gemini).tool_schema_dialect,
             ToolSchemaDialect::Gemini
+        );
+        assert_eq!(
+            ProviderProfile::for_kind(ProviderKind::Gemini).adapter_kind(),
+            ProviderAdapterKind::Gemini
         );
         assert_eq!(
             ProviderProfile::for_kind(ProviderKind::Gemini).structured_output,
@@ -384,5 +468,59 @@ mod tests {
         profile.max_output_tokens = Some(100);
         assert_eq!(profile.effective_max_output_tokens(250), 100);
         assert_eq!(profile.effective_max_output_tokens(50), 50);
+    }
+
+    #[test]
+    fn official_openai_profile_clamps_token_budget() {
+        let settings = Settings {
+            max_input_tokens: 250_000,
+            reserved_output_tokens: 32_000,
+            ..Settings::default()
+        };
+        let profile = ProviderProfile::for_kind(ProviderKind::OpenAi);
+        let budget = profile.effective_token_budget(&settings);
+
+        assert_eq!(budget.max_input_tokens, 128_000);
+        assert_eq!(budget.reserved_output_tokens, 16_384);
+        assert!(profile.supports_parallel_tool_call_field());
+    }
+
+    #[test]
+    fn openai_compatible_profile_keeps_provider_defined_limits() {
+        let settings = Settings {
+            max_input_tokens: 250_000,
+            reserved_output_tokens: 32_000,
+            ..Settings::default()
+        };
+        let profile = ProviderProfile::for_kind(ProviderKind::OpenAiCompatible);
+        let budget = profile.effective_token_budget(&settings);
+
+        assert_eq!(budget.max_input_tokens, 250_000);
+        assert_eq!(budget.reserved_output_tokens, 32_000);
+        assert!(!profile.supports_parallel_tool_call_field());
+    }
+
+    #[test]
+    fn finish_reason_normalization_matches_adapter_dialects() {
+        assert_eq!(
+            normalize_finish_reason(
+                ProviderAdapterKind::OpenAiCompatible,
+                "function_call",
+                false
+            ),
+            "tool_calls"
+        );
+        assert_eq!(
+            normalize_finish_reason(ProviderAdapterKind::Anthropic, "max_tokens", false),
+            "length"
+        );
+        assert_eq!(
+            normalize_finish_reason(ProviderAdapterKind::Gemini, "SAFETY", false),
+            "content_filter"
+        );
+        assert_eq!(
+            normalize_finish_reason(ProviderAdapterKind::Gemini, "STOP", true),
+            "tool_calls"
+        );
     }
 }

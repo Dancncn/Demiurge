@@ -3,7 +3,7 @@ use std::time::{Duration, Instant};
 use serde::Serialize;
 use serde_json::{json, Value};
 
-use crate::llm::{self, ProviderProfile};
+use crate::llm::{self, ProviderAdapterKind, ProviderProfile};
 use crate::store::{ProviderKind, Settings};
 
 const CONNECTION_TEST_TIMEOUT_SECS: u64 = 20;
@@ -23,6 +23,16 @@ enum ProviderTestKind {
     OpenAiCompatible,
     Anthropic,
     Gemini,
+}
+
+impl ProviderTestKind {
+    fn from_adapter(adapter: ProviderAdapterKind) -> Self {
+        match adapter {
+            ProviderAdapterKind::OpenAiCompatible => ProviderTestKind::OpenAiCompatible,
+            ProviderAdapterKind::Anthropic => ProviderTestKind::Anthropic,
+            ProviderAdapterKind::Gemini => ProviderTestKind::Gemini,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -175,19 +185,7 @@ impl ProviderTestRequest {
         if model.is_empty() {
             return Err("Model is required for the provider connection test.".to_string());
         }
-        let kind = match settings.provider {
-            ProviderKind::Anthropic => ProviderTestKind::Anthropic,
-            ProviderKind::Gemini => ProviderTestKind::Gemini,
-            ProviderKind::DeepSeek
-            | ProviderKind::DashScope
-            | ProviderKind::OpenAi
-            | ProviderKind::OpenRouter
-            | ProviderKind::Glm
-            | ProviderKind::MiniMax
-            | ProviderKind::Custom
-            | ProviderKind::OpenAiCompatible
-            | ProviderKind::Local => ProviderTestKind::OpenAiCompatible,
-        };
+        let kind = ProviderTestKind::from_adapter(profile.adapter_kind());
         Ok(Self {
             provider: settings.provider,
             kind,
@@ -290,11 +288,8 @@ impl WebSearchTestRequest {
                 &["BRAVE_SEARCH_API_KEY", "BRAVE_API_KEY"],
             ),
             exa_key: setting_or_env(&settings.exa_api_key, &env, &["EXA_API_KEY"]),
-            tavily_endpoint: env_first(
-                &env,
-                &["TAVILY_SEARCH_URL", "TAVILY_ENDPOINT_URL"],
-            )
-            .unwrap_or_else(|| "https://tavily.claude-code-best.win/search".to_string()),
+            tavily_endpoint: env_first(&env, &["TAVILY_SEARCH_URL", "TAVILY_ENDPOINT_URL"])
+                .unwrap_or_else(|| "https://tavily.claude-code-best.win/search".to_string()),
             exa_endpoint: env_first(&env, &["EXA_MCP_URL"])
                 .unwrap_or_else(|| "https://mcp.exa.ai/mcp".to_string()),
         };
@@ -330,7 +325,10 @@ async fn check_bing_search(client: &reqwest::Client) -> Result<String, String> {
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 \
              (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0",
         )
-        .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+        .header(
+            "Accept",
+            "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        )
         .header("Accept-Language", "en-US,en;q=0.9")
         .send()
         .await
@@ -680,12 +678,11 @@ mod tests {
                 .unwrap();
         assert_eq!(bing.adapter, WebSearchAdapter::Bing);
 
-        let duckduckgo = WebSearchTestRequest::from_settings_with_env(
-            &web_settings("duckduckgo"),
-            None,
-            |_| None,
-        )
-        .unwrap();
+        let duckduckgo =
+            WebSearchTestRequest::from_settings_with_env(&web_settings("duckduckgo"), None, |_| {
+                None
+            })
+            .unwrap();
         assert_eq!(duckduckgo.adapter, WebSearchAdapter::DuckDuckGo);
     }
 

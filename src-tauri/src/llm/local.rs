@@ -7,6 +7,7 @@ use crate::store::Settings;
 
 use super::{openai, AssistantTurn, ProviderProfile};
 
+#[allow(dead_code)]
 pub async fn stream_completion(
     client: &reqwest::Client,
     cfg: &Settings,
@@ -15,7 +16,7 @@ pub async fn stream_completion(
     on_delta: impl FnMut(&str),
     cancel: &AtomicBool,
 ) -> Result<AssistantTurn, String> {
-    openai::stream_completion_with_profile(
+    stream_completion_with_profile(
         client,
         cfg,
         messages,
@@ -25,4 +26,17 @@ pub async fn stream_completion(
         ProviderProfile::local_openai_compatible(),
     )
     .await
+}
+
+pub async fn stream_completion_with_profile(
+    client: &reqwest::Client,
+    cfg: &Settings,
+    messages: &[Message],
+    tools: &Value,
+    on_delta: impl FnMut(&str),
+    cancel: &AtomicBool,
+    profile: ProviderProfile,
+) -> Result<AssistantTurn, String> {
+    openai::stream_completion_with_profile(client, cfg, messages, tools, on_delta, cancel, profile)
+        .await
 }

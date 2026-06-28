@@ -7,7 +7,10 @@ use serde_json::{json, Value};
 use crate::agent::conversation::{FunctionCall, Message, ToolCall};
 use crate::store::Settings;
 
-use super::{require_api_key, AssistantTurn, ProviderProfile, StructuredOutputRequest, Usage};
+use super::{
+    merge_usage, normalize_finish_reason, require_api_key, AssistantTurn, ProviderAdapterKind,
+    ProviderProfile, StructuredOutputRequest, Usage,
+};
 
 pub async fn stream_completion_with_profile(
     client: &reqwest::Client,
@@ -145,16 +148,11 @@ impl OpenAiStreamState {
             })
             .collect();
 
-        let finish_reason = if self.finish.is_empty() {
-            if tool_calls.is_empty() {
-                "stop"
-            } else {
-                "tool_calls"
-            }
-            .to_string()
-        } else {
-            self.finish
-        };
+        let finish_reason = normalize_finish_reason(
+            ProviderAdapterKind::OpenAiCompatible,
+            &self.finish,
+            !tool_calls.is_empty(),
+        );
 
         AssistantTurn {
             content: self.content,
@@ -174,12 +172,7 @@ fn parse_openai_stream_data(
         return;
     };
     if let Some(usage) = parse_openai_usage(&v["usage"]) {
-        state.usage = Some(
-            state
-                .usage
-                .map(|current| current.merge(usage))
-                .unwrap_or(usage),
-        );
+        merge_usage(&mut state.usage, usage);
     }
 
     let Some(choice) = v["choices"].get(0) else {
@@ -254,6 +247,38 @@ mod tests {
         assert_eq!(body["stream"], true);
         assert!(body["tools"].is_array());
         assert_eq!(body["tool_choice"], "auto");
+    }
+
+    #[test]
+    fn official_openai_body_uses_profile_specific_fields() {
+        let mut cfg = settings(ProviderKind::OpenAi, "sk-test");
+        cfg.reserved_output_tokens = 32_000;
+        let body = build_openai_body(
+            &cfg,
+            &[Message::user("hi")],
+            &json!([{ "type": "function", "function": { "name": "x" } }]),
+            ProviderProfile::for_kind(ProviderKind::OpenAi),
+        )
+        .unwrap();
+
+        assert_eq!(body["max_tokens"], 16_384);
+        assert_eq!(body["parallel_tool_calls"], true);
+    }
+
+    #[test]
+    fn openai_compatible_body_omits_openai_only_fields() {
+        let mut cfg = settings(ProviderKind::OpenAiCompatible, "sk-test");
+        cfg.reserved_output_tokens = 32_000;
+        let body = build_openai_body(
+            &cfg,
+            &[Message::user("hi")],
+            &json!([{ "type": "function", "function": { "name": "x" } }]),
+            ProviderProfile::for_kind(ProviderKind::OpenAiCompatible),
+        )
+        .unwrap();
+
+        assert_eq!(body["max_tokens"], 32_000);
+        assert!(body.get("parallel_tool_calls").is_none());
     }
 
     #[test]

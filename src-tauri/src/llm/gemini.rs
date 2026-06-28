@@ -6,17 +6,41 @@ use serde_json::{json, Value};
 use crate::agent::conversation::{FunctionCall, Message, ToolCall};
 use crate::store::Settings;
 
-use super::{require_api_key, AssistantTurn, ProviderProfile, StructuredOutputRequest, Usage};
+use super::{
+    merge_usage, normalize_finish_reason, require_api_key, AssistantTurn, ProviderAdapterKind,
+    ProviderProfile, StructuredOutputRequest, Usage,
+};
 
+#[allow(dead_code)]
 pub async fn stream_completion(
+    client: &reqwest::Client,
+    cfg: &Settings,
+    messages: &[Message],
+    tools: &Value,
+    on_delta: impl FnMut(&str),
+    cancel: &AtomicBool,
+) -> Result<AssistantTurn, String> {
+    stream_completion_with_profile(
+        client,
+        cfg,
+        messages,
+        tools,
+        on_delta,
+        cancel,
+        ProviderProfile::gemini(),
+    )
+    .await
+}
+
+pub async fn stream_completion_with_profile(
     client: &reqwest::Client,
     cfg: &Settings,
     messages: &[Message],
     tools: &Value,
     mut on_delta: impl FnMut(&str),
     cancel: &AtomicBool,
+    profile: ProviderProfile,
 ) -> Result<AssistantTurn, String> {
-    let profile = ProviderProfile::gemini();
     let key = require_api_key(cfg, profile)?
         .ok_or_else(|| "未配置 API Key，请在设置里填写。".to_string())?;
     let url = format!(
@@ -176,22 +200,11 @@ struct GeminiStreamState {
 
 impl GeminiStreamState {
     fn finish(self) -> AssistantTurn {
-        let finish_reason = if self.finish.is_empty() {
-            if self.tool_calls.is_empty() {
-                "stop"
-            } else {
-                "tool_calls"
-            }
-            .to_string()
-        } else if !self.tool_calls.is_empty() {
-            "tool_calls".to_string()
-        } else {
-            match self.finish.as_str() {
-                "STOP" => "stop".to_string(),
-                "MAX_TOKENS" => "length".to_string(),
-                other => other.to_ascii_lowercase(),
-            }
-        };
+        let finish_reason = normalize_finish_reason(
+            ProviderAdapterKind::Gemini,
+            &self.finish,
+            !self.tool_calls.is_empty(),
+        );
         AssistantTurn {
             content: self.content,
             tool_calls: self.tool_calls,
@@ -210,12 +223,7 @@ fn parse_gemini_stream_data(
         return;
     };
     if let Some(usage) = parse_gemini_usage(&v["usageMetadata"]) {
-        state.usage = Some(
-            state
-                .usage
-                .map(|current| current.merge(usage))
-                .unwrap_or(usage),
-        );
+        merge_usage(&mut state.usage, usage);
     }
 
     let Some(candidate) = v["candidates"].get(0) else {
