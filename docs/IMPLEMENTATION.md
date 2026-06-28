@@ -112,7 +112,7 @@ Demiurge/
 | `agent/subagent.rs` | 只读子 Agent、fork/recent/brief context、evidence packet、多 reviewer、硬预算 | `run()` |
 | `agent/ultracode.rs` | `/ultracode` 临时编排 overlay | `overlay()` |
 | `agent/workflow_journal.rs` | workflow JSONL journal 和 resume overlay | `append()` / `resume_overlay()` |
-| `agent/workflow_runtime.rs` | JSON workflow DSL 执行与 live panel 状态 | `launch()` / `run_launched()` |
+| `agent/workflow_runtime.rs` | JSON workflow DSL 执行、live panel 状态、durable run snapshot 写入和启动水合 | `launch()` / `run_launched()` / `hydrate_persisted_runs()` |
 | `llm/*` | OpenAI-compatible/local/Anthropic/Gemini provider adapters | `stream_completion()` |
 | `mcp/mod.rs` | stdio MCP Manager、server lifecycle、tool/resource discovery、resource read、动态 tool definition 与调用分发 | `ensure_initialized()` / `call_tool()` / `read_resource()` |
 | `tools/mod.rs` | 工具注册表、schema 输出、权限 metadata、统一执行入口 | `registry()` / `execute()` |
@@ -156,6 +156,7 @@ app_data_dir/
    ├─ plans/*.md                 # Plan Mode 生成的待批准实施计划
    ├─ workflows/*.json           # workflow 定义
    ├─ workflow-runs/*/journal.jsonl
+   ├─ workflow-runs/*/state.json # durable workflow run snapshot
    └─ screenshots/               # 截图和 OCR 中间文件
 ```
 
@@ -277,7 +278,11 @@ workflow 定义放在沙盒 `.demiurge/workflows/*.json`。运行时支持：
 - `pipeline`
 - `budget`
 
-运行状态通过 `workflow-updated` 推送到前端。journal 写入 `.demiurge/workflow-runs/<run_id>/journal.jsonl`，可通过 `/workflow resume <run_id>` 生成恢复 overlay。
+运行状态通过 `workflow-updated` 推送到前端，同时写入 `.demiurge/workflow-runs/<run_id>/journal.jsonl` 和 `.demiurge/workflow-runs/<run_id>/state.json`。`journal.jsonl` 保留事件 tail，用于恢复上下文；`state.json` 保存当前 run status、取消请求、phase、agent 进度、预算和 step 计数，用于跨进程水合。
+
+启动时和 Workflows 面板读取时，后端会把 `state.json` 合并回 live panel state。上一个进程仍处于 `running` 的 run 会恢复为 `stale_running`，表示状态、预算和进度可见，但没有 live task 附着；如果 snapshot 中已有取消请求，则恢复为 `killed`。`/workflows` 使用 runtime panel state 输出这些 durable 状态。
+
+`/workflow resume <run_id>` 优先从 journal 生成恢复 overlay；如果 journal 不可读但 `state.json` 存在，则 fallback 到 durable snapshot，把 snapshot 作为恢复依据交给下一轮 agent，避免重复已完成步骤。
 
 ## Web Search / Fetch
 

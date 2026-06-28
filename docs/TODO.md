@@ -25,6 +25,7 @@ Demiurge 当前已经从 MVP 进入 Agent 能力打磨阶段。下面把现有 T
 - [x] **Deferred Tools**：`tool_search` / `execute_tool` 延迟发现和执行低频工具。
 - [x] **Workflow Journal / Resume**：JSONL journal、`/workflows`、`/workflow resume <run_id>`。
 - [x] **Workflow JSON DSL / Live Panel**：`agent`、`parallel`、`pipeline`、`phase`、`budget`、`log` step，以及 Workflows 页 run/stop/resume。
+- [x] **Workflow durable run**：`.demiurge/workflow-runs/<run_id>/state.json` 持久化 run snapshot；启动和面板打开时水合 persisted run state；恢复 `stale_running`、取消状态、预算和进度；journal 不可读时 `/workflow resume <run_id>` 可从 durable snapshot 生成恢复 overlay。
 - [x] **Worktree Isolation**：`worktree_create` 工具创建隔离 worktree。
 - [x] **Computer Use 底层能力**：窗口列表、屏幕截图、点击/输入 OCR、以及 OCR 模型下载。
 - [x] **Voice API 预留**：TTS/ASR adapter 接口保留，设置页露出占位。
@@ -40,7 +41,7 @@ Demiurge 当前已经从 MVP 进入 Agent 能力打磨阶段。下面把现有 T
 - [x] **MCP 集成第一阶段**：实现完整 MCP Manager，优先 stdio server 配置、启动/停止/健康检查、tool discovery、resource 读取、凭据/env/token 管理、工具调用 UI 渲染，并把 MCP 工具接入权限模型与风险分级；后续再扩展 HTTP/SSE、OAuth、MCP-backed skills。
 - [x] **真实 Plan Mode**：实现用户主导的“先计划、后执行”模式；生成计划文件，在用户批准边界之后才允许写入、shell、外部发布等动作，并支持 plan/default/auto/bypass 等权限模式的清晰切换。
 - [x] **Provider Capability Profile 2.0**：在 first slice 基础上完成 prompt caching、thinking、parallel tool calls、max token 差异、structured output/schema dialect、provider-specific token budgets 的统一建模，并把 runner/budget 层切到 profile helper。
-- [ ] **Workflow durable run**：把 live run 从进程内状态升级为跨进程 durable background execution，能够在应用重启后恢复真实 run 状态、取消状态、预算状态和进度，而不只是生成 resume overlay。
+- [x] **Workflow durable run**：把 live run 从进程内状态升级为跨进程 durable background execution，能够在应用重启后恢复真实 run 状态、取消状态、预算状态和进度，而不只是生成 resume overlay。
 - [ ] **Shell / 进程隔离加强**：从 policy-level 约束推进到 OS-level process isolation；补齐平台 sandbox、可视化 allowlist/denylist、联网/依赖安装/外部执行策略，并深测 macOS/Linux 跨平台安全策略。
 - [x] **Session Engine 成熟化**：引入或继续拆分 Session Engine，覆盖 turn management、多 tool-call loop、状态、取消、重试、错误、前端事件、store decoupling、React transcript/tool event rendering 与 Rust backend event stream。
 
