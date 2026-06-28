@@ -7,6 +7,7 @@ use std::path::{Component, Path, PathBuf};
 
 mod agent_spawn;
 mod args;
+mod clipboard;
 mod context_tools;
 mod edit_file;
 mod execute_tool;
@@ -17,6 +18,7 @@ mod grep;
 mod http_get;
 mod list_dir;
 mod open_path;
+mod package_scripts;
 mod read_file;
 mod screen;
 mod shell;
@@ -127,6 +129,8 @@ pub const CORE_TOOL_NAMES: &[&str] = &[
     "web_fetch",
     "http_get",
     "web_search",
+    "clipboard",
+    "package_scripts",
     "mcp_read_resource",
     "agent_spawn",
     "context_inspect",
@@ -441,6 +445,36 @@ pub fn registry() -> Vec<ToolDefinition> {
                     "search_type": { "type": "string", "enum": ["auto", "fast", "deep"], "description": "可选：Exa 搜索类型，auto 自动、fast 快速、deep 深度。" }
                 },
                 "required": ["query"]
+            }),
+        },
+        ToolDefinition {
+            name: "clipboard",
+            description: "读取系统剪贴板文本并按长度截断。剪贴板可能包含密钥、私人聊天或临时敏感数据，执行前必须确认。",
+            risk: ToolRisk::Privileged,
+            concurrency: ToolConcurrency::SerialOnly,
+            permission: PermissionPolicy::ask("会读取系统剪贴板文本，可能包含敏感信息。"),
+            output_policy: ToolOutputPolicy::TruncateForUi,
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "action": { "type": "string", "enum": ["read"], "description": "当前只支持 read。" },
+                    "max_characters": { "type": "integer", "description": "可选：最多返回多少字符，默认 4000，最大 20000。" }
+                }
+            }),
+        },
+        ToolDefinition {
+            name: "package_scripts",
+            description: "读取沙盒内 package.json 的 scripts，列出可用脚本或为指定 script 生成建议 shell 命令；不会直接执行脚本。",
+            risk: ToolRisk::ReadOnly,
+            concurrency: ToolConcurrency::ParallelSafe,
+            permission: PermissionPolicy::allow("只读取沙盒内 package.json 的 scripts 字段。"),
+            output_policy: ToolOutputPolicy::TruncateForUi,
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "可选：相对沙盒目录的 package.json 文件或包含 package.json 的目录，默认 package.json。" },
+                    "script": { "type": "string", "description": "可选：指定一个 script 名，返回该 script 和建议 shell 命令。" }
+                }
             }),
         },
         ToolDefinition {
@@ -844,6 +878,8 @@ pub async fn execute(state: &crate::AppState, name: &str, args: Value) -> Result
         "web_fetch" => web_fetch::run(state, args).await,
         "http_get" => http_get::run(state, args).await,
         "web_search" => web_search::run(state, args).await,
+        "clipboard" => clipboard::run(args),
+        "package_scripts" => package_scripts::run(state, args),
         "mcp_read_resource" => read_mcp_resource_tool(state, args).await,
         "agent_spawn" => agent_spawn::run(state, args).await,
         "context_inspect" => context_tools::inspect(state),
@@ -877,6 +913,7 @@ pub async fn execute_subagent_readonly(
         "http_get" => http_get::run(state, args).await,
         "web_fetch" => web_fetch::run(state, args).await,
         "web_search" => web_search::run(state, args).await,
+        "package_scripts" => package_scripts::run(state, args),
         "context_inspect" => context_tools::inspect(state),
         other => Err(format!("子 Agent 不允许使用工具：{other}")),
     }
@@ -930,6 +967,21 @@ pub fn permission_summary(name: &str, args: &Value) -> String {
         "http_get" => {
             let url = str_arg("url");
             format!("将对公开 URL 执行 HTTP GET：{url}")
+        }
+        "clipboard" => "将读取系统剪贴板文本，可能包含敏感信息。".to_string(),
+        "package_scripts" => {
+            let path = str_arg("path");
+            let script = str_arg("script");
+            let path = if path.is_empty() {
+                "package.json"
+            } else {
+                path
+            };
+            if script.is_empty() {
+                format!("将读取沙盒内 `{path}` 的 package scripts。")
+            } else {
+                format!("将读取沙盒内 `{path}` 并生成 script `{script}` 的建议执行命令。")
+            }
         }
         "write_file" => {
             let path = str_arg("path");
