@@ -179,6 +179,7 @@ async fn send(app: AppHandle, state: State<'_, AppState>, text: String) -> Resul
             agent_names: Vec::new(),
         },
     )?;
+    let events = agent::session_engine::TurnEventEmitter::new(&app, st);
     let trimmed = text.trim();
     let mut should_drive_goal = false;
     let res = if trimmed == "/dream" || trimmed.starts_with("/dream ") {
@@ -190,7 +191,7 @@ async fn send(app: AppHandle, state: State<'_, AppState>, text: String) -> Resul
     } else if trimmed == "/goal" || trimmed.starts_with("/goal ") {
         match agent::goal::handle_slash(st, trimmed) {
             Ok(agent::goal::GoalSlashOutcome::Respond(body)) => {
-                let _ = app.emit("assistant-done", body);
+                events.assistant_done(body);
                 Ok(())
             }
             Ok(agent::goal::GoalSlashOutcome::Query {
@@ -230,7 +231,7 @@ async fn send(app: AppHandle, state: State<'_, AppState>, text: String) -> Resul
             }
             out
         };
-        let _ = app.emit("assistant-done", body);
+        events.assistant_done(body);
         Ok(())
     } else if trimmed.starts_with("/workflow resume ") {
         let run_id = trimmed

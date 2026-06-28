@@ -6,9 +6,10 @@
 use std::sync::atomic::Ordering;
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use tauri::{AppHandle, Emitter};
 
-use crate::store;
+use crate::{store, tools};
 
 const INPUT_PREVIEW_CHARS: usize = 160;
 
@@ -58,6 +59,58 @@ pub struct SessionEnginePanelState {
     pub last_turn: Option<TurnRunState>,
 }
 
+#[derive(Clone, Debug, Serialize)]
+pub struct TurnEventContext {
+    pub id: String,
+    pub session_id: String,
+    pub status: TurnStatus,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct AgentEventEnvelope<T>
+where
+    T: Serialize,
+{
+    pub kind: &'static str,
+    pub turn: Option<TurnEventContext>,
+    pub timestamp: u64,
+    pub payload: T,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct AssistantErrorEvent {
+    pub kind: String,
+    pub message: String,
+    pub hint: String,
+    pub retryable: bool,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct ToolStartEvent {
+    pub tool_call_id: String,
+    pub name: String,
+    pub args: Value,
+    pub description: Option<&'static str>,
+    pub risk: Option<tools::ToolRisk>,
+    pub permission_effect: Option<tools::PermissionEffect>,
+    pub concurrency: Option<tools::ToolConcurrency>,
+    pub output_policy: Option<tools::ToolOutputPolicy>,
+    pub preview: Option<String>,
+    pub affected_paths: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct ToolEndEvent {
+    pub tool_call_id: String,
+    pub name: String,
+    pub ok: bool,
+    pub denied: bool,
+    pub result: String,
+    pub duration_ms: u64,
+    pub error_hint: Option<String>,
+    pub source_quality: Option<Value>,
+}
+
 #[derive(Clone, Debug)]
 pub struct TurnStart {
     pub entrypoint: TurnEntrypoint,
@@ -70,6 +123,65 @@ pub struct TurnStart {
 #[derive(Clone, Debug)]
 pub struct TurnHandle {
     pub id: String,
+}
+
+#[derive(Clone)]
+pub struct TurnEventEmitter<'a> {
+    app: AppHandle,
+    state: &'a crate::AppState,
+}
+
+impl<'a> TurnEventEmitter<'a> {
+    pub fn new(app: &AppHandle, state: &'a crate::AppState) -> Self {
+        TurnEventEmitter {
+            app: app.clone(),
+            state,
+        }
+    }
+
+    pub fn assistant_start(&self) {
+        self.emit_legacy_and_unified("assistant-start", "assistant_start", ());
+    }
+
+    pub fn assistant_delta(&self, delta: &str) {
+        self.emit_legacy_and_unified("assistant-delta", "assistant_delta", delta.to_string());
+    }
+
+    pub fn assistant_done(&self, text: String) {
+        self.emit_legacy_and_unified("assistant-done", "assistant_done", text);
+    }
+
+    pub fn assistant_error(&self, event: AssistantErrorEvent) {
+        self.emit_legacy_and_unified("assistant-error", "assistant_error", event);
+    }
+
+    pub fn assistant_interrupted(&self) {
+        self.emit_legacy_and_unified("assistant-interrupted", "assistant_interrupted", ());
+    }
+
+    pub fn tool_start(&self, event: ToolStartEvent) {
+        self.emit_legacy_and_unified("tool-start", "tool_start", event);
+    }
+
+    pub fn tool_end(&self, event: ToolEndEvent) {
+        self.emit_legacy_and_unified("tool-end", "tool_end", event);
+    }
+
+    fn emit_legacy_and_unified<T>(&self, legacy_event: &str, kind: &'static str, payload: T)
+    where
+        T: Serialize + Clone,
+    {
+        let _ = self.app.emit(legacy_event, payload.clone());
+        let _ = self.app.emit(
+            "agent-event",
+            AgentEventEnvelope {
+                kind,
+                turn: current_turn_context(self.state),
+                timestamp: store::now_millis(),
+                payload,
+            },
+        );
+    }
 }
 
 pub fn panel_state(state: &crate::AppState) -> SessionEnginePanelState {
@@ -162,6 +274,20 @@ pub fn emit_update(app: &AppHandle, state: &crate::AppState) {
 
 fn new_turn_id() -> String {
     format!("turn_{}", store::new_session_id().trim_start_matches("s_"))
+}
+
+fn current_turn_context(state: &crate::AppState) -> Option<TurnEventContext> {
+    state
+        .session_engine
+        .lock()
+        .unwrap()
+        .active_turn
+        .as_ref()
+        .map(|turn| TurnEventContext {
+            id: turn.id.clone(),
+            session_id: turn.session_id.clone(),
+            status: turn.status.clone(),
+        })
 }
 
 fn preview(input: &str) -> String {

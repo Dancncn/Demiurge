@@ -7,7 +7,9 @@ use serde_json::json;
 use tauri::{AppHandle, Emitter};
 
 use super::conversation::Message;
-use super::{budget, context, custom, goal, memory, prompt, summary, workflow_journal};
+use super::{
+    budget, context, custom, goal, memory, prompt, session_engine, summary, workflow_journal,
+};
 use crate::{llm, pack, permission, store, tools};
 use permission::PermissionRequest;
 
@@ -25,7 +27,7 @@ fn truncate_ui(s: &str) -> String {
     }
 }
 
-fn assistant_error_payload(err: &str) -> serde_json::Value {
+fn assistant_error_payload(err: &str) -> session_engine::AssistantErrorEvent {
     let lower = err.to_ascii_lowercase();
     let (kind, hint) = if lower.contains("401")
         || lower.contains("403")
@@ -56,12 +58,12 @@ fn assistant_error_payload(err: &str) -> serde_json::Value {
             "Verify the provider, base URL, model name, API key, and tool capability settings.",
         )
     };
-    json!({
-        "kind": kind,
-        "message": err,
-        "hint": hint,
-        "retryable": true,
-    })
+    session_engine::AssistantErrorEvent {
+        kind: kind.to_string(),
+        message: err.to_string(),
+        hint: hint.to_string(),
+        retryable: true,
+    }
 }
 
 fn tool_error_hint(name: &str, result: &str, ok: bool, denied: bool) -> Option<String> {
@@ -151,6 +153,7 @@ pub async fn run_turn_with_options(
     options: TurnOptions,
 ) -> Result<(), String> {
     state.cancel.store(false, Ordering::Relaxed);
+    let events = session_engine::TurnEventEmitter::new(app, state);
 
     let mut settings = state.settings.lock().unwrap().clone();
     crate::mcp::ensure_initialized(state).await;
@@ -241,7 +244,7 @@ pub async fn run_turn_with_options(
 
     for _step in 0..max_steps {
         if state.cancel.load(Ordering::Relaxed) {
-            let _ = app.emit("assistant-interrupted", ());
+            events.assistant_interrupted();
             break;
         }
 
@@ -351,19 +354,20 @@ pub async fn run_turn_with_options(
                     json!({ "used": turn_budget.as_ref().map(|b| b.used_total()), "total": turn_budget.as_ref().and_then(|b| b.total) }),
                 );
             }
-            let _ = app.emit("assistant-done", message);
+            events.assistant_done(message);
             return Ok(());
         }
 
-        let _ = app.emit("assistant-start", ());
+        events.assistant_start();
 
+        let delta_events = events.clone();
         let turn = match llm::stream_completion(
             &state.http,
             &settings,
             &full,
             &tools_schema,
             |delta| {
-                let _ = app.emit("assistant-delta", delta);
+                delta_events.assistant_delta(delta);
             },
             &state.cancel,
         )
@@ -372,7 +376,7 @@ pub async fn run_turn_with_options(
             Ok(turn) => turn,
             Err(err) => {
                 custom::record_runtime_error(state, &selected_agents.definitions, &err);
-                let _ = app.emit("assistant-error", assistant_error_payload(&err));
+                events.assistant_error(assistant_error_payload(&err));
                 return Err(err);
             }
         };
@@ -419,7 +423,7 @@ pub async fn run_turn_with_options(
                     json!({ "reason": "model_interrupted" }),
                 );
             }
-            let _ = app.emit("assistant-interrupted", ());
+            events.assistant_interrupted();
             return Ok(());
         }
 
@@ -440,7 +444,7 @@ pub async fn run_turn_with_options(
                     json!({ "assistant_text": assistant_text.clone() }),
                 );
             }
-            let _ = app.emit("assistant-done", assistant_text.clone());
+            events.assistant_done(assistant_text.clone());
 
             let sandbox_dir = state.sandbox_dir.lock().unwrap().clone();
             let _ = memory::extract_and_update(
@@ -487,21 +491,18 @@ pub async fn run_turn_with_options(
             let preview = tools::confirmation_preview(state, &name, args.clone());
             let affected_paths = tools::affected_paths(&name, &args);
 
-            let _ = app.emit(
-                "tool-start",
-                json!({
-                    "tool_call_id": tc.id,
-                    "name": name,
-                    "args": args,
-                    "description": tool_def.as_ref().map(|t| t.description),
-                    "risk": tool_def.as_ref().map(|t| t.risk),
-                    "permission_effect": tool_def.as_ref().map(|t| t.permission.effect),
-                    "concurrency": tool_def.as_ref().map(|t| t.concurrency),
-                    "output_policy": tool_def.as_ref().map(|t| t.output_policy),
-                    "preview": preview,
-                    "affected_paths": &affected_paths,
-                }),
-            );
+            events.tool_start(session_engine::ToolStartEvent {
+                tool_call_id: tc.id.clone(),
+                name: name.clone(),
+                args: args.clone(),
+                description: tool_def.as_ref().map(|t| t.description),
+                risk: tool_def.as_ref().map(|t| t.risk),
+                permission_effect: tool_def.as_ref().map(|t| t.permission.effect),
+                concurrency: tool_def.as_ref().map(|t| t.concurrency),
+                output_policy: tool_def.as_ref().map(|t| t.output_policy),
+                preview: preview.clone(),
+                affected_paths: affected_paths.clone(),
+            });
             if let Some(run_id) = &options.workflow_run_id {
                 let _ = workflow_journal::append(
                     state,
@@ -588,19 +589,16 @@ pub async fn run_turn_with_options(
             let error_hint = tool_error_hint(&name, &result, tool_ok, denied);
             let source_quality = source_quality_hint(&name, &result, tool_ok);
 
-            let _ = app.emit(
-                "tool-end",
-                json!({
-                    "tool_call_id": tc.id,
-                    "name": name,
-                    "ok": tool_ok,
-                    "denied": denied,
-                    "result": truncate_ui(&result),
-                    "duration_ms": duration_ms,
-                    "error_hint": error_hint,
-                    "source_quality": source_quality,
-                }),
-            );
+            events.tool_end(session_engine::ToolEndEvent {
+                tool_call_id: tc.id.clone(),
+                name: name.clone(),
+                ok: tool_ok,
+                denied,
+                result: truncate_ui(&result),
+                duration_ms,
+                error_hint: error_hint.clone(),
+                source_quality: source_quality.clone(),
+            });
             if let Some(run_id) = &options.workflow_run_id {
                 let _ = workflow_journal::append(
                     state,
@@ -635,17 +633,14 @@ pub async fn run_turn_with_options(
                     json!({ "reason": "user_cancelled_during_tools" }),
                 );
             }
-            let _ = app.emit("assistant-interrupted", ());
+            events.assistant_interrupted();
             return Ok(());
         }
         // 继续下一轮，让模型基于工具结果作答
     }
 
     // 达到步数上限
-    let _ = app.emit(
-        "assistant-done",
-        "（已达到本轮工具调用次数上限）".to_string(),
-    );
+    events.assistant_done("（已达到本轮工具调用次数上限）".to_string());
     if let Some(run_id) = &options.workflow_run_id {
         let _ = workflow_journal::append(
             state,

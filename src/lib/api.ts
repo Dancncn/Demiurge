@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
+  AgentEventEnvelope,
   AgentPanelState,
   AgentEditorFile,
   AgentValidationResult,
@@ -23,6 +24,7 @@ import type {
   PlanState,
   PermissionPanelState,
   PermissionRuleInput,
+  SessionEnginePanelState,
   SessionList,
   Settings,
   SpeechSynthesisRequest,
@@ -40,6 +42,7 @@ export const send = (text: string) => invoke<void>("send", { text });
 export const sendWithAgents = (text: string, agentNames: string[]) =>
   invoke<void>("send_with_agents", { text, agentNames });
 export const interrupt = () => invoke<void>("interrupt");
+export const sessionEngineState = () => invoke<SessionEnginePanelState>("session_engine_state");
 export const respondConfirm = (id: string, allow: boolean, scope: PermissionScope) =>
   invoke<void>("respond_confirm", { id, allow, scope });
 export const getSettings = () => invoke<Settings>("get_settings");
@@ -123,6 +126,10 @@ export const listenPermissionModeUpdated = (handler: (e: PermissionMode) => void
   listen<PermissionMode>("permission-mode-updated", (e) => handler(e.payload));
 export const listenMcpUpdated = (handler: (e: McpPanelState) => void) =>
   listen<McpPanelState>("mcp-updated", (e) => handler(e.payload));
+export const listenSessionEngineUpdated = (handler: (e: SessionEnginePanelState) => void) =>
+  listen<SessionEnginePanelState>("session-engine-updated", (e) => handler(e.payload));
+export const listenUnifiedAgentEvents = (handler: (e: AgentEventEnvelope) => void) =>
+  listen<AgentEventEnvelope>("agent-event", (e) => handler(e.payload));
 
 // ---- 事件订阅 ----
 export interface AgentEventHandlers {

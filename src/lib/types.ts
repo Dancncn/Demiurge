@@ -395,11 +395,49 @@ export interface SessionList {
   sessions: SessionMeta[];
 }
 
+export type TurnStatus = "running" | "cancelling" | "completed" | "interrupted" | "failed";
+export type TurnEntrypoint = "send" | "send_with_agents";
+
+export interface TurnRunState {
+  id: string;
+  session_id: string;
+  entrypoint: TurnEntrypoint;
+  status: TurnStatus;
+  input_preview: string;
+  workflow_run_id?: string;
+  agent_names: string[];
+  started_at: number;
+  updated_at: number;
+  completed_at?: number;
+  error?: string;
+}
+
+export interface SessionEnginePanelState {
+  busy: boolean;
+  cancel_requested: boolean;
+  active_turn?: TurnRunState;
+  last_turn?: TurnRunState;
+}
+
+export interface TurnEventContext {
+  id: string;
+  session_id: string;
+  status: TurnStatus;
+}
+
+export interface AgentEventEnvelope<T = unknown> {
+  kind: string;
+  turn?: TurnEventContext;
+  timestamp: number;
+  payload: T;
+}
+
 export type PermissionEffect = "allow" | "deny" | "ask";
 export type PermissionScope = "once" | "session" | "project" | "user";
 export type PermissionDecisionSource = "tool_default" | "user_override" | "unknown_tool";
 export type ToolRisk = "read_only" | "mutating" | "external" | "privileged";
 export type ToolConcurrency = "parallel_safe" | "serial_only";
+export type ToolOutputPolicy = "inline" | "truncate_for_ui";
 
 export interface PermissionRuleView {
   tool: string;
@@ -458,6 +496,7 @@ export interface ToolStartEvent {
   risk?: ToolRisk;
   permission_effect?: PermissionEffect;
   concurrency?: ToolConcurrency;
+  output_policy?: ToolOutputPolicy;
   preview?: string;
   affected_paths?: string[];
 }
