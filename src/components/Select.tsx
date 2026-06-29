@@ -59,10 +59,10 @@ export function Select({
         type="button"
         disabled={disabled}
         onClick={() => setOpen((v) => !v)}
-        className={
+        className={`cf-press ${
           triggerClassName ??
           "flex h-9 w-full items-center gap-2 rounded-md border border-[#d9d9d9] bg-white px-3 text-[13px] text-[#202124] outline-none transition hover:border-[#bcc2cb] focus:border-[#7a7f87] focus:ring-1 focus:ring-[#202124]/10 disabled:cursor-not-allowed disabled:opacity-50"
-        }
+        }`}
       >
         {selected?.icon && <span className="shrink-0">{selected.icon}</span>}
         <span className="min-w-0 flex-1 truncate text-left">

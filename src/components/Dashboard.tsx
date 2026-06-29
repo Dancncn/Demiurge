@@ -150,7 +150,7 @@ export function Dashboard({
           <button
             key={item}
             onClick={() => onSuggestionClick(item)}
-            className="rounded-lg border border-[#e8eaef] bg-white px-3.5 py-3 text-left text-[13px] text-[#3f4652] transition hover:border-[#dcdfe5] hover:bg-[#f7f8fa]"
+            className="cf-lift cf-press rounded-lg border border-[#e8eaef] bg-white px-3.5 py-3 text-left text-[13px] text-[#3f4652] hover:border-[#dcdfe5] hover:bg-[#f7f8fa] hover:shadow-[0_8px_20px_rgba(15,23,42,0.06)]"
           >
             {item}
           </button>

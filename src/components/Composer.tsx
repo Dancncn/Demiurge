@@ -58,7 +58,7 @@ type Props = {
 
 const ghostChip =
   "flex h-7 max-w-[150px] items-center gap-1 rounded-md px-2 text-[12px] font-medium text-[#5f6368] outline-none transition hover:bg-[#eef1f5]";
-const ghostIcon = "grid size-7 shrink-0 place-items-center rounded-md text-[#6f7782] transition hover:bg-[#eef1f5]";
+const ghostIcon = "cf-press grid size-7 shrink-0 place-items-center rounded-md text-[#6f7782] hover:bg-[#eef1f5]";
 
 export function Composer({
   input,
@@ -353,7 +353,7 @@ export function Composer({
               type={loading ? "button" : "submit"}
               onClick={loading ? onStop : undefined}
               disabled={!loading && !readyToSend}
-              className="ml-0.5 grid size-8 shrink-0 place-items-center rounded-full bg-[#111827] text-white transition hover:bg-[#2b3442] disabled:bg-[#c7ccd4] disabled:hover:bg-[#c7ccd4]"
+              className="cf-press ml-0.5 grid size-8 shrink-0 place-items-center rounded-full bg-[#111827] text-white hover:scale-105 hover:bg-[#2b3442] disabled:scale-100 disabled:bg-[#c7ccd4] disabled:hover:bg-[#c7ccd4]"
               aria-label={loading ? "Stop" : "Send"}
             >
               {loading ? <StopIcon size={14} /> : <ArrowUpIcon size={18} />}

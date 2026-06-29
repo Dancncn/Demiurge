@@ -80,7 +80,7 @@ export function Sidebar({
   }
 
   const navButton =
-    "flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-[13px] transition";
+    "cf-press flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-[13px]";
 
   return (
     <>
@@ -93,7 +93,7 @@ export function Sidebar({
         <div className={`mb-3 flex h-9 items-center ${open ? "justify-between px-1" : "justify-center"}`}>
           <button
             onClick={onToggle}
-            className="grid h-8 w-8 shrink-0 place-items-center rounded-md text-[#4f5661] transition hover:bg-[#dfe4ea]"
+            className="grid h-8 w-8 shrink-0 place-items-center rounded-md text-[#4f5661] cf-press hover:bg-[#dfe4ea]"
             aria-label="Toggle sidebar"
           >
             <PanelLeftIcon size={20} />
@@ -103,7 +103,7 @@ export function Sidebar({
               onViewChange("chat");
               onNewChat();
             }}
-            className={`grid h-8 w-8 place-items-center rounded-md text-[#4f5661] transition hover:bg-[#dfe4ea] ${open ? "" : "hidden"}`}
+            className={`grid h-8 w-8 place-items-center rounded-md text-[#4f5661] cf-press hover:bg-[#dfe4ea] ${open ? "" : "hidden"}`}
             aria-label="New chat"
           >
             <ComposeIcon size={19} />
