@@ -148,14 +148,14 @@ export default function ConfirmDialog({ req, mode, onRespond }: Props) {
           <div className="mt-4 flex justify-end gap-2">
             <button
               type="button"
-              className="inline-flex h-9 items-center justify-center rounded-md border border-[#d9d9d9] bg-white px-4 text-[13px] font-medium text-[#344054] transition hover:bg-[#f5f5f5]"
+              className="cf-press inline-flex h-9 items-center justify-center rounded-md border border-[#d9d9d9] bg-white px-4 text-[13px] font-medium text-[#344054] hover:bg-[#f5f5f5]"
               onClick={() => onRespond(false, scope)}
             >
               Reject
             </button>
             <button
               type="button"
-              className="inline-flex h-9 items-center justify-center rounded-md bg-[#111827] px-4 text-[13px] font-medium text-white transition hover:bg-[#2b3442]"
+              className="cf-press inline-flex h-9 items-center justify-center rounded-md bg-[#111827] px-4 text-[13px] font-medium text-white hover:bg-[#2b3442]"
               onClick={() => onRespond(true, scope)}
             >
               {confirmLabel}
