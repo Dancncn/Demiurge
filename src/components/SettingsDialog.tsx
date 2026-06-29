@@ -207,7 +207,7 @@ const reasoningEfforts: { value: ReasoningEffort; label: string; help: string }[
 ];
 
 const inputCls =
-  "h-9 w-full rounded-md border border-[#d9d9d9] bg-white px-3 text-[13px] text-[#202124] outline-none transition focus:border-[#7a7f87] focus:ring-2 focus:ring-[#202124]/5";
+  "h-9 w-full rounded-md border border-[#d9d9d9] bg-white px-3 text-[13px] text-[#202124] outline-none transition focus:border-[#7a7f87] focus:ring-1 focus:ring-[#202124]/10";
 const labelCls = "mb-1.5 block text-[12px] font-medium text-[#5f6368]";
 const secondaryButtonCls =
   "inline-flex h-8 items-center justify-center rounded-md border border-[#d9d9d9] bg-white px-3 text-[12px] font-medium text-[#333] transition hover:bg-[#f5f5f5] disabled:cursor-not-allowed disabled:opacity-50";
@@ -656,6 +656,7 @@ export default function SettingsDialog({
   const [agentBusy, setAgentBusy] = useState(false);
   const [agentStatus, setAgentStatus] = useState("");
   const [activeTab, setActiveTab] = useState<SettingsTab>("provider");
+  const [providerQuery, setProviderQuery] = useState("");
   const [providerTestBusy, setProviderTestBusy] = useState(false);
   const [providerTestStatus, setProviderTestStatus] = useState("");
   const [webSearchTestBusy, setWebSearchTestBusy] = useState(false);
@@ -1366,8 +1367,21 @@ export default function SettingsDialog({
                 <>
                   <Section title="Provider" description="Select the active LLM provider and configure its endpoint.">
                     <div className="grid gap-3 md:grid-cols-[240px_minmax(0,1fr)]">
-                      <div className="space-y-1 rounded-lg border border-[#e2e5ea] bg-[#f8f9fb] p-1.5">
-                        {providerOptions.map((provider) => {
+                      <div className="flex flex-col gap-2">
+                        <input
+                          value={providerQuery}
+                          onChange={(e) => setProviderQuery(e.target.value)}
+                          placeholder="Search providers"
+                          className="h-8 w-full rounded-md border border-[#d9d9d9] bg-white px-2.5 text-[12px] text-[#202124] outline-none transition placeholder:text-[#9aa1ab] focus:border-[#7a7f87] focus:ring-1 focus:ring-[#202124]/10"
+                        />
+                        <div className="space-y-1 rounded-lg border border-[#e2e5ea] bg-[#f8f9fb] p-1.5">
+                          {providerOptions
+                            .filter((provider) =>
+                              `${provider.label} ${provider.value} ${provider.short}`
+                                .toLowerCase()
+                                .includes(providerQuery.trim().toLowerCase()),
+                            )
+                            .map((provider) => {
                           const selected = provider.value === form.provider;
                           return (
                             <button
@@ -1392,7 +1406,8 @@ export default function SettingsDialog({
                               {selected && <CheckIcon size={14} className="text-[#111827]" />}
                             </button>
                           );
-                        })}
+                          })}
+                        </div>
                       </div>
 
                       <div className="rounded-lg border border-[#e2e5ea] bg-white">
@@ -2107,7 +2122,7 @@ export default function SettingsDialog({
                                             )}
                                           </div>
                                           <textarea
-                                            className="min-h-16 w-full resize-y rounded-md border border-[#d9d9d9] px-2 py-1.5 text-[12px] text-[#202124] outline-none transition focus:border-[#7a7f87] focus:ring-2 focus:ring-[#202124]/5"
+                                            className="min-h-16 w-full resize-y rounded-md border border-[#d9d9d9] px-2 py-1.5 text-[12px] text-[#202124] outline-none transition focus:border-[#7a7f87] focus:ring-1 focus:ring-[#202124]/10"
                                             value={entry.text}
                                             onChange={(e) => {
                                               const text = e.target.value;
@@ -2306,7 +2321,7 @@ export default function SettingsDialog({
                           </div>
 
                           <textarea
-                            className="mt-3 min-h-[230px] w-full resize-y rounded-md border border-[#d9d9d9] bg-white px-3 py-2 font-mono text-[12px] leading-5 text-[#202124] outline-none transition focus:border-[#7a7f87] focus:ring-2 focus:ring-[#202124]/5"
+                            className="mt-3 min-h-[230px] w-full resize-y rounded-md border border-[#d9d9d9] bg-white px-3 py-2 font-mono text-[12px] leading-5 text-[#202124] outline-none transition focus:border-[#7a7f87] focus:ring-1 focus:ring-[#202124]/10"
                             value={agentJson}
                             spellCheck={false}
                             placeholder={'{\n  "name": "researcher"\n}'}
@@ -2486,7 +2501,7 @@ export default function SettingsDialog({
                               <div className="mt-3 grid gap-3 sm:grid-cols-2">
                                 <Field label="Arguments" help="One argument per line. On Windows, use cmd with /c and npx on following lines.">
                                   <textarea
-                                    className="min-h-24 w-full resize-y rounded-md border border-[#d9d9d9] bg-white px-3 py-2 text-[12px] text-[#202124] outline-none transition focus:border-[#7a7f87] focus:ring-2 focus:ring-[#202124]/5"
+                                    className="min-h-24 w-full resize-y rounded-md border border-[#d9d9d9] bg-white px-3 py-2 text-[12px] text-[#202124] outline-none transition focus:border-[#7a7f87] focus:ring-1 focus:ring-[#202124]/10"
                                     value={server.args.join("\n")}
                                     placeholder={"/c\nnpx\n-y\n@modelcontextprotocol/server-filesystem"}
                                     onChange={(e) => updateMcpServer(index, { args: splitLines(e.target.value) })}
@@ -2494,7 +2509,7 @@ export default function SettingsDialog({
                                 </Field>
                                 <Field label="Environment" help="KEY=value, one per line. Secret-like keys are stored in the system credential manager.">
                                   <textarea
-                                    className="min-h-24 w-full resize-y rounded-md border border-[#d9d9d9] bg-white px-3 py-2 text-[12px] text-[#202124] outline-none transition focus:border-[#7a7f87] focus:ring-2 focus:ring-[#202124]/5"
+                                    className="min-h-24 w-full resize-y rounded-md border border-[#d9d9d9] bg-white px-3 py-2 text-[12px] text-[#202124] outline-none transition focus:border-[#7a7f87] focus:ring-1 focus:ring-[#202124]/10"
                                     value={formatEnvLines(server)}
                                     placeholder={"API_KEY=...\nBASE_URL=https://..."}
                                     onChange={(e) => updateMcpServer(index, { env: parseEnvLines(e.target.value) })}

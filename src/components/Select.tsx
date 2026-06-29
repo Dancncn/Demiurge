@@ -20,6 +20,7 @@ export function Select({
   triggerClassName,
   buttonContent,
   align = "left",
+  direction = "down",
   disabled,
 }: {
   value: string;
@@ -29,6 +30,7 @@ export function Select({
   triggerClassName?: string;
   buttonContent?: ReactNode;
   align?: "left" | "right";
+  direction?: "down" | "up";
   disabled?: boolean;
 }) {
   const [open, setOpen] = useState(false);
@@ -59,7 +61,7 @@ export function Select({
         onClick={() => setOpen((v) => !v)}
         className={
           triggerClassName ??
-          "flex h-9 w-full items-center gap-2 rounded-md border border-[#d9d9d9] bg-white px-3 text-[13px] text-[#202124] outline-none transition hover:border-[#bcc2cb] focus:border-[#7a7f87] focus:ring-2 focus:ring-[#202124]/5 disabled:cursor-not-allowed disabled:opacity-50"
+          "flex h-9 w-full items-center gap-2 rounded-md border border-[#d9d9d9] bg-white px-3 text-[13px] text-[#202124] outline-none transition hover:border-[#bcc2cb] focus:border-[#7a7f87] focus:ring-1 focus:ring-[#202124]/10 disabled:cursor-not-allowed disabled:opacity-50"
         }
       >
         {selected?.icon && <span className="shrink-0">{selected.icon}</span>}
@@ -73,9 +75,9 @@ export function Select({
       </button>
       {open && (
         <div
-          className={`cf-menu-in absolute top-[calc(100%+4px)] z-30 max-h-[300px] min-w-full overflow-y-auto rounded-lg border border-[#e2e5ea] bg-white p-1 shadow-[0_12px_36px_rgba(15,23,42,0.16)] ${
+          className={`cf-menu-in absolute z-30 max-h-[300px] min-w-full overflow-y-auto rounded-lg border border-[#e2e5ea] bg-white p-1 shadow-[0_12px_36px_rgba(15,23,42,0.16)] ${
             align === "right" ? "right-0" : "left-0"
-          }`}
+          } ${direction === "up" ? "bottom-[calc(100%+4px)]" : "top-[calc(100%+4px)]"}`}
         >
           {options.map((o) => {
             const active = o.value === value;

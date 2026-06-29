@@ -80,7 +80,7 @@ export function Sidebar({
   }
 
   const navButton =
-    "flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-[13px] transition";
+    "flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-[13px] transition";
 
   return (
     <>
@@ -156,7 +156,7 @@ export function Sidebar({
             return (
               <div
                 key={s.id}
-                className={`group relative mb-1 rounded-md ${
+                className={`group relative mb-1 rounded-lg ${
                   activeView === "chat" && s.id === activeId ? "bg-white shadow-sm" : "hover:bg-[#dfe4ea]"
                 }`}
               >

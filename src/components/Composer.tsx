@@ -9,11 +9,36 @@ import {
   type ProcessedAttachment,
 } from "../lib/fileProcessing";
 import { ArrowUpIcon, CloseIcon, FileIcon, FolderIcon, PaperclipIcon, StopIcon } from "./Icons";
+import { Select } from "./Select";
+import type { PermissionMode } from "../lib/types";
+
+const PERMISSION_MODE_LABELS: Record<PermissionMode, string> = {
+  plan: "Plan",
+  default: "Default",
+  auto: "Auto",
+  bypass: "Bypass",
+};
+
+type SlashCommand = { name: string; args: string; desc: string };
+
+// Slash commands handled by the backend send dispatcher (src-tauri/src/lib.rs).
+const SLASH_COMMANDS: SlashCommand[] = [
+  { name: "/goal", args: "<objective> [+budget]", desc: "Set a persistent goal the agent keeps driving" },
+  { name: "/effort", args: "[auto|low|medium|high|xhigh|max]", desc: "Switch reasoning effort for supported models" },
+  { name: "/compact", args: "[keep=N]", desc: "Collapse earlier context to save tokens" },
+  { name: "/ultracode", args: "<task>", desc: "Multi-agent orchestration overlay" },
+  { name: "/workflows", args: "", desc: "List workflow runs" },
+  { name: "/workflow", args: "resume <run_id>", desc: "Resume a workflow from its journal" },
+  { name: "/skills", args: "", desc: "List available skills" },
+  { name: "/dream", args: "", desc: "Tidy long-term memory in the background" },
+];
 
 type Props = {
   input: string;
   canSend: boolean;
   loading: boolean;
+  permissionMode: PermissionMode;
+  onSetPermissionMode: (mode: PermissionMode) => void;
   textareaRef: RefObject<HTMLTextAreaElement>;
   onSubmit: (attachments: ProcessedAttachment[]) => Promise<boolean> | boolean;
   onStop: () => void;
@@ -25,6 +50,8 @@ export function Composer({
   input,
   canSend,
   loading,
+  permissionMode,
+  onSetPermissionMode,
   textareaRef,
   onSubmit,
   onStop,
@@ -35,6 +62,26 @@ export function Composer({
   const attachmentsRef = useRef<ProcessedAttachment[]>([]);
   const [attachments, setAttachments] = useState<ProcessedAttachment[]>([]);
   const [processingFiles, setProcessingFiles] = useState(false);
+  const [cmdActive, setCmdActive] = useState(0);
+  const [cmdDismissed, setCmdDismissed] = useState(false);
+
+  // Slash-command palette: show while typing the leading "/command" token (before any space).
+  const cmdToken = input.startsWith("/") && !input.includes(" ") ? input.toLowerCase() : null;
+  const cmdMatches = cmdToken ? SLASH_COMMANDS.filter((c) => c.name.startsWith(cmdToken)) : [];
+  const paletteOpen = !cmdDismissed && cmdMatches.length > 0;
+
+  function changeInput(value: string) {
+    if (!value.startsWith("/")) setCmdDismissed(false);
+    setCmdActive(0);
+    onInputChange(value);
+  }
+
+  function applyCommand(c: SlashCommand) {
+    onInputChange(`${c.name} `);
+    setCmdActive(0);
+    setCmdDismissed(false);
+    requestAnimationFrame(() => textareaRef.current?.focus());
+  }
 
   useEffect(() => {
     attachmentsRef.current = attachments;
@@ -84,6 +131,29 @@ export function Composer({
 
   function handleKeyDown(event: React.KeyboardEvent<HTMLTextAreaElement>) {
     if (event.nativeEvent.isComposing) return;
+    if (paletteOpen) {
+      const len = cmdMatches.length;
+      if (event.key === "ArrowDown") {
+        event.preventDefault();
+        setCmdActive((i) => (i + 1) % len);
+        return;
+      }
+      if (event.key === "ArrowUp") {
+        event.preventDefault();
+        setCmdActive((i) => (i - 1 + len) % len);
+        return;
+      }
+      if (event.key === "Tab" || (event.key === "Enter" && !event.shiftKey)) {
+        event.preventDefault();
+        applyCommand(cmdMatches[cmdActive] ?? cmdMatches[0]);
+        return;
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setCmdDismissed(true);
+        return;
+      }
+    }
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
       void submit();
@@ -97,9 +167,33 @@ export function Composer({
           event.preventDefault();
           void submit();
         }}
-        className="mx-auto w-full max-w-3xl"
+        className="relative mx-auto w-full max-w-3xl"
       >
-        <div className="rounded-lg border border-[#dfe3e8] bg-[#fbfcfd] p-2 shadow-[0_1px_2px_rgba(15,23,42,0.06)] transition">
+        {paletteOpen && (
+          <div className="cf-menu-in absolute bottom-[calc(100%+8px)] left-0 right-0 z-30 overflow-hidden rounded-lg border border-[#e2e5ea] bg-white shadow-[0_12px_36px_rgba(15,23,42,0.16)]">
+            <div className="border-b border-[#eef1f4] px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-[#8a9099]">
+              Commands
+            </div>
+            <div className="max-h-64 overflow-y-auto p-1">
+              {cmdMatches.map((c, i) => (
+                <button
+                  key={c.name}
+                  type="button"
+                  onMouseEnter={() => setCmdActive(i)}
+                  onClick={() => applyCommand(c)}
+                  className={`flex w-full items-center gap-3 rounded-md px-2.5 py-2 text-left transition ${
+                    i === cmdActive ? "bg-[#eef1f5]" : "hover:bg-[#f3f4f7]"
+                  }`}
+                >
+                  <span className="font-mono text-[13px] font-medium text-[#111827]">{c.name}</span>
+                  {c.args && <span className="font-mono text-[12px] text-[#9aa1ab]">{c.args}</span>}
+                  <span className="ml-auto min-w-0 truncate text-[12px] text-[#7a8088]">{c.desc}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+        <div className="rounded-[14px] border border-[#dfe3e8] bg-[#fbfcfd] p-2 shadow-[0_1px_3px_rgba(15,23,42,0.08)] transition focus-within:border-[#c7ccd4]">
           {attachments.length > 0 && (
             <div className="mb-2 flex max-h-28 flex-wrap gap-2 overflow-y-auto px-2 pt-1">
               {attachments.map((attachment) => (
@@ -141,9 +235,9 @@ export function Composer({
             ref={textareaRef}
             rows={1}
             value={input}
-            onChange={(event) => onInputChange(event.target.value)}
+            onChange={(event) => changeInput(event.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="Ask anything, or attach text, images, PDF, DOCX, PPTX, XLSX..."
+            placeholder="Ask anything — type / for commands, or attach text, images, PDF, DOCX..."
             className="min-h-11 max-h-40 w-full resize-none bg-transparent px-3 py-2.5 text-[14px] leading-6 outline-none placeholder:text-[#8a9099]"
           />
 
@@ -161,7 +255,7 @@ export function Composer({
                 type="button"
                 onClick={() => fileInputRef.current?.click()}
                 disabled={loading || processingFiles}
-                className="flex h-8 items-center gap-1.5 rounded-md border border-[#d9dfe7] bg-white px-2.5 text-[12px] font-medium text-[#4f5661] transition hover:bg-[#f5f6f8] disabled:cursor-not-allowed disabled:opacity-60"
+                className="flex h-8 items-center gap-1.5 rounded-md border border-[#e5e8ed] bg-white px-3 text-[12px] font-medium text-[#4f5661] transition hover:bg-[#fafbfc] active:bg-[#f3f4f7] disabled:cursor-not-allowed disabled:opacity-60"
                 aria-label="Attach files"
               >
                 <PaperclipIcon size={16} />
@@ -170,12 +264,28 @@ export function Composer({
               <button
                 type="button"
                 onClick={onOpenSandbox}
-                className="flex h-8 items-center gap-1.5 rounded-md border border-[#d9dfe7] bg-white px-2.5 text-[12px] font-medium text-[#4f5661] transition hover:bg-[#f5f6f8]"
+                className="flex h-8 items-center gap-1.5 rounded-md border border-[#e5e8ed] bg-white px-3 text-[12px] font-medium text-[#4f5661] transition hover:bg-[#fafbfc] active:bg-[#f3f4f7]"
                 aria-label="打开沙盒目录"
               >
                 <FolderIcon size={17} />
                 沙盒
               </button>
+              <Select
+                value={permissionMode}
+                onChange={(v) => onSetPermissionMode(v as PermissionMode)}
+                direction="up"
+                options={(Object.keys(PERMISSION_MODE_LABELS) as PermissionMode[]).map((mode) => ({
+                  value: mode,
+                  label: PERMISSION_MODE_LABELS[mode],
+                }))}
+                triggerClassName={`flex h-8 items-center gap-1.5 rounded-md border px-2.5 text-[12px] font-medium outline-none transition ${
+                  permissionMode === "bypass"
+                    ? "border-[#f4b4b4] bg-[#fff0f0] text-[#b42318]"
+                    : permissionMode === "plan"
+                      ? "border-[#b8d4ff] bg-[#eef5ff] text-[#0b57d0]"
+                      : "border-[#d9dfe7] bg-white text-[#4f5661] hover:bg-[#f5f6f8]"
+                }`}
+              />
             </div>
 
             <button
