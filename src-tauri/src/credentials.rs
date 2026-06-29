@@ -129,7 +129,9 @@ fn load_mcp_env_secret(server_name: &str, env_key: &str) -> Result<Option<String
     match entry.get_password() {
         Ok(secret) => Ok(Some(secret)),
         Err(Error::NoEntry) => Ok(None),
-        Err(e) => Err(format!("read MCP env `{server_name}.{env_key}` failed: {e}")),
+        Err(e) => Err(format!(
+            "read MCP env `{server_name}.{env_key}` failed: {e}"
+        )),
     }
 }
 
@@ -139,7 +141,9 @@ fn save_mcp_env_secret(server_name: &str, env_key: &str, secret: &str) -> Result
     if secret.is_empty() {
         return match entry.delete_credential() {
             Ok(()) | Err(Error::NoEntry) => Ok(()),
-            Err(e) => Err(format!("delete MCP env `{server_name}.{env_key}` failed: {e}")),
+            Err(e) => Err(format!(
+                "delete MCP env `{server_name}.{env_key}` failed: {e}"
+            )),
         };
     }
     entry

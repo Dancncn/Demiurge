@@ -183,6 +183,13 @@ export default function App() {
   const toolItemIds = useRef<Map<string, string>>(new Map());
   const lastRetryText = useRef<string>("");
   const assistantErrorDelivered = useRef(false);
+  // 流式增量缓冲：把每个 token 的 setState 合并到「每帧一次」（requestAnimationFrame），
+  // 避免逐 token 触发 setItems + markdown 全量重解析造成的卡顿（长回复尤甚）。
+  const pendingStream = useRef<{ content: string; reasoning: string; raf: number }>({
+    content: "",
+    reasoning: "",
+    raf: 0,
+  });
   const packMenuRef = useRef<HTMLDivElement | null>(null);
   const agentMenuRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -276,7 +283,42 @@ export default function App() {
     let un: UnlistenFn | undefined;
     let disposed = false;
 
+    // 把累积的增量一次性写入当前 assistant 项（必要时创建）；推理与正文分开累积。
+    const flushPending = () => {
+      if (pendingStream.current.raf) {
+        cancelAnimationFrame(pendingStream.current.raf);
+        pendingStream.current.raf = 0;
+      }
+      const { content, reasoning } = pendingStream.current;
+      if (!content && !reasoning) return;
+      pendingStream.current.content = "";
+      pendingStream.current.reasoning = "";
+      setItems((p) => {
+        let id = curAssistantId.current;
+        let arr = p;
+        if (!id) {
+          id = genId();
+          curAssistantId.current = id;
+          arr = [...p, { id, kind: "assistant", text: "", reasoning: "", streaming: true }];
+        }
+        return arr.map((it) =>
+          it.id === id && it.kind === "assistant"
+            ? { ...it, text: it.text + content, reasoning: (it.reasoning ?? "") + reasoning }
+            : it,
+        );
+      });
+    };
+
+    const scheduleFlush = () => {
+      if (pendingStream.current.raf) return;
+      pendingStream.current.raf = requestAnimationFrame(() => {
+        pendingStream.current.raf = 0;
+        flushPending();
+      });
+    };
+
     const finalizeAssistant = () => {
+      flushPending();
       const id = curAssistantId.current;
       if (id) {
         setItems((p) => p.map((it) => (it.id === id && it.kind === "assistant" ? { ...it, streaming: false } : it)));
@@ -288,18 +330,15 @@ export default function App() {
       .listenAgentEvents({
         onAssistantStart: () => finalizeAssistant(),
         onAssistantDelta: (text) => {
-          const id = curAssistantId.current;
-          if (!id) {
-            const nid = genId();
-            curAssistantId.current = nid;
-            setItems((p) => [...p, { id: nid, kind: "assistant", text, streaming: true }]);
-          } else {
-            setItems((p) =>
-              p.map((it) => (it.id === id && it.kind === "assistant" ? { ...it, text: it.text + text } : it)),
-            );
-          }
+          pendingStream.current.content += text;
+          scheduleFlush();
+        },
+        onAssistantReasoning: (text) => {
+          pendingStream.current.reasoning += text;
+          scheduleFlush();
         },
         onAssistantDone: (text) => {
+          flushPending();
           const id = curAssistantId.current;
           if (id) {
             setItems((p) =>
@@ -432,6 +471,10 @@ export default function App() {
 
     return () => {
       disposed = true;
+      if (pendingStream.current.raf) {
+        cancelAnimationFrame(pendingStream.current.raf);
+        pendingStream.current.raf = 0;
+      }
       un?.();
       unPlan?.();
       unMode?.();

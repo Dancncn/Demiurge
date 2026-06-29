@@ -142,7 +142,11 @@ pub fn panel_state(
                 .iter()
                 .find_map(|(id, score)| (*id == skill.id).then_some(*score))
                 .unwrap_or_else(|| match_score(skill, query.unwrap_or_default()));
-            summary(skill, selected_ids.iter().any(|(id, _)| *id == skill.id), score)
+            summary(
+                skill,
+                selected_ids.iter().any(|(id, _)| *id == skill.id),
+                score,
+            )
         })
         .collect::<Vec<_>>();
     skills.sort_by(|a, b| {
@@ -184,7 +188,10 @@ pub fn discover(sandbox: &Path, data_dir: &Path, packs_dir: &Path, pack_id: &str
     let mut catalog = SkillCatalog::default();
     for (scope, base) in [
         (SkillScope::Global, data_dir.join("skills")),
-        (SkillScope::Project, sandbox.join(".demiurge").join("skills")),
+        (
+            SkillScope::Project,
+            sandbox.join(".demiurge").join("skills"),
+        ),
         (SkillScope::Repository, sandbox.join("skills")),
         (SkillScope::Pack, packs_dir.join(pack_id).join("skills")),
         (SkillScope::Claude, sandbox.join(".claude").join("skills")),
@@ -216,9 +223,12 @@ pub fn discover(sandbox: &Path, data_dir: &Path, packs_dir: &Path, pack_id: &str
         }
     }
 
-    catalog
-        .skills
-        .sort_by(|a, b| a.scope.label().cmp(b.scope.label()).then(a.name.cmp(&b.name)));
+    catalog.skills.sort_by(|a, b| {
+        a.scope
+            .label()
+            .cmp(b.scope.label())
+            .then(a.name.cmp(&b.name))
+    });
     catalog
 }
 
@@ -254,7 +264,11 @@ fn discover_skill_dir(catalog: &mut SkillCatalog, scope: SkillScope, base: &Path
     }
 }
 
-fn read_skill(scope: SkillScope, skill_dir: &Path, skill_path: &Path) -> Result<SkillDefinition, String> {
+fn read_skill(
+    scope: SkillScope,
+    skill_dir: &Path,
+    skill_path: &Path,
+) -> Result<SkillDefinition, String> {
     let raw = read_limited_text(skill_path, MAX_SKILL_FILE_BYTES)
         .ok_or_else(|| format!("Skipped unreadable skill {}", skill_path.display()))?;
     let (front, body) = split_frontmatter(&raw)?;
@@ -362,7 +376,10 @@ fn split_csv_like(value: &str) -> Vec<String> {
         .collect()
 }
 
-fn select<'a>(skills: &'a [SkillDefinition], user_text: Option<&str>) -> Vec<(&'a SkillDefinition, i32)> {
+fn select<'a>(
+    skills: &'a [SkillDefinition],
+    user_text: Option<&str>,
+) -> Vec<(&'a SkillDefinition, i32)> {
     let query = user_text.unwrap_or_default();
     let mut scored = skills
         .iter()
@@ -400,7 +417,10 @@ fn match_score(skill: &SkillDefinition, user_text: &str) -> i32 {
         }
     }
     let description = normalize(&skill.description);
-    for word in description.split_whitespace().filter(|word| word.len() >= 4) {
+    for word in description
+        .split_whitespace()
+        .filter(|word| word.len() >= 4)
+    {
         if query.contains(word) {
             score += 1;
         }
@@ -610,12 +630,8 @@ fn is_safe_relative(value: &str) -> bool {
     if value.trim().is_empty() || path.is_absolute() {
         return false;
     }
-    path.components().all(|component| {
-        matches!(
-            component,
-            Component::Normal(_) | Component::CurDir
-        )
-    })
+    path.components()
+        .all(|component| matches!(component, Component::Normal(_) | Component::CurDir))
 }
 
 #[cfg(test)]
@@ -654,12 +670,8 @@ Use evidence before conclusions.
 "#,
         )
         .unwrap();
-        let skill = read_skill(
-            SkillScope::Project,
-            &skill_dir,
-            &skill_dir.join("SKILL.md"),
-        )
-        .unwrap();
+        let skill =
+            read_skill(SkillScope::Project, &skill_dir, &skill_dir.join("SKILL.md")).unwrap();
         assert_eq!(skill.name, "Evidence Review");
         assert_eq!(skill.triggers, vec!["evidence", "review"]);
         assert_eq!(skill.declared_tool_needs, vec!["grep", "read_file"]);
@@ -705,7 +717,9 @@ Use evidence before conclusions.
             Some("please search the web"),
         );
         assert!(context.text.contains("Web Research"));
-        assert!(context.text.contains("Declared tool needs: web_fetch, web_search"));
+        assert!(context
+            .text
+            .contains("Declared tool needs: web_fetch, web_search"));
         assert!(context.text.contains("Use current sources."));
         assert!(context.text.contains("Pack Voice"));
         let panel = panel_state(

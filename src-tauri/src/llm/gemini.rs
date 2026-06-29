@@ -8,7 +8,7 @@ use crate::store::Settings;
 
 use super::{
     merge_usage, normalize_finish_reason, require_api_key, AssistantTurn, ProviderAdapterKind,
-    ProviderProfile, StructuredOutputRequest, Usage,
+    ProviderProfile, StreamDelta, StructuredOutputRequest, Usage,
 };
 
 #[allow(dead_code)]
@@ -17,7 +17,7 @@ pub async fn stream_completion(
     cfg: &Settings,
     messages: &[Message],
     tools: &Value,
-    on_delta: impl FnMut(&str),
+    on_delta: impl FnMut(StreamDelta<'_>),
     cancel: &AtomicBool,
 ) -> Result<AssistantTurn, String> {
     stream_completion_with_profile(
@@ -37,7 +37,7 @@ pub async fn stream_completion_with_profile(
     cfg: &Settings,
     messages: &[Message],
     tools: &Value,
-    mut on_delta: impl FnMut(&str),
+    mut on_delta: impl FnMut(StreamDelta<'_>),
     cancel: &AtomicBool,
     profile: ProviderProfile,
 ) -> Result<AssistantTurn, String> {
@@ -223,7 +223,7 @@ impl GeminiStreamState {
 fn parse_gemini_stream_data(
     data: &str,
     state: &mut GeminiStreamState,
-    on_delta: &mut impl FnMut(&str),
+    on_delta: &mut impl FnMut(StreamDelta<'_>),
 ) {
     let Ok(v) = serde_json::from_str::<Value>(data) else {
         return;
@@ -237,14 +237,20 @@ fn parse_gemini_stream_data(
     };
     if let Some(parts) = candidate["content"]["parts"].as_array() {
         for part in parts {
-            if part["thought"].as_bool().unwrap_or(false) {
-                continue;
-            }
+            let is_thought = part["thought"].as_bool().unwrap_or(false);
             if let Some(text) = part["text"].as_str() {
                 if !text.is_empty() {
-                    state.content.push_str(text);
-                    on_delta(text);
+                    if is_thought {
+                        // thought part 是思维链：单独推给前端做「思考中」气泡，不进正文。
+                        on_delta(StreamDelta::Reasoning(text));
+                    } else {
+                        state.content.push_str(text);
+                        on_delta(StreamDelta::Content(text));
+                    }
                 }
+            }
+            if is_thought {
+                continue;
             }
             if part.get("functionCall").is_some() {
                 let fc = &part["functionCall"];
@@ -377,7 +383,11 @@ mod tests {
         parse_gemini_stream_data(
             r#"{"candidates":[{"content":{"parts":[{"text":"hi"},{"functionCall":{"name":"read_file","args":{"path":"a"}}}]},"finishReason":"STOP"}]}"#,
             &mut state,
-            &mut |s| deltas.push_str(s),
+            &mut |d| {
+                if let crate::llm::StreamDelta::Content(s) = d {
+                    deltas.push_str(s);
+                }
+            },
         );
         let turn = state.finish();
         assert_eq!(deltas, "hi");
@@ -393,7 +403,11 @@ mod tests {
         parse_gemini_stream_data(
             r#"{"candidates":[{"content":{"parts":[{"text":"hidden","thought":true},{"text":"visible"}]},"finishReason":"STOP"}]}"#,
             &mut state,
-            &mut |s| deltas.push_str(s),
+            &mut |d| {
+                if let crate::llm::StreamDelta::Content(s) = d {
+                    deltas.push_str(s);
+                }
+            },
         );
         let turn = state.finish();
         assert_eq!(deltas, "visible");

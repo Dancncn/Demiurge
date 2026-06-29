@@ -4,6 +4,10 @@
 > [IMPLEMENTATION.md](./IMPLEMENTATION.md)，后续计划见 [TODO.md](./TODO.md)。
 > 标注 ✅ 的为已落地，🔜 为已设计待实现。
 
+> ⚠️ **状态说明（重要）**：本文记录的是项目**早期 MVP 设计快照**，用于保留设计意图与取舍背景。
+> **当前实现已远超此快照**——例如核心工具已达 26+（外加 deferred 的屏幕/OCR 工具）、内置 OpenAI 兼容 / Anthropic / Gemini / 本地四类适配器与十余家供应商预设、已具备本地 OCR 与屏幕感知、语音 STT、分层长期记忆、含 journal/worktree/panel 的完整工作流运行时与媒体生成。
+> 因此文中部分 ✅/🔜 标注与「范围外」清单已过时，**请以代码及 [modules/](./modules/README.md)、[IMPLEMENTATION.md](./IMPLEMENTATION.md)、[TODO.md](./TODO.md) 为准**。下文保留原始设计文本仅作存档，关键过时处已就地标注。
+
 **Demiurge** 是一个轻量、开源的桌面伴侣 Agent 引擎。它加载 *角色包（character pack）*，
 用一个会自主调用工具的 agent 循环驱动角色，使其既能「入戏聊天」，也能在用户机器上执行
 受限的任务。引擎本身通用、不内置任何角色——角色由用户自备的角色包提供。
@@ -33,7 +37,7 @@
 
 ## 已锁定的两个关键决策
 （原计划「编码前先锁定 MVP 工具集 + 默认 provider」，现已锁定：）
-- **默认 provider / model**：DeepSeek `deepseek-chat`，`base_url = https://api.deepseek.com/v1`。**不做 Ollama**（按需求取舍）。
+- **默认 provider / model**：DeepSeek `deepseek-chat`，`base_url = https://api.deepseek.com/v1`（默认值至今未变）。~~**不做 Ollama**~~ → *现状：已新增 `local` 适配器，LM Studio / Ollama 等本地 OpenAI 兼容端点可直接接入。*
 - **MVP 工具集**：见下方表格，已实现。
 
 ## Agent 内核（MVP — 10 个组件，均 ✅）
@@ -86,13 +90,16 @@ Owner 标记：**[R]** Rust 内核 · **[F]** 前端。
 预留（对应轨道落地时再加，无需重写内核）：🔜 Live2D 模型路径、表情 / 情绪映射、TTS 后端 + 音色、问候 / 待机台词。
 
 ## MVP 范围外
+
+> 下列为 MVP 当时的范围外清单，多数已在后续实现，保留并就地标注。
+
 推迟——已为其设计，后续经「角色包字段 + 适配器」加入：
-- 🔜 TTS / ASR 适配器（语音输入 / 输出）
-- 🔜 桌宠视觉外壳：透明置顶窗口、Live2D、点击穿透、主动说话、屏幕感知
+- ASR（语音输入）✅ **已实现**（DashScope `qwen3-asr-flash` / OpenAI 兼容 Whisper）；TTS（语音输出）🔜 接口已预留、未接后端。
+- 屏幕感知 ✅ **已实现**（deferred 的 `screen_list_windows` / 区域·窗口截图 / 区域·窗口 OCR）；桌宠视觉外壳的透明置顶窗口、Live2D、点击穿透、主动说话仍 🔜。
 
 不需要——**不要**搭：
-- 向量 / 长期记忆 RAG（持久化已覆盖 MVP）
-- 完整工作流运行时（多 Agent 只读编排已有第一版；完整 journal / worktree / panel 仍不进 MVP）
+- 向量 RAG：仍不做向量检索；但**结构化长期记忆已实现**（user/project/session/pack 四层 Markdown 记忆 + 自动提取，非向量 RAG）。
+- ~~完整工作流运行时~~ → 现状：**已落地**，含 JSON DSL、journal、worktree、live panel 与可恢复的 durable run（见 [modules/07](./modules/07-workflow-runtime.md)）。仍不做的是 JavaScript workflow DSL。
 
 ## 仓库结构（现状）
 ```

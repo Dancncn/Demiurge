@@ -253,7 +253,7 @@ fn build_source_bundle(
             packs_dir.join(&settings.current_pack).join("memory.md"),
         ),
         ("项目 DEMIURGE.md", sandbox_dir.join("DEMIURGE.md")),
-        ("项目 CLAUDE.md", sandbox_dir.join("CLAUDE.md")),
+        ("项目 SYSTEM.md", sandbox_dir.join("SYSTEM.md")),
     ] {
         if let Some(text) = read_limited_text(&path) {
             parts.push(format!("# {label}\n{}", text.trim()));

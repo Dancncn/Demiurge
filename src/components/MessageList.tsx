@@ -32,8 +32,45 @@ const UserMessage = memo(function UserMessage({ text }: { text: string }) {
   );
 });
 
+// 推理型模型的思维链气泡：思考时展开显示「思考中…」，正文开始或回合结束后自动收起为
+// 「已深度思考」，用户可点击回看。消除推理阶段（实测可达数秒）界面无反馈的静默感。
+function ReasoningBlock({ text, active }: { text: string; active: boolean }) {
+  const [open, setOpen] = useState(true);
+  const wasActive = useRef(active);
+  useEffect(() => {
+    if (wasActive.current && !active) setOpen(false);
+    wasActive.current = active;
+  }, [active]);
+  return (
+    <div className="mb-2">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        className="inline-flex items-center gap-1.5 rounded-md px-1.5 py-0.5 text-[12px] text-[#8a9099] transition hover:bg-[#eef1f5] hover:text-[#202124]"
+      >
+        {active ? (
+          <span className="cf-dots">
+            <span />
+            <span />
+            <span />
+          </span>
+        ) : (
+          <span>💭</span>
+        )}
+        <span>{active ? "思考中…" : open ? "收起思考过程" : "已深度思考（点击展开）"}</span>
+      </button>
+      {open && (
+        <div className="mt-1 whitespace-pre-wrap border-l-2 border-[#e6e9ee] pl-3 text-[13px] leading-[1.6] text-[#6f7782]">
+          {text}
+        </div>
+      )}
+    </div>
+  );
+}
+
 const AssistantMessage = memo(function AssistantMessage({
   text,
+  reasoning,
   streaming,
   error,
   errorTitle,
@@ -42,6 +79,7 @@ const AssistantMessage = memo(function AssistantMessage({
   onRetry,
 }: {
   text: string;
+  reasoning?: string;
   streaming: boolean;
   error?: boolean;
   errorTitle?: string;
@@ -65,6 +103,9 @@ const AssistantMessage = memo(function AssistantMessage({
       <img src={AVATAR} alt="AI" className="mr-3 mt-0.5 size-7 shrink-0 rounded-md border border-[#dfe3e8] bg-white object-contain" />
       <div className="min-w-0 max-w-[min(900px,82%)]">
         <div className="py-0.5 text-[14px] leading-[1.6]">
+          {reasoning && reasoning.trim() && !error && (
+            <ReasoningBlock text={reasoning} active={streaming && !text} />
+          )}
           {error ? (
             <div className="rounded-lg border border-[#fde68a] bg-[#fffbeb] px-4 py-3 text-[13px] text-[#92400e]">
               <div className="font-semibold text-[#7a3b00]">{errorTitle || "Request failed"}</div>
@@ -131,6 +172,7 @@ export function MessageList({ items, thinking, greeting, onRetry }: Props) {
                 <AssistantMessage
                   key={item.id}
                   text={item.text}
+                  reasoning={item.reasoning}
                   streaming={item.streaming}
                   error={item.error}
                   errorTitle={item.errorTitle}

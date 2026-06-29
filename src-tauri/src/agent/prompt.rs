@@ -3,11 +3,12 @@
 //! The runner still consumes a single system prompt string, but this module now
 //! builds it from ordered sections with explicit priorities and a character
 //! budget. The same builder can return a report for the UI.
+use std::collections::HashMap;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::mpsc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::sync::{mpsc, Mutex, OnceLock};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
 use serde_json::Value;
@@ -21,6 +22,9 @@ const MAX_DIRECTORY_ENTRIES: usize = 90;
 const MAX_DIRECTORY_DEPTH: usize = 2;
 const MIN_TRUNCATED_SECTION_CHARS: usize = 600;
 const GIT_TIMEOUT_SECS: u64 = 5;
+/// Git 状态快照的复用窗口：一轮工具回合内（runner 每个 step 都会重建 prompt）复用
+/// 同一结果，过期才重新执行 `git status`，避免每步都付一次子进程开销。
+const GIT_SNAPSHOT_TTL: Duration = Duration::from_secs(3);
 
 #[derive(Clone, Debug, Serialize)]
 pub struct PromptSectionReport {
@@ -62,7 +66,14 @@ pub fn build_for_input(
     session_summary: Option<&str>,
     user_text: &str,
 ) -> String {
-    build_with_report_for_input(state, settings, persona_text, session_summary, Some(user_text)).text
+    build_with_report_for_input(
+        state,
+        settings,
+        persona_text,
+        session_summary,
+        Some(user_text),
+    )
+    .text
 }
 
 pub fn build_with_report(
@@ -97,7 +108,11 @@ pub fn build_with_report_for_input(
         goal_block,
         user_text,
     );
-    assemble_drafts(super::persona::engine_base(), drafts, settings.max_context_chars)
+    assemble_drafts(
+        super::persona::engine_base(),
+        drafts,
+        settings.max_context_chars,
+    )
 }
 
 fn build_ordered_sections(
@@ -112,7 +127,12 @@ fn build_ordered_sections(
     user_text: Option<&str>,
 ) -> Vec<SectionDraft> {
     vec![
-        section("pack_persona", "Pack Persona", 90, persona_section(persona_text)),
+        section(
+            "pack_persona",
+            "Pack Persona",
+            90,
+            persona_section(persona_text),
+        ),
         section(
             "skills",
             "Skills",
@@ -129,7 +149,13 @@ fn build_ordered_sections(
             "memories",
             "Memories",
             75,
-            memory_section(root, data_dir, packs_dir, &settings.current_pack, session_id),
+            memory_section(
+                root,
+                data_dir,
+                packs_dir,
+                &settings.current_pack,
+                session_id,
+            ),
         ),
         section(
             "conversation_summary",
@@ -138,7 +164,12 @@ fn build_ordered_sections(
             session_summary_section(session_summary),
         ),
         section("current_goal", "Current Goal", 70, goal_block),
-        section("environment", "Environment", 55, environment_section(root, settings)),
+        section(
+            "environment",
+            "Environment",
+            55,
+            environment_section(root, settings),
+        ),
         section("tools", "Tools", 85, tools_section()),
         section("safety_rules", "Safety Rules", 95, safety_section()),
     ]
@@ -273,14 +304,18 @@ fn project_section(root: &Path) -> String {
     let mut parts = Vec::new();
 
     let mut instruction_docs = Vec::new();
-    for name in ["DEMIURGE.md", "CLAUDE.md", "AGENTS.md"] {
+    // DEMIURGE.md / SYSTEM.md 为本项目自有的中性指令文件约定；AGENTS.md 兼容跨工具的 agents.md 通用约定。
+    for name in ["DEMIURGE.md", "SYSTEM.md", "AGENTS.md"] {
         let path = root.join(name);
         if let Some(text) = read_limited_text(&path) {
             instruction_docs.push(format!("## {name}\n{}", text.trim()));
         }
     }
     if !instruction_docs.is_empty() {
-        parts.push(format!("# Instruction Files\n{}", instruction_docs.join("\n\n")));
+        parts.push(format!(
+            "# Instruction Files\n{}",
+            instruction_docs.join("\n\n")
+        ));
     }
 
     if let Some(readme) = read_limited_text(&root.join("README.md")) {
@@ -308,7 +343,9 @@ fn memory_section(
     session_id: &str,
 ) -> String {
     let mut parts = Vec::new();
-    for (scope, label, path) in super::memory::scoped_memory_paths(data_dir, root, packs_dir, pack_id, session_id) {
+    for (scope, label, path) in
+        super::memory::scoped_memory_paths(data_dir, root, packs_dir, pack_id, session_id)
+    {
         if let Some(text) = read_limited_text(&path) {
             parts.push(format!("# {label} memory ({scope})\n{}", text.trim()));
         }
@@ -322,10 +359,17 @@ fn memory_section(
 fn environment_section(root: &Path, settings: &Settings) -> String {
     let mut lines = Vec::new();
     lines.push(format!("Unix time (ms): {}", now_millis()));
-    lines.push(format!("OS/arch: {}/{}", std::env::consts::OS, std::env::consts::ARCH));
+    lines.push(format!(
+        "OS/arch: {}/{}",
+        std::env::consts::OS,
+        std::env::consts::ARCH
+    ));
     lines.push(format!("Workspace sandbox: {}", root.display()));
     lines.push(format!("Current pack: {}", settings.current_pack));
-    lines.push(format!("Provider/model: {:?} / {}", settings.provider, settings.model));
+    lines.push(format!(
+        "Provider/model: {:?} / {}",
+        settings.provider, settings.model
+    ));
     lines.push(format!("Git status:\n{}", git_snapshot(root)));
     cap_chars(lines.join("\n"), MAX_PROJECT_CHARS)
 }
@@ -523,7 +567,29 @@ fn now_millis() -> u128 {
         .unwrap_or(0)
 }
 
+/// Git 状态快照带短 TTL 进程内缓存：system prompt 在一轮工具循环里会被多次重建
+/// （runner 每个 step 调一次 build_for_input），而 `git status` 子进程实测约 130ms，
+/// 没必要每步都跑。同一沙盒目录在 GIT_SNAPSHOT_TTL 内复用上次结果，过期再刷新；
+/// 这点延迟对 prompt 上下文完全可接受，却能显著降低多步回合的本地开销。
 fn git_snapshot(root: &Path) -> String {
+    static CACHE: OnceLock<Mutex<HashMap<PathBuf, (Instant, String)>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let key = root.to_path_buf();
+    if let Ok(map) = cache.lock() {
+        if let Some((at, value)) = map.get(&key) {
+            if at.elapsed() < GIT_SNAPSHOT_TTL {
+                return value.clone();
+            }
+        }
+    }
+    let value = git_snapshot_uncached(root);
+    if let Ok(mut map) = cache.lock() {
+        map.insert(key, (Instant::now(), value.clone()));
+    }
+    value
+}
+
+fn git_snapshot_uncached(root: &Path) -> String {
     let cwd = root.to_path_buf();
     let (tx, rx) = mpsc::channel();
 

@@ -7,7 +7,7 @@ Demiurge 的 Ultracode 集成采用渐进式落地：先提供可运行的只读
 - `/ultracode [task]`：显式启用本轮多 Agent 编排模式。该指令只作为临时 system overlay 注入，不会把完整编排手册长期写入会话历史。
 - `agent_spawn` 工具：主 Agent 可派生只读子 Agent，用于代码探索、方案复核、风险审查、反例验证和遗漏检查。
 - 子 Agent 上下文继承：子 Agent 会继承当前角色包、长期记忆、会话摘要和最近消息摘录。
-- 子 Agent 工具收敛：子 Agent 只暴露 `read_file`、`glob`、`grep`、`git_status`、`system_info`、`web_search`，不能写文件、跑 shell、截图或递归派生子 Agent。
+- 子 Agent 工具收敛：子 Agent 只暴露 `read_file`、`glob`、`grep`、`git_status`、`system_info`、`web_fetch`、`web_search`、`context_inspect` 这 8 个只读工具（schema 过滤与执行门禁都用 `subagent.rs` 的 `READ_ONLY_TOOLS`），不能写文件、跑 shell、截图或递归派生子 Agent。
 - 工具 schema 过滤：子 Agent 请求只携带只读工具 schema，减少无关工具定义占用上下文，也降低误调用风险。
 - `context_mode=fork`：子 Agent 继承父会话消息，并对未配对的 tool call 插入固定 placeholder，避免 fork 请求破坏 tool_result 配对。
 - `/compact [keep=N]`：手动触发上下文折叠，把旧消息压缩进 rolling summary。
@@ -42,11 +42,11 @@ Demiurge 的 Ultracode 集成采用渐进式落地：先提供可运行的只读
 
 后续可继续参考 Ultracode 做：
 
-- per-agent budget：把 `budget` step 从 journal 标记升级为硬预算与消耗追踪。
+- per-agent budget：run 级硬预算与消耗追踪已落地（`budget` step 会在预算耗尽时中止后续 `agent` step 并记录用量，子 Agent 也支持 `max_total_tokens` 硬停机）；后续可做的是 per-agent 独立硬预算——让每个子 Agent 各自带独立上限，而非共享 run 预算的剩余额度。
 - cross-process recovery：应用重启后从 journal 恢复 live run 进度，而不是仅恢复为 overlay。
 - judge panel：同一设计让多个 Reviewer 独立打分，再由主 Agent 合成取舍。
 - context compaction policy：把大块工具结果压成结构化 evidence packet，再进入后续主上下文。
 
 ## 当前边界
 
-当前版本仍不是完整的通用 workflow runtime。它已经有 fork-style 子 Agent、deferred tools、上下文折叠、journal/resume、Rust 原生 JSON workflow DSL、live panel、worktree 创建和 Goal 持续驱动骨架；但还没有 JavaScript workflow DSL、后台 LocalAgentTask 式长任务、coordinator/team/swarm/mailbox、per-agent 硬预算追踪或跨进程 live 进度恢复。主 Agent 仍是唯一做最终判断和答复的角色。
+当前版本仍不是完整的通用 workflow runtime。它已经有 fork-style 子 Agent、deferred tools、上下文折叠、journal/resume、Rust 原生 JSON workflow DSL、live panel、worktree 创建和 Goal 持续驱动骨架；但还没有 JavaScript workflow DSL、后台 LocalAgentTask 式长任务、coordinator/team/swarm/mailbox、per-agent 独立硬预算上限（目前子 Agent 共享 run 级预算的剩余额度）或跨进程 live 进度恢复（已能恢复 durable snapshot，但不会重新拉起后台 live 执行）。主 Agent 仍是唯一做最终判断和答复的角色。

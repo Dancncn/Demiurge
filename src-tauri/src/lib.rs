@@ -15,8 +15,8 @@ mod voice;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use regex::Regex;
@@ -101,10 +101,29 @@ impl AppState {
     }
 
     /// 落盘当前会话集合。
+    ///
+    /// 写盘移出调用方（多为 async runner）的任务：克隆快照后交后台线程落盘，避免在
+    /// 流式 / 多步工具回合的关键路径上做同步磁盘写（长历史下整库 JSON 序列化不便宜）。
+    /// 用全局单调序号 + 按目录记录「已落盘的最大序号」，保证后产生的快照不会被先完成的
+    /// 旧线程覆盖；按目录隔离，单进程多数据目录（含并行测试）也不会互相串号。
+    /// 代价：硬退出时最后一次写入可能丢失（毫秒级窗口），对桌面伴侣可接受。
     pub fn persist_sessions(&self) {
+        static SEQ: AtomicU64 = AtomicU64::new(0);
+        static WRITTEN: OnceLock<Mutex<HashMap<PathBuf, u64>>> = OnceLock::new();
+
         let dir = self.data_dir.lock().unwrap().clone();
         let store = self.sessions.lock().unwrap().clone();
-        let _ = store::save_sessions(&dir, &store);
+        let seq = SEQ.fetch_add(1, Ordering::SeqCst) + 1;
+        std::thread::spawn(move || {
+            let written = WRITTEN.get_or_init(|| Mutex::new(HashMap::new()));
+            let mut map = written.lock().unwrap_or_else(|e| e.into_inner());
+            let last = map.entry(dir.clone()).or_insert(0);
+            if *last >= seq {
+                return; // 已有更新的快照落盘，跳过这次旧数据写入
+            }
+            let _ = store::save_sessions(&dir, &store);
+            *last = seq;
+        });
     }
 }
 
