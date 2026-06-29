@@ -27,6 +27,7 @@ import SettingsDialog from "./components/SettingsDialog";
 import WorkflowsPanel from "./components/WorkflowsPanel";
 import MediaStudio from "./components/MediaStudio";
 import { CheckIcon, ChevronDownIcon, PanelLeftIcon, WrenchIcon } from "./components/Icons";
+import Select from "./components/Select";
 import { attachmentKindLabel, buildAttachmentPrompt, formatAttachmentSize, type ProcessedAttachment } from "./lib/fileProcessing";
 
 const SUGGESTIONS = [
@@ -37,6 +38,43 @@ const SUGGESTIONS = [
 ];
 
 const DEFAULT_WINDOW_SIZE = { width: 1811, height: 1213 };
+
+// Browser-preview fallback so the UI renders without the Tauri backend (dev/screenshots only).
+const PREVIEW_SETTINGS: Settings = {
+  provider: "deepseek",
+  permission_mode: "default",
+  base_url: "https://api.deepseek.com/v1",
+  api_key: "",
+  model: "deepseek-chat",
+  current_pack: "default",
+  max_context_chars: 24000,
+  max_input_tokens: 32000,
+  reserved_output_tokens: 4000,
+  auto_memory_enabled: true,
+  voice_enabled: false,
+  voice_stt_backend: "",
+  voice_tts_backend: "",
+  voice_id: "",
+  computer_use_enabled: false,
+  ocr_model_source: "modelscope",
+  web_search_provider: "auto",
+  tavily_api_key: "",
+  brave_search_api_key: "",
+  exa_api_key: "",
+  webdav_enabled: false,
+  webdav_url: "",
+  webdav_username: "",
+  webdav_password: "",
+  webdav_path: "",
+  media_provider: "dashscope",
+  media_base_url: "",
+  media_api_key: "",
+  image_model: "",
+  image_size: "",
+  tts_model: "",
+  tts_voice: "",
+  mcp_servers: [],
+};
 
 function friendlyAssistantError(err: unknown, event?: AssistantErrorEvent) {
   const raw = event?.message || String(err);
@@ -142,7 +180,6 @@ export default function App() {
   const [activeId, setActiveId] = useState("");
   const [activeView, setActiveView] = useState<AppView>("chat");
   const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [settingsOpen, setSettingsOpen] = useState(false);
   const [packMenuOpen, setPackMenuOpen] = useState(false);
   const [agentMenuOpen, setAgentMenuOpen] = useState(false);
   const [workflowsOpen, setWorkflowsOpen] = useState(false);
@@ -217,6 +254,10 @@ export default function App() {
         setBusy(engine.busy);
       } catch (e) {
         console.error("Failed to initialize Demiurge", e);
+        // Outside Tauri (browser preview), seed defaults so the UI is still browsable.
+        if (!("__TAURI_INTERNALS__" in window)) {
+          setSettings((prev) => prev ?? PREVIEW_SETTINGS);
+        }
       }
     })();
   }, []);
@@ -577,7 +618,6 @@ export default function App() {
     try {
       await api.saveSettings(s);
       setSettings(s);
-      setSettingsOpen(false);
     } catch (e) {
       console.error("Failed to save settings", e);
     }
@@ -653,7 +693,7 @@ export default function App() {
         onRenameSession={handleRenameSession}
         onDeleteSession={handleDeleteSession}
         onOpenSandbox={() => void api.openSandbox()}
-        onOpenSettings={() => setSettingsOpen(true)}
+        onOpenSettings={() => setActiveView("settings")}
       />
 
       <section className="flex min-h-0 min-w-0 flex-1 flex-col p-2 pl-0">
@@ -788,24 +828,22 @@ export default function App() {
 
 
                 <div className="ml-auto flex items-center gap-2">
-                  <select
+                  <Select
                     value={settings?.permission_mode ?? "default"}
-                    onChange={(e) => void handleSetPermissionMode(e.target.value as PermissionMode)}
-                    className={`h-8 rounded-md border px-2 text-xs font-medium outline-none transition ${
+                    onChange={(v) => void handleSetPermissionMode(v as PermissionMode)}
+                    align="right"
+                    options={(Object.keys(PERMISSION_MODE_LABELS) as PermissionMode[]).map((mode) => ({
+                      value: mode,
+                      label: PERMISSION_MODE_LABELS[mode],
+                    }))}
+                    triggerClassName={`flex h-8 items-center gap-1.5 rounded-md border px-2.5 text-xs font-medium outline-none transition ${
                       settings?.permission_mode === "bypass"
                         ? "border-[#f4b4b4] bg-[#fff0f0] text-[#b42318]"
                         : settings?.permission_mode === "plan"
                           ? "border-[#b8d4ff] bg-[#eef5ff] text-[#0b57d0]"
-                          : "border-[#dfe3e8] bg-white text-[#4f5661]"
+                          : "border-[#dfe3e8] bg-white text-[#4f5661] hover:bg-[#f6f7f9]"
                     }`}
-                    title="Permission mode"
-                  >
-                    {(Object.keys(PERMISSION_MODE_LABELS) as PermissionMode[]).map((mode) => (
-                      <option key={mode} value={mode}>
-                        {PERMISSION_MODE_LABELS[mode]}
-                      </option>
-                    ))}
-                  </select>
+                  />
                   {planState.path && !planState.approved && (
                     <div className="hidden items-center gap-1 rounded-md border border-[#b8d4ff] bg-[#eef5ff] px-2 py-1 text-xs text-[#0b57d0] lg:flex">
                       <span className="max-w-[18vw] truncate" title={planState.path}>
@@ -856,9 +894,20 @@ export default function App() {
                 onOpenSandbox={() => void api.openSandbox()}
               />
             </>
-          ) : (
-            <MediaStudio settings={settings} onOpenSettings={() => setSettingsOpen(true)} />
-          )}
+          ) : activeView === "media" ? (
+            <MediaStudio settings={settings} onOpenSettings={() => setActiveView("settings")} />
+          ) : settings ? (
+            <SettingsDialog
+              open
+              settings={settings}
+              packs={packs}
+              agentPanel={agentPanel}
+              onClose={() => setActiveView("chat")}
+              onSave={handleSaveSettings}
+              onPacksChange={setPacks}
+              onAgentPanelChange={setAgentPanel}
+            />
+          ) : null}
         </div>
       </section>
 
@@ -869,18 +918,6 @@ export default function App() {
         onResume={(command) => void handleSend(command)}
       />
       <ConfirmDialog req={confirmReq} mode={settings?.permission_mode ?? "default"} onRespond={handleRespondConfirm} />
-      {settings && (
-        <SettingsDialog
-          open={settingsOpen}
-          settings={settings}
-          packs={packs}
-          agentPanel={agentPanel}
-          onClose={() => setSettingsOpen(false)}
-          onSave={handleSaveSettings}
-          onPacksChange={setPacks}
-          onAgentPanelChange={setAgentPanel}
-        />
-      )}
     </main>
   );
 }

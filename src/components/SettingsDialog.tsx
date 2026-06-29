@@ -24,6 +24,7 @@ import type {
   WebSearchProvider,
 } from "../lib/types";
 import { CheckIcon, CloseIcon, DownloadIcon } from "./Icons";
+import { Select } from "./Select";
 
 interface Props {
   open: boolean;
@@ -45,6 +46,8 @@ type ProviderOption = {
   baseUrl: string;
   model: string;
   help: string;
+  /** Suggested models for quick selection; users can still type any model name. */
+  models: string[];
 };
 
 const providerOptions: ProviderOption[] = [
@@ -55,14 +58,16 @@ const providerOptions: ProviderOption[] = [
     baseUrl: "https://api.deepseek.com/v1",
     model: "deepseek-chat",
     help: "DeepSeek official OpenAI-compatible endpoint.",
+    models: ["deepseek-chat", "deepseek-reasoner"],
   },
   {
     value: "dashscope",
-    label: "阿里云百炼",
+    label: "阿里云百炼 (DashScope)",
     short: "BL",
     baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
-    model: "deepseek-v4-flash",
-    help: "DashScope/Bailian OpenAI-compatible chat endpoint. Media uses native DashScope APIs below.",
+    model: "qwen-plus",
+    help: "Aliyun Bailian / DashScope OpenAI-compatible endpoint. Media uses native DashScope APIs below.",
+    models: ["qwen-max", "qwen-plus", "qwen-turbo", "qwen-long", "deepseek-v3", "deepseek-r1"],
   },
   {
     value: "openai",
@@ -71,6 +76,7 @@ const providerOptions: ProviderOption[] = [
     baseUrl: "https://api.openai.com/v1",
     model: "gpt-4o",
     help: "OpenAI chat completions endpoint.",
+    models: ["gpt-4o", "gpt-4o-mini", "gpt-4.1", "gpt-4.1-mini", "o3", "o4-mini"],
   },
   {
     value: "openrouter",
@@ -78,7 +84,14 @@ const providerOptions: ProviderOption[] = [
     short: "OR",
     baseUrl: "https://openrouter.ai/api/v1",
     model: "openai/gpt-4o",
-    help: "OpenRouter model gateway.",
+    help: "OpenRouter model gateway. Models use the vendor/model form.",
+    models: [
+      "openai/gpt-4o",
+      "anthropic/claude-3.7-sonnet",
+      "google/gemini-2.0-flash-001",
+      "deepseek/deepseek-chat",
+      "meta-llama/llama-3.3-70b-instruct",
+    ],
   },
   {
     value: "anthropic",
@@ -87,14 +100,16 @@ const providerOptions: ProviderOption[] = [
     baseUrl: "https://api.anthropic.com/v1",
     model: "claude-sonnet-4-5",
     help: "Claude API. The key is stored in the system credential manager.",
+    models: ["claude-sonnet-4-5", "claude-opus-4-1", "claude-3-7-sonnet-latest", "claude-3-5-haiku-latest"],
   },
   {
     value: "gemini",
-    label: "Gemini",
+    label: "Google Gemini",
     short: "GE",
     baseUrl: "https://generativelanguage.googleapis.com/v1beta",
     model: "gemini-2.5-pro",
     help: "Google AI Studio compatible Gemini endpoint.",
+    models: ["gemini-2.5-pro", "gemini-2.0-flash", "gemini-2.0-flash-thinking-exp", "gemini-1.5-pro"],
   },
   {
     value: "glm",
@@ -103,6 +118,7 @@ const providerOptions: ProviderOption[] = [
     baseUrl: "https://open.bigmodel.cn/api/paas/v4",
     model: "glm-4-plus",
     help: "Zhipu AI OpenAI-compatible endpoint.",
+    models: ["glm-4-plus", "glm-4-air", "glm-4-flash", "glm-4-long"],
   },
   {
     value: "minimax",
@@ -111,6 +127,7 @@ const providerOptions: ProviderOption[] = [
     baseUrl: "https://api.minimax.chat/v1",
     model: "MiniMax-Text-01",
     help: "MiniMax OpenAI-compatible endpoint.",
+    models: ["MiniMax-Text-01", "abab6.5s-chat"],
   },
   {
     value: "custom",
@@ -119,6 +136,7 @@ const providerOptions: ProviderOption[] = [
     baseUrl: "",
     model: "",
     help: "Any OpenAI-compatible endpoint.",
+    models: [],
   },
   {
     value: "open_ai_compatible",
@@ -126,17 +144,33 @@ const providerOptions: ProviderOption[] = [
     short: "OA",
     baseUrl: "https://api.deepseek.com/v1",
     model: "deepseek-chat",
-    help: "Legacy generic OpenAI-compatible profile.",
+    help: "Generic OpenAI-compatible profile for self-hosted gateways.",
+    models: ["deepseek-chat", "gpt-4o", "qwen-plus"],
   },
   {
     value: "local",
-    label: "Local Endpoint",
+    label: "Local (Ollama / LM Studio)",
     short: "LO",
     baseUrl: "http://localhost:11434/v1",
     model: "llama3.1",
     help: "Ollama, LM Studio, vLLM or any local OpenAI-compatible service.",
+    models: ["llama3.1", "qwen2.5", "deepseek-r1", "phi4", "gemma2"],
   },
 ];
+
+/** Provider keys that ship a logo under public/providers/<key>.svg. */
+const PROVIDER_ICON_SET = new Set<ProviderKind>([
+  "deepseek",
+  "dashscope",
+  "openai",
+  "openrouter",
+  "anthropic",
+  "gemini",
+  "glm",
+  "minimax",
+  "open_ai_compatible",
+  "local",
+]);
 
 const webSearchProviders: { value: WebSearchProvider; label: string; help: string }[] = [
   { value: "auto", label: "Auto", help: "Try Bing first, then fall back to DuckDuckGo." },
@@ -300,6 +334,31 @@ function ProviderMark({ short, selected }: { short: string; selected?: boolean }
       }`}
     >
       {short}
+    </span>
+  );
+}
+
+function ProviderLogo({
+  value,
+  short,
+  selected,
+}: {
+  value: ProviderKind;
+  short: string;
+  selected?: boolean;
+}) {
+  const [failed, setFailed] = useState(false);
+  if (!PROVIDER_ICON_SET.has(value) || failed) {
+    return <ProviderMark short={short} selected={selected} />;
+  }
+  return (
+    <span className="grid size-8 shrink-0 place-items-center rounded-lg border border-[#e2e5ea] bg-white p-1.5">
+      <img
+        src={`/providers/${value}.svg`}
+        alt=""
+        className="h-full w-full object-contain"
+        onError={() => setFailed(true)}
+      />
     </span>
   );
 }
@@ -1191,13 +1250,7 @@ export default function SettingsDialog({
   }
 
   return (
-    <div
-      className="fixed inset-0 z-40 flex items-center justify-center bg-[#111827]/35 p-4 backdrop-blur-[2px]"
-      onClick={(e) => {
-        if (e.target === e.currentTarget) onClose();
-      }}
-    >
-      <div className="flex h-[min(760px,92vh)] w-[min(1040px,96vw)] overflow-hidden rounded-xl border border-[#d7dbe2] bg-[#f6f7f9] shadow-[0_24px_80px_rgba(15,23,42,0.28)]">
+    <div className="flex h-full min-h-0 w-full overflow-hidden bg-[#f6f7f9]">
         <aside className="flex w-[232px] shrink-0 flex-col border-r border-[#dfe3e8] bg-[#eef1f5]">
           <div className="flex h-12 items-center border-b border-[#dfe3e8] px-4">
             <div className="text-[13px] font-semibold text-[#202124]">Settings</div>
@@ -1281,7 +1334,7 @@ export default function SettingsDialog({
                                 selected ? "bg-white shadow-sm" : "hover:bg-white/70"
                               }`}
                             >
-                              <ProviderMark short={provider.short} selected={selected} />
+                              <ProviderLogo value={provider.value} short={provider.short} selected={selected} />
                               <span className="min-w-0 flex-1">
                                 <span className="block truncate text-[13px] font-medium text-[#202124]">
                                   {provider.label}
@@ -1296,7 +1349,7 @@ export default function SettingsDialog({
 
                       <div className="rounded-lg border border-[#e2e5ea] bg-white">
                         <div className="flex items-center gap-3 border-b border-[#eceff3] px-4 py-3">
-                          <ProviderMark short={selectedProvider.short} selected />
+                          <ProviderLogo value={selectedProvider.value} short={selectedProvider.short} selected />
                           <div className="min-w-0 flex-1">
                             <div className="truncate text-[14px] font-semibold text-[#202124]">
                               {selectedProvider.label}
@@ -1322,26 +1375,42 @@ export default function SettingsDialog({
                               onChange={(e) => set("api_key", e.target.value)}
                             />
                           </Field>
-                          <Field label="Model">
+                          <Field label="Model" help="Pick a suggested model or type any model name.">
                             <input
                               className={inputCls}
                               value={form.model}
                               placeholder={selectedProvider.model}
                               onChange={(e) => set("model", e.target.value)}
                             />
+                            {selectedProvider.models.length > 0 && (
+                              <div className="mt-2 flex flex-wrap gap-1.5">
+                                {selectedProvider.models.map((m) => {
+                                  const active = form.model === m;
+                                  return (
+                                    <button
+                                      key={m}
+                                      type="button"
+                                      onClick={() => set("model", m)}
+                                      className={`rounded-full border px-2.5 py-1 text-[11px] font-medium transition ${
+                                        active
+                                          ? "border-[#111827] bg-[#111827] text-white"
+                                          : "border-[#dfe3e8] bg-white text-[#4f5661] hover:border-[#c7ccd4] hover:bg-[#f5f6f8]"
+                                      }`}
+                                    >
+                                      {m}
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            )}
                           </Field>
                           <Field label="Persona Pack">
-                            <select
-                              className={inputCls}
+                            <Select
                               value={form.current_pack}
-                              onChange={(e) => set("current_pack", e.target.value)}
-                            >
-                              {packs.map((p) => (
-                                <option key={p.id} value={p.id}>
-                                  {p.name} ({p.id})
-                                </option>
-                              ))}
-                            </select>
+                              onChange={(v) => set("current_pack", v)}
+                              placeholder="Select a persona pack"
+                              options={packs.map((p) => ({ value: p.id, label: p.name, hint: p.id }))}
+                            />
                           </Field>
                           <div
                             className="rounded-lg border border-dashed border-[#cfd5dd] bg-[#fbfcfd] p-3"
@@ -1467,17 +1536,15 @@ export default function SettingsDialog({
                         />
                       </Field>
                       <Field label="Default size">
-                        <select
-                          className={inputCls}
+                        <Select
                           value={form.image_size}
-                          onChange={(e) => set("image_size", e.target.value)}
-                        >
-                          {["512*512", "768*768", "1024*1024", "1280*720", "720*1280"].map((size) => (
-                            <option key={size} value={size}>
-                              {size}
-                            </option>
-                          ))}
-                        </select>
+                          onChange={(v) => set("image_size", v)}
+                          placeholder="Select size"
+                          options={["512*512", "768*768", "1024*1024", "1280*720", "720*1280"].map((size) => ({
+                            value: size,
+                            label: size,
+                          }))}
+                        />
                       </Field>
                     </div>
                   </Section>
@@ -2417,17 +2484,11 @@ export default function SettingsDialog({
                     />
                     <div className="mt-4 grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto_auto]">
                       <Field label="OCR model source" help={selectedOcrSource.note}>
-                        <select
-                          className={inputCls}
+                        <Select
                           value={form.ocr_model_source}
-                          onChange={(e) => set("ocr_model_source", e.target.value as OcrModelSource)}
-                        >
-                          {ocrSources.map((s) => (
-                            <option key={s.value} value={s.value}>
-                              {s.label}
-                            </option>
-                          ))}
-                        </select>
+                          onChange={(v) => set("ocr_model_source", v as OcrModelSource)}
+                          options={ocrSources.map((s) => ({ value: s.value, label: s.label }))}
+                        />
                       </Field>
                       <button
                         className={`${secondaryButtonCls} mt-[22px]`}
@@ -2810,7 +2871,6 @@ export default function SettingsDialog({
             </div>
           </div>
         </section>
-      </div>
     </div>
   );
 }
