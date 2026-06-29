@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import * as api from "../lib/api";
+import { useI18n } from "../lib/i18n";
 import type { DayCell, StatsPanel } from "../lib/types";
 
 const LEVEL_BG = ["#eef1f5", "#cfe9dd", "#9fd6bf", "#52b894", "#10a37f"];
@@ -60,6 +61,7 @@ function Metric({ label, value, index }: { label: string; value: string; index: 
 }
 
 function Heatmap({ cells }: { cells: DayCell[] }) {
+  const { t } = useI18n();
   // pad the leading days so weekday rows align (week starts Sunday)
   const pad = cells.length ? new Date(`${cells[0].date}T00:00:00`).getDay() : 0;
   return (
@@ -81,25 +83,18 @@ function Heatmap({ cells }: { cells: DayCell[] }) {
         ))}
       </div>
       <div className="mt-2 flex items-center gap-1.5 text-[11px] text-[#9aa1ab]">
-        <span>Less</span>
+        <span>{t("dashboard.less")}</span>
         {LEVEL_BG.map((bg) => (
           <span key={bg} className="rounded-[2px]" style={{ width: 11, height: 11, background: bg }} />
         ))}
-        <span>More</span>
+        <span>{t("dashboard.more")}</span>
       </div>
     </div>
   );
 }
 
-export function Dashboard({
-  greeting,
-  suggestions,
-  onSuggestionClick,
-}: {
-  greeting: string;
-  suggestions: string[];
-  onSuggestionClick: (text: string) => void;
-}) {
+export function Dashboard({ greeting }: { greeting: string }) {
+  const { t } = useI18n();
   const [stats, setStats] = useState<StatsPanel | null>(null);
 
   useEffect(() => {
@@ -115,16 +110,16 @@ export function Dashboard({
   const metrics = useMemo(() => {
     if (!stats) return [];
     return [
-      { label: "Sessions", value: fmtNum(stats.sessions) },
-      { label: "Messages", value: fmtNum(stats.messages) },
-      { label: "Tokens (est.)", value: fmtTokens(stats.est_tokens) },
-      { label: "Active days", value: fmtNum(stats.active_days) },
-      { label: "Current streak", value: `${stats.current_streak}d` },
-      { label: "Longest streak", value: `${stats.longest_streak}d` },
-      { label: "Peak hour", value: fmtHour(stats.peak_hour) },
-      { label: "Model", value: stats.model || "—" },
+      { label: t("dashboard.sessions"), value: fmtNum(stats.sessions) },
+      { label: t("dashboard.messages"), value: fmtNum(stats.messages) },
+      { label: t("dashboard.tokens"), value: fmtTokens(stats.est_tokens) },
+      { label: t("dashboard.activeDays"), value: fmtNum(stats.active_days) },
+      { label: t("dashboard.currentStreak"), value: t("unit.days", { n: stats.current_streak }) },
+      { label: t("dashboard.longestStreak"), value: t("unit.days", { n: stats.longest_streak }) },
+      { label: t("dashboard.peakHour"), value: fmtHour(stats.peak_hour) },
+      { label: t("dashboard.model"), value: stats.model || "—" },
     ];
-  }, [stats]);
+  }, [stats, t]);
 
   return (
     <div className="mx-auto flex w-full max-w-2xl flex-col items-center px-4 py-10">
@@ -134,8 +129,8 @@ export function Dashboard({
       {stats && (
         <div className="mb-6 w-full overflow-hidden rounded-xl border border-[#e6e9ee] bg-white shadow-[0_1px_3px_rgba(15,23,42,0.05)]">
           <div className="flex items-center justify-between border-b border-[#eceff3] px-4 py-2.5">
-            <span className="text-[12px] font-semibold uppercase tracking-wide text-[#8a9099]">Overview</span>
-            <span className="text-[11px] text-[#9aa1ab]">Last {Math.round(stats.heatmap_days / 7)} weeks</span>
+            <span className="text-[12px] font-semibold uppercase tracking-wide text-[#8a9099]">{t("dashboard.overview")}</span>
+            <span className="text-[11px] text-[#9aa1ab]">{t("dashboard.lastWeeks", { n: Math.round(stats.heatmap_days / 7) })}</span>
           </div>
           <div className="grid grid-cols-2 gap-2 p-3 sm:grid-cols-4">
             {metrics.map((m, i) => (
@@ -147,18 +142,6 @@ export function Dashboard({
           </div>
         </div>
       )}
-
-      <div className="grid w-full grid-cols-1 gap-2 sm:grid-cols-2">
-        {suggestions.map((item) => (
-          <button
-            key={item}
-            onClick={() => onSuggestionClick(item)}
-            className="cf-lift cf-press rounded-lg border border-[#e8eaef] bg-white px-3.5 py-3 text-left text-[13px] text-[#3f4652] hover:border-[#dcdfe5] hover:bg-[#f7f8fa] hover:shadow-[0_8px_20px_rgba(15,23,42,0.06)]"
-          >
-            {item}
-          </button>
-        ))}
-      </div>
     </div>
   );
 }

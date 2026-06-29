@@ -20,7 +20,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_yaml = "0.9"
 # stream：SSE 流式读取响应体（bytes_stream）。Windows 默认 native-tls(schannel)，无需 OpenSSL
-reqwest = { version = "0.12", features = ["json", "stream"] }
+reqwest = { version = "0.12", features = ["json", "stream", "multipart"] }
 # Tauri 内部即用 tokio；这里显式引入 sync(oneshot)/time(timeout)/process 等
 tokio = { version = "1", features = ["sync", "time", "macros", "rt", "io-util", "process"] }
 futures-util = "0.3"

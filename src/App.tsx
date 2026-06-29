@@ -26,15 +26,11 @@ import GoalBar, { type GoalAction } from "./components/GoalBar";
 import ConfirmDialog from "./components/ConfirmDialog";
 import SettingsDialog from "./components/SettingsDialog";
 import MediaStudio from "./components/MediaStudio";
+import SkillsPanel from "./components/SkillsPanel";
 import { CheckIcon, ChevronDownIcon, PanelLeftIcon } from "./components/Icons";
 import { attachmentKindLabel, buildAttachmentPrompt, formatAttachmentSize, type ProcessedAttachment } from "./lib/fileProcessing";
-
-const SUGGESTIONS = [
-  "What time is it? Then suggest what I should do today.",
-  "Create a notes.txt file in the sandbox and write a few notes.",
-  "Search for recent AI news worth paying attention to.",
-  "Introduce yourself and explain what you can do.",
-];
+import { autoContextBudget } from "./lib/providers";
+import { useI18n } from "./lib/i18n";
 
 const DEFAULT_WINDOW_SIZE = { width: 1811, height: 1213 };
 
@@ -50,6 +46,8 @@ const PREVIEW_SETTINGS: Settings = {
   max_context_chars: 24000,
   max_input_tokens: 32000,
   reserved_output_tokens: 4000,
+  context_budget_auto: true,
+  language: "zh",
   auto_memory_enabled: true,
   voice_enabled: false,
   voice_stt_backend: "",
@@ -159,6 +157,7 @@ function buildUserDisplayText(text: string, attachments: ProcessedAttachment[]) 
 }
 
 export default function App() {
+  const { t, setLang } = useI18n();
   const [items, setItems] = useState<DisplayItem[]>([]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
@@ -192,12 +191,12 @@ export default function App() {
   const agentsDir = agentPanel.agents_dir || ".demiurge/agents";
   const appBusy = busy || sessionEngine?.busy === true;
   const runtimeStatus = sessionEngine?.cancel_requested
-    ? "Cancelling current turn"
+    ? t("status.cancelling")
     : sessionEngine?.active_turn
       ? sessionEngine.active_turn.status === "cancelling"
-        ? "Cancelling current turn"
-        : "Processing current turn"
-      : "Ready";
+        ? t("status.cancelling")
+        : t("status.processing")
+      : t("status.ready");
 
   const currentPack = useMemo(
     () => packs.find((x) => x.id === settings?.current_pack) ?? null,
@@ -207,10 +206,10 @@ export default function App() {
   const packAvatar = currentPack?.avatarDataUrl;
 
   const selectedAgentLabel = useMemo(() => {
-    if (selectedAgentNames.length === 0) return "Agents";
+    if (selectedAgentNames.length === 0) return t("header.agents");
     if (selectedAgentNames.length === 1) return selectedAgentNames[0];
-    return `${selectedAgentNames.length} Agents`;
-  }, [selectedAgentNames]);
+    return t("header.agentsCount", { n: selectedAgentNames.length });
+  }, [selectedAgentNames, t]);
 
   useEffect(() => {
     if (!("__TAURI_INTERNALS__" in window)) return;
@@ -235,6 +234,7 @@ export default function App() {
           api.sessionEngineState(),
         ]);
         setSettings(s);
+        if (s.language === "zh" || s.language === "en") setLang(s.language);
         setPacks(ps);
         setAgentPanel(agents);
         setGoalPanel(goal);
@@ -415,7 +415,10 @@ export default function App() {
       if (disposed) u();
       else unMode = u;
     });
-    api.listenSettingsUpdated(setSettings).then((u) => {
+    api.listenSettingsUpdated((s) => {
+      setSettings(s);
+      if (s.language === "zh" || s.language === "en") setLang(s.language);
+    }).then((u) => {
       if (disposed) u();
       else unSettings = u;
     });
@@ -636,7 +639,14 @@ export default function App() {
 
   async function handleSetModel(model: string) {
     if (!settings) return;
-    const next = { ...settings, model };
+    let next: Settings = { ...settings, model };
+    // When the input budget follows the model, re-size it for the new model.
+    if (settings.context_budget_auto) {
+      const budget = autoContextBudget(settings.provider, model);
+      if (budget) {
+        next = { ...next, max_input_tokens: budget.maxInput, reserved_output_tokens: budget.reservedOutput };
+      }
+    }
     setSettings(next);
     try {
       await api.saveSettings(next);
@@ -723,7 +733,7 @@ export default function App() {
               <header className="flex h-12 shrink-0 items-center gap-2 border-b border-[#eceff3] bg-[#fbfcfd] px-3">
                 <button
                   onClick={() => setSidebarOpen(true)}
-                  aria-label="Open sidebar"
+                  aria-label={t("header.openSidebar")}
                   className="grid h-8 w-8 shrink-0 place-items-center rounded-md text-[#4f5661] transition hover:bg-[#eef1f5] md:hidden"
                 >
                   <PanelLeftIcon size={20} />
@@ -840,8 +850,8 @@ export default function App() {
                 </div>
 
                 <div className="hidden min-w-0 flex-col border-l border-[#dfe3e8] pl-3 text-[11px] text-[#8a9099] sm:flex">
-                  <span className="max-w-[28vw] truncate font-medium text-[#3f3f3f]" title={activeSession?.title ?? "New chat"}>
-                    {activeSession?.title ?? "New chat"}
+                  <span className="max-w-[28vw] truncate font-medium text-[#3f3f3f]" title={activeSession?.title ?? t("chat.newChat")}>
+                    {activeSession?.title ?? t("chat.newChat")}
                   </span>
                   <span>{runtimeStatus}</span>
                 </div>
@@ -850,13 +860,13 @@ export default function App() {
                 {planState.path && !planState.approved && (
                   <div className="ml-auto hidden items-center gap-1 rounded-md border border-[#b8d4ff] bg-[#eef5ff] px-2 py-1 text-xs text-[#0b57d0] lg:flex">
                     <span className="max-w-[18vw] truncate" title={planState.path}>
-                      Plan ready: {planState.path}
+                      {t("header.planReady")}{planState.path}
                     </span>
                     <button className="rounded bg-[#0b57d0] px-2 py-1 text-white" onClick={() => void handleApprovePlan()}>
-                      Approve
+                      {t("header.approve")}
                     </button>
                     <button className="rounded px-2 py-1 text-[#5f6368] hover:bg-white" onClick={() => void handleRejectPlan()}>
-                      Reject
+                      {t("header.reject")}
                     </button>
                   </div>
                 )}
@@ -867,10 +877,8 @@ export default function App() {
               <MessageList
                 items={items}
                 thinking={thinking}
-                greeting="How can I help?"
-                suggestions={SUGGESTIONS}
-                onSuggestionClick={(t) => void handleSend(t)}
-                onRetry={(t) => void handleSend(t)}
+                greeting={t("chat.greeting")}
+                onRetry={(text) => void handleSend(text)}
               />
 
               <Composer
@@ -897,6 +905,8 @@ export default function App() {
             </>
           ) : activeView === "media" ? (
             <MediaStudio settings={settings} onOpenSettings={() => setActiveView("settings")} />
+          ) : activeView === "skills" ? (
+            <SkillsPanel />
           ) : settings ? (
             <SettingsDialog
               open

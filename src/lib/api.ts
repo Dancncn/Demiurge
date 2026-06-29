@@ -28,6 +28,7 @@ import type {
   SessionEnginePanelState,
   SessionList,
   Settings,
+  SkillPanelState,
   StatsPanel,
   ShellPolicyState,
   SpeechSynthesisRequest,
@@ -85,6 +86,11 @@ export const goalContinue = () => invoke<GoalPanelState | null>("goal_continue")
 export const goalClear = () => invoke<GoalPanelState | null>("goal_clear");
 export const getHistory = () => invoke<Message[]>("get_history");
 export const contextPanelState = () => invoke<ContextPanelState>("context_panel_state");
+
+// 技能 / 检索面板：可选 query 用于按输入对技能做匹配检索打分。
+export const skillPanelState = (query?: string) =>
+  invoke<SkillPanelState>("skill_panel_state", { query: query ?? null });
+export const openSkillsDir = () => invoke<void>("open_skills_dir");
 export const memoryPanelState = () => invoke<MemoryPanelState>("memory_panel_state");
 export const memoryAddEntry = (scope: string, kind: string, text: string) =>
   invoke<MemoryPanelState>("memory_add_entry", { scope, kind, text });
@@ -112,7 +118,8 @@ export const renameSession = (id: string, title: string) => invoke<string>("rena
 // Voice API placeholders. These commands intentionally return a clear
 // "backend not implemented" error until a concrete STT/TTS provider is chosen.
 export const voiceStatus = () => invoke<VoiceStatus>("voice_status");
-export const voiceTranscribe = (audioPath: string) => invoke<string>("voice_transcribe", { audioPath });
+export const voiceTranscribe = (audio: number[], mimeType?: string, language?: string) =>
+  invoke<string>("voice_transcribe", { audio, mimeType, language });
 export const voiceSynthesize = (text: string, voiceId?: string) =>
   invoke<string>("voice_synthesize", { text, voiceId });
 

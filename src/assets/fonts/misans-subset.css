@@ -1,0 +1,44 @@
+/*
+ * MiSans 子集化字体（中文 UI 主字体）。
+ *
+ * 由 node_modules/misans 的按 unicode-range 分块 woff2 合并后，
+ * 子集到「GB2312 常用字(3755) ∪ 仓库源码出现的全部 CJK 字符 ∪ 常用中英文标点 ∪ ASCII/Latin」，
+ * 总计约 4011 字形 / 每字重约 0.48MB（4 字重合计 ~1.9MB，原始约 8MB）。
+ *
+ * 关键点：family 名仍注册为 "MiSans"，与 src/style.css 的字体栈一致，无需改动 style.css。
+ * 字重统一回标准 400/500/600/700（原包是非标准 305/380/520/630），
+ * 让 Tailwind 的 font-medium/semibold/bold 能正确命中离散字重，避免合成加粗糊化。
+ * 罕用字（子集外）自动回退到字体栈里的系统中文字体（PingFang SC / Microsoft YaHei）。
+ */
+
+@font-face {
+  font-family: "MiSans";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("./MiSans-Normal.subset.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "MiSans";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("./MiSans-Medium.subset.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "MiSans";
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("./MiSans-Semibold.subset.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "MiSans";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("./MiSans-Bold.subset.woff2") format("woff2");
+}

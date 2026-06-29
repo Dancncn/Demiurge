@@ -26,11 +26,20 @@ export type ProviderKind =
   | "gemini"
   | "glm"
   | "minimax"
+  | "xai"
+  | "groq"
+  | "mistral"
+  | "moonshot"
+  | "perplexity"
+  | "doubao"
+  | "hunyuan"
+  | "stepfun"
   | "custom"
   | "open_ai_compatible"
   | "local";
 export type PermissionMode = "plan" | "default" | "auto" | "bypass";
 export type ReasoningEffort = "auto" | "low" | "medium" | "high" | "xhigh" | "max";
+export type Language = "zh" | "en";
 export type WebSearchProvider = "auto" | "bing" | "duckduckgo" | "tavily" | "brave" | "exa";
 
 export interface ConnectionTestResult {
@@ -50,6 +59,10 @@ export interface Settings {
   max_context_chars: number;
   max_input_tokens: number;
   reserved_output_tokens: number;
+  /** When true, the input budget follows the selected model's context window. */
+  context_budget_auto: boolean;
+  /** UI language: "zh" (default) or "en". */
+  language: Language;
   reasoning_effort: ReasoningEffort;
   auto_memory_enabled: boolean;
   voice_enabled: boolean;
@@ -452,6 +465,27 @@ export interface AgentValidationResult {
   warnings: string[];
   normalized_name: string;
   suggested_file_name: string;
+}
+
+export type SkillScope = "global" | "project" | "repository" | "pack" | "claude" | "legacy";
+
+export interface SkillSummary {
+  id: string;
+  name: string;
+  description: string;
+  scope: SkillScope;
+  path: string;
+  triggers: string[];
+  declared_tool_needs: string[];
+  required_permissions: string[];
+  references: string[];
+  selected: boolean;
+  match_score: number;
+}
+
+export interface SkillPanelState {
+  skills: SkillSummary[];
+  diagnostics: string[];
 }
 
 export interface SessionMeta {
