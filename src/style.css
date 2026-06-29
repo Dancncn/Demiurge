@@ -4,6 +4,11 @@
 @source "../index.html";
 @source "./**/*.{ts,tsx}";
 
+/* 交互动效缓动基线：轻微 overshoot，收尾自然带一点弹性。暴露为 Tailwind 的 ease-pop。 */
+@theme {
+  --ease-pop: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
 @property --focus-a-x { syntax: "<percentage>"; inherits: false; initial-value: 16%; }
 @property --focus-a-y { syntax: "<percentage>"; inherits: false; initial-value: 18%; }
 @property --focus-b-x { syntax: "<percentage>"; inherits: false; initial-value: 86%; }
@@ -115,8 +120,49 @@ textarea {
   to { opacity: 1; transform: none; }
 }
 .cf-menu-in {
-  animation: cf-menu-in 0.14s cubic-bezier(0.16, 1, 0.3, 1) both;
+  animation: cf-menu-in 0.16s var(--ease-pop) both;
   transform-origin: top center;
+}
+
+/* 按钮按压反馈：点击瞬间轻微缩小（配合 Tailwind transition 一起平滑） */
+.cf-press {
+  transition:
+    transform 0.18s var(--ease-pop),
+    background-color 0.16s ease,
+    color 0.16s ease,
+    border-color 0.16s ease,
+    box-shadow 0.22s var(--ease-pop);
+}
+.cf-press:active {
+  transform: scale(0.95);
+}
+
+/* 悬停上浮：卡片 / 胶囊 hover 时轻微抬起 + 阴影 */
+.cf-lift {
+  transition:
+    transform 0.24s var(--ease-pop),
+    box-shadow 0.24s var(--ease-pop),
+    border-color 0.18s ease,
+    background-color 0.18s ease;
+}
+.cf-lift:hover {
+  transform: translateY(-2px);
+}
+
+/* 错峰入场：为分组子项设置内联 --i 即可获得 stagger 效果 */
+@keyframes cf-rise {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.cf-rise {
+  animation: cf-rise 0.36s var(--ease-pop) both;
+  animation-delay: calc(var(--i, 0) * 40ms);
 }
 
 /* “正在思考/生成” 的脉冲点 */
@@ -139,8 +185,13 @@ textarea {
   .cf-message-in,
   .cf-pop,
   .cf-menu-in,
+  .cf-rise,
   .cf-dots > span {
     animation: none !important;
+  }
+  .cf-lift:hover,
+  .cf-press:active {
+    transform: none !important;
   }
   .markdown-body.is-streaming > *:last-child::after {
     animation: none;
