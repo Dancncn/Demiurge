@@ -28,6 +28,7 @@ import type {
   SessionEnginePanelState,
   SessionList,
   Settings,
+  StatsPanel,
   ShellPolicyState,
   SpeechSynthesisRequest,
   SpeechSynthesisResult,
@@ -102,6 +103,7 @@ export const webdavDeleteBackup = (config: WebDavConfig, fileName: string) =>
 
 // 会话管理
 export const listSessions = () => invoke<SessionList>("list_sessions");
+export const sessionStats = (offset: number) => invoke<StatsPanel>("session_stats", { offset });
 export const newSession = () => invoke<string>("new_session");
 export const selectSession = (id: string) => invoke<void>("select_session", { id });
 export const deleteSession = (id: string) => invoke<string>("delete_session", { id });

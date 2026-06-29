@@ -2,6 +2,7 @@ import { memo, useEffect, useRef, useState } from "react";
 import type { DisplayItem } from "../lib/types";
 import { Markdown } from "./Markdown";
 import ToolCard from "./ToolCard";
+import { Dashboard } from "./Dashboard";
 import { CheckIcon, CopyIcon, RotateCwIcon } from "./Icons";
 
 const AVATAR = "/demiurge.png";
@@ -120,29 +121,8 @@ export function MessageList({ items, thinking, greeting, suggestions, onSuggesti
     <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain bg-white [-webkit-overflow-scrolling:touch]">
       <div className="mx-auto flex w-full max-w-3xl flex-col px-4 pb-40 pt-5">
         {items.length === 0 && !thinking ? (
-          <div className="cf-message-in flex flex-1 flex-col justify-center pb-24">
-            <div className="mb-5 flex items-center gap-3">
-              <img
-                src={AVATAR}
-                alt="AI"
-                className="size-10 rounded-lg border border-[#dfe3e8] bg-white object-contain shadow-sm"
-              />
-              <div>
-                <h1 className="text-[18px] font-semibold text-[#202124]">{greeting}</h1>
-                <p className="mt-1 text-[12px] text-[#7a8088]">Pick a starter or type directly in the composer.</p>
-              </div>
-            </div>
-            <div className="grid w-full grid-cols-1 gap-2 sm:grid-cols-2">
-              {suggestions.map((item) => (
-                <button
-                  key={item}
-                  onClick={() => onSuggestionClick(item)}
-                  className="rounded-lg border border-[#e2e5ea] bg-[#fbfcfd] px-3 py-2.5 text-left text-[13px] text-[#3f4652] transition hover:border-[#cfd5dd] hover:bg-[#f6f7f9]"
-                >
-                  {item}
-                </button>
-              ))}
-            </div>
+          <div className="cf-message-in">
+            <Dashboard greeting={greeting} suggestions={suggestions} onSuggestionClick={onSuggestionClick} />
           </div>
         ) : (
           <div className="space-y-5">

@@ -10,13 +10,9 @@ import {
 } from "../lib/fileProcessing";
 import { ArrowUpIcon, CloseIcon, FileIcon, MicIcon, PaperclipIcon, StopIcon } from "./Icons";
 import { Select } from "./Select";
+import { ContextMeter } from "./ContextMeter";
 import { findProvider, REASONING_EFFORTS } from "../lib/providers";
 import type { PermissionMode, ProviderKind, ReasoningEffort } from "../lib/types";
-
-function formatTokens(n: number): string {
-  if (!n || n <= 0) return "—";
-  return n >= 1000 ? `${Math.round(n / 1000)}K` : String(n);
-}
 
 const PERMISSION_MODE_LABELS: Record<PermissionMode, string> = {
   plan: "Plan",
@@ -39,6 +35,8 @@ const SLASH_COMMANDS: SlashCommand[] = [
   { name: "/dream", args: "", desc: "Tidy long-term memory in the background" },
 ];
 
+const MAX_TEXTAREA_HEIGHT = 200;
+
 type Props = {
   input: string;
   canSend: boolean;
@@ -57,6 +55,10 @@ type Props = {
   onStop: () => void;
   onInputChange: (value: string) => void;
 };
+
+const ghostChip =
+  "flex h-7 max-w-[150px] items-center gap-1 rounded-md px-2 text-[12px] font-medium text-[#5f6368] outline-none transition hover:bg-[#eef1f5]";
+const ghostIcon = "cf-press grid size-7 shrink-0 place-items-center rounded-md text-[#6f7782] hover:bg-[#eef1f5]";
 
 export function Composer({
   input,
@@ -91,6 +93,14 @@ export function Composer({
   const cmdToken = input.startsWith("/") && !input.includes(" ") ? input.toLowerCase() : null;
   const cmdMatches = cmdToken ? SLASH_COMMANDS.filter((c) => c.name.startsWith(cmdToken)) : [];
   const paletteOpen = !cmdDismissed && cmdMatches.length > 0;
+
+  // Auto-grow the textarea up to a max height, then keep it fixed and scroll.
+  useEffect(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${Math.min(el.scrollHeight, MAX_TEXTAREA_HEIGHT)}px`;
+  }, [input, textareaRef]);
 
   function changeInput(value: string) {
     if (!value.startsWith("/")) setCmdDismissed(false);
@@ -182,8 +192,16 @@ export function Composer({
     }
   }
 
+  const permissionTrigger = `flex h-7 items-center gap-1 rounded-md px-2 text-[12px] font-medium outline-none transition ${
+    permissionMode === "bypass"
+      ? "bg-[#fff0f0] text-[#b42318] hover:bg-[#ffe6e6]"
+      : permissionMode === "plan"
+        ? "bg-[#eef5ff] text-[#0b57d0] hover:bg-[#e3efff]"
+        : "text-[#5f6368] hover:bg-[#eef1f5]"
+  }`;
+
   return (
-    <div className="shrink-0 border-t border-[#eceff3] bg-white/95 px-4 pb-4 pt-3">
+    <div className="shrink-0 px-4 pb-3 pt-2">
       <form
         onSubmit={(event) => {
           event.preventDefault();
@@ -215,16 +233,18 @@ export function Composer({
             </div>
           </div>
         )}
-        <div className="rounded-[14px] border border-[#dfe3e8] bg-[#fbfcfd] p-2 shadow-[0_1px_3px_rgba(15,23,42,0.08)] transition focus-within:border-[#c7ccd4]">
+
+        {/* Input box — kept clean; only the textarea lives inside. */}
+        <div className="rounded-2xl border border-[#dfe3e8] bg-white px-1 py-1 shadow-[0_1px_3px_rgba(15,23,42,0.06)] transition focus-within:border-[#c2c8d0] focus-within:shadow-[0_2px_10px_rgba(15,23,42,0.08)]">
           {attachments.length > 0 && (
-            <div className="mb-2 flex max-h-28 flex-wrap gap-2 overflow-y-auto px-2 pt-1">
+            <div className="mb-1 flex max-h-28 flex-wrap gap-2 overflow-y-auto px-2 pt-1">
               {attachments.map((attachment) => (
                 <div
                   key={attachment.id}
                   className={`group flex max-w-full items-center gap-2 rounded-md border px-2 py-1.5 text-[12px] ${
                     attachment.status === "error"
                       ? "border-[#fecaca] bg-[#fff1f2] text-[#991b1b]"
-                      : "border-[#dfe3e8] bg-white text-[#3f4652]"
+                      : "border-[#dfe3e8] bg-[#fbfcfd] text-[#3f4652]"
                   }`}
                   title={attachment.error || attachment.note || attachment.name}
                 >
@@ -259,98 +279,87 @@ export function Composer({
             value={input}
             onChange={(event) => changeInput(event.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="Ask anything — type / for commands, or attach text, images, PDF, DOCX..."
-            className="min-h-11 max-h-40 w-full resize-none bg-transparent px-3 py-2.5 text-[14px] leading-6 outline-none placeholder:text-[#8a9099]"
+            placeholder="Ask anything — type / for commands"
+            style={{ maxHeight: MAX_TEXTAREA_HEIGHT }}
+            className="block max-h-[200px] min-h-[28px] w-full resize-none overflow-y-auto bg-transparent px-3 py-2 text-[14px] leading-6 outline-none placeholder:text-[#8a9099]"
           />
+        </div>
 
-          <div className="flex items-center justify-between gap-2 px-1.5 pb-1">
-            <div className="flex min-w-0 items-center gap-1.5">
-              <input
-                ref={fileInputRef}
-                type="file"
-                multiple
-                accept={attachmentAccept}
-                className="hidden"
-                onChange={(event) => void addFiles(event.target.files)}
-              />
-              <button
-                type="button"
-                onClick={() => fileInputRef.current?.click()}
-                disabled={loading || processingFiles}
-                title={processingFiles ? "Reading files…" : "Attach files"}
-                aria-label="Attach files"
-                className="grid size-8 shrink-0 place-items-center rounded-md border border-[#e5e8ed] bg-white text-[#4f5661] transition hover:bg-[#fafbfc] active:bg-[#f3f4f7] disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                <PaperclipIcon size={16} />
-              </button>
-              <button
-                type="button"
-                onClick={onOpenSettings}
-                title="Voice input (configure in Settings)"
-                aria-label="Voice input"
-                className="grid size-8 shrink-0 place-items-center rounded-md border border-[#e5e8ed] bg-white text-[#9aa1ab] transition hover:bg-[#fafbfc] hover:text-[#4f5661]"
-              >
-                <MicIcon size={16} />
-              </button>
-              <Select
-                value={permissionMode}
-                onChange={(v) => onSetPermissionMode(v as PermissionMode)}
-                direction="up"
-                options={(Object.keys(PERMISSION_MODE_LABELS) as PermissionMode[]).map((mode) => ({
-                  value: mode,
-                  label: PERMISSION_MODE_LABELS[mode],
-                }))}
-                triggerClassName={`flex h-8 items-center gap-1.5 rounded-md border px-2.5 text-[12px] font-medium outline-none transition ${
-                  permissionMode === "bypass"
-                    ? "border-[#f4b4b4] bg-[#fff0f0] text-[#b42318]"
-                    : permissionMode === "plan"
-                      ? "border-[#b8d4ff] bg-[#eef5ff] text-[#0b57d0]"
-                      : "border-[#d9dfe7] bg-white text-[#4f5661] hover:bg-[#f5f6f8]"
-                }`}
-              />
-            </div>
+        {/* Control strip — separated from the input box; smaller, lighter buttons. */}
+        <div className="mt-1.5 flex items-center justify-between gap-2 px-0.5">
+          <div className="flex min-w-0 items-center gap-0.5">
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              accept={attachmentAccept}
+              className="hidden"
+              onChange={(event) => void addFiles(event.target.files)}
+            />
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={loading || processingFiles}
+              title={processingFiles ? "Reading files…" : "Attach files"}
+              aria-label="Attach files"
+              className={`${ghostIcon} disabled:cursor-not-allowed disabled:opacity-50`}
+            >
+              <PaperclipIcon size={16} />
+            </button>
+            <button
+              type="button"
+              onClick={onOpenSettings}
+              title="Voice input (configure in Settings)"
+              aria-label="Voice input"
+              className={`${ghostIcon} text-[#9aa1ab]`}
+            >
+              <MicIcon size={16} />
+            </button>
 
-            <div className="flex min-w-0 items-center gap-1.5">
-              <Select
-                value={model}
-                onChange={onSetModel}
-                direction="up"
-                align="right"
-                placeholder="Model"
-                options={modelOptions}
-                triggerClassName="flex h-8 max-w-[150px] items-center gap-1 rounded-md border border-[#e5e8ed] bg-white px-2.5 text-[12px] font-medium text-[#4f5661] outline-none transition hover:bg-[#fafbfc]"
-              />
-              <Select
-                value={reasoningEffort}
-                onChange={(v) => onSetEffort(v as ReasoningEffort)}
-                direction="up"
-                align="right"
-                options={REASONING_EFFORTS.map((e) => ({ value: e.value, label: e.label, hint: e.hint }))}
-                triggerClassName="flex h-8 items-center gap-1 rounded-md border border-[#e5e8ed] bg-white px-2.5 text-[12px] font-medium text-[#4f5661] outline-none transition hover:bg-[#fafbfc]"
-              />
-              <button
-                type="button"
-                onClick={onOpenSettings}
-                title="Context budget (max input tokens) — open Settings"
-                className="hidden h-8 items-center gap-1 rounded-md border border-[#e5e8ed] bg-white px-2.5 text-[12px] font-medium text-[#7a8088] transition hover:bg-[#fafbfc] md:flex"
-              >
-                {formatTokens(maxInputTokens)} ctx
-              </button>
-              <button
-                type={loading ? "button" : "submit"}
-                onClick={loading ? onStop : undefined}
-                disabled={!loading && !readyToSend}
-                className="grid h-8 w-8 shrink-0 place-items-center rounded-md bg-[#111827] text-white transition hover:bg-[#2b3442] disabled:bg-[#c7ccd4] disabled:hover:bg-[#c7ccd4]"
-                aria-label={loading ? "停止生成" : "发送"}
-              >
-                {loading ? <StopIcon size={15} /> : <ArrowUpIcon size={19} />}
-              </button>
-            </div>
+            <span className="mx-1 h-4 w-px bg-[#e5e8ed]" aria-hidden />
+
+            <Select
+              value={permissionMode}
+              onChange={(v) => onSetPermissionMode(v as PermissionMode)}
+              direction="up"
+              options={(Object.keys(PERMISSION_MODE_LABELS) as PermissionMode[]).map((mode) => ({
+                value: mode,
+                label: PERMISSION_MODE_LABELS[mode],
+              }))}
+              triggerClassName={permissionTrigger}
+            />
+          </div>
+
+          <div className="flex min-w-0 items-center gap-0.5">
+            <Select
+              value={model}
+              onChange={onSetModel}
+              direction="up"
+              align="right"
+              placeholder="Model"
+              options={modelOptions}
+              triggerClassName={ghostChip}
+            />
+            <Select
+              value={reasoningEffort}
+              onChange={(v) => onSetEffort(v as ReasoningEffort)}
+              direction="up"
+              align="right"
+              options={REASONING_EFFORTS.map((e) => ({ value: e.value, label: e.label, hint: e.hint }))}
+              triggerClassName={ghostChip}
+            />
+            <ContextMeter maxInputTokens={maxInputTokens} onOpenSettings={onOpenSettings} />
+            <button
+              type={loading ? "button" : "submit"}
+              onClick={loading ? onStop : undefined}
+              disabled={!loading && !readyToSend}
+              className="cf-press ml-0.5 grid size-8 shrink-0 place-items-center rounded-full bg-[#111827] text-white hover:scale-105 hover:bg-[#2b3442] disabled:scale-100 disabled:bg-[#c7ccd4] disabled:hover:bg-[#c7ccd4]"
+              aria-label={loading ? "Stop" : "Send"}
+            >
+              {loading ? <StopIcon size={14} /> : <ArrowUpIcon size={18} />}
+            </button>
           </div>
         </div>
-        <p className="mx-auto mt-2 max-w-3xl px-1 text-center text-[11px] text-[#8a9099]">
-          Demiurge 会调用工具操作你的机器，重要操作前会请你确认。
-        </p>
       </form>
     </div>
   );

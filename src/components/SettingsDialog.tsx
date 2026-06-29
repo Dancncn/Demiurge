@@ -79,7 +79,7 @@ const inputCls =
   "h-9 w-full rounded-md border border-[#d9d9d9] bg-white px-3 text-[13px] text-[#202124] outline-none transition focus:border-[#7a7f87] focus:ring-1 focus:ring-[#202124]/10";
 const labelCls = "mb-1.5 block text-[12px] font-medium text-[#5f6368]";
 const secondaryButtonCls =
-  "inline-flex h-8 items-center justify-center rounded-md border border-[#d9d9d9] bg-white px-3 text-[12px] font-medium text-[#333] transition hover:bg-[#f5f5f5] disabled:cursor-not-allowed disabled:opacity-50";
+  "cf-press inline-flex h-8 items-center justify-center rounded-md border border-[#d9d9d9] bg-white px-3 text-[12px] font-medium text-[#333] hover:bg-[#f5f5f5] disabled:cursor-not-allowed disabled:opacity-50";
 
 function formatBytes(n: number) {
   if (!Number.isFinite(n) || n <= 0) return "0 B";
@@ -1188,7 +1188,7 @@ export default function SettingsDialog({
                   key={item.id}
                   type="button"
                   onClick={() => setActiveTab(item.id)}
-                  className={`mb-1 flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left transition ${
+                  className={`cf-press mb-1 flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left ${
                     selected ? "bg-white text-[#111827] shadow-sm" : "text-[#4f5661] hover:bg-[#e4e8ee]"
                   }`}
                 >
@@ -1222,7 +1222,7 @@ export default function SettingsDialog({
               </button>
               <button
                 type="button"
-                className="inline-flex h-8 items-center justify-center rounded-md bg-[#111827] px-4 text-[12px] font-medium text-white transition hover:bg-[#2b3442]"
+                className="cf-press inline-flex h-8 items-center justify-center rounded-md bg-[#111827] px-4 text-[12px] font-medium text-white hover:bg-[#2b3442]"
                 onClick={save}
               >
                 Save
@@ -1261,7 +1261,7 @@ export default function SettingsDialog({
                                 set("base_url", provider.baseUrl);
                                 set("model", provider.model);
                               }}
-                              className={`flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left transition ${
+                              className={`cf-press flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left ${
                                 selected ? "bg-white shadow-sm" : "hover:bg-white/70"
                               }`}
                             >
@@ -1323,7 +1323,7 @@ export default function SettingsDialog({
                                       key={m}
                                       type="button"
                                       onClick={() => set("model", m)}
-                                      className={`rounded-full border px-2.5 py-1 text-[11px] font-medium transition ${
+                                      className={`cf-press rounded-full border px-2.5 py-1 text-[11px] font-medium ${
                                         active
                                           ? "border-[#111827] bg-[#111827] text-white"
                                           : "border-[#dfe3e8] bg-white text-[#4f5661] hover:border-[#c7ccd4] hover:bg-[#f5f6f8]"

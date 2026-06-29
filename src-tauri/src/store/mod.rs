@@ -584,3 +584,147 @@ pub fn derive_title(messages: &[Message]) -> String {
         t
     }
 }
+
+// ---------------- Session stats (dashboard) ----------------
+
+const HEATMAP_DAYS: i64 = 126; // 18 weeks
+
+#[derive(Serialize, Clone)]
+pub struct DayCell {
+    pub date: String,
+    pub count: u32,
+    pub level: u8,
+}
+
+#[derive(Serialize, Clone)]
+pub struct StatsPanel {
+    pub sessions: usize,
+    pub messages: usize,
+    pub est_tokens: u64,
+    pub active_days: usize,
+    pub current_streak: usize,
+    pub longest_streak: usize,
+    pub peak_hour: Option<u32>,
+    pub model: String,
+    pub heatmap_days: usize,
+    pub heatmap: Vec<DayCell>,
+}
+
+fn level_for(count: u32) -> u8 {
+    match count {
+        0 => 0,
+        1 => 1,
+        2 => 2,
+        3 | 4 => 3,
+        _ => 4,
+    }
+}
+
+/// Howard Hinnant civil_from_days: days since 1970-01-01 -> (year, month, day).
+fn civil_from_days(z: i64) -> (i64, u32, u32) {
+    let z = z + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let m = (if mp < 10 { mp + 3 } else { mp - 9 }) as u32;
+    (if m <= 2 { y + 1 } else { y }, m, d)
+}
+
+/// Aggregate dashboard stats from all sessions. `offset` is the client timezone
+/// offset in minutes (JS `Date.getTimezoneOffset()`), used to bucket by local day/hour.
+pub fn compute_stats(store: &SessionStore, offset: i64, model: String) -> StatsPanel {
+    let offset_ms = offset * 60_000;
+    let now_local = now_millis() as i64 - offset_ms;
+    let today = now_local.div_euclid(86_400_000);
+
+    let mut messages = 0usize;
+    let mut est_tokens = 0u64;
+    let mut day_counts: std::collections::HashMap<i64, u32> = std::collections::HashMap::new();
+    let mut hour_counts = [0u32; 24];
+
+    for s in &store.sessions {
+        for m in &s.messages {
+            if m.role == "user" || m.role == "assistant" {
+                messages += 1;
+            }
+            if let Some(c) = &m.content {
+                est_tokens += (c.chars().count() as u64) / 4;
+            }
+            if let Some(tcs) = &m.tool_calls {
+                for tc in tcs {
+                    est_tokens += (tc.function.arguments.chars().count() as u64) / 4;
+                }
+            }
+        }
+        let local = s.updated_at as i64 - offset_ms;
+        let day = local.div_euclid(86_400_000);
+        *day_counts.entry(day).or_insert(0) += 1;
+        let hour = (local.rem_euclid(86_400_000) / 3_600_000) as usize;
+        if hour < 24 {
+            hour_counts[hour] += 1;
+        }
+    }
+
+    let active_days = day_counts.len();
+
+    // current streak: consecutive active days ending exactly at today
+    let mut current_streak = 0usize;
+    let mut d = today;
+    while day_counts.contains_key(&d) {
+        current_streak += 1;
+        d -= 1;
+    }
+
+    // longest streak: longest run of consecutive day indices
+    let mut days: Vec<i64> = day_counts.keys().copied().collect();
+    days.sort_unstable();
+    let mut longest_streak = 0usize;
+    let mut run = 0usize;
+    let mut prev: Option<i64> = None;
+    for &day in &days {
+        run = if prev == Some(day - 1) { run + 1 } else { 1 };
+        if run > longest_streak {
+            longest_streak = run;
+        }
+        prev = Some(day);
+    }
+
+    let peak_hour = if hour_counts.iter().all(|&c| c == 0) {
+        None
+    } else {
+        hour_counts
+            .iter()
+            .enumerate()
+            .max_by_key(|(_, &c)| c)
+            .map(|(h, _)| h as u32)
+    };
+
+    let mut heatmap = Vec::with_capacity(HEATMAP_DAYS as usize);
+    for i in (0..HEATMAP_DAYS).rev() {
+        let day = today - i;
+        let count = day_counts.get(&day).copied().unwrap_or(0);
+        let (y, mo, dd) = civil_from_days(day);
+        heatmap.push(DayCell {
+            date: format!("{y:04}-{mo:02}-{dd:02}"),
+            count,
+            level: level_for(count),
+        });
+    }
+
+    StatsPanel {
+        sessions: store.sessions.len(),
+        messages,
+        est_tokens,
+        active_days,
+        current_streak,
+        longest_streak,
+        peak_hour,
+        model,
+        heatmap_days: HEATMAP_DAYS as usize,
+        heatmap,
+    }
+}
