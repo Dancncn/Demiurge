@@ -9,7 +9,7 @@ use std::sync::atomic::AtomicBool;
 use serde_json::Value;
 
 use crate::agent::conversation::Message;
-use crate::store::{ProviderKind, Settings};
+use crate::store::{ProviderKind, ReasoningEffort, Settings};
 
 /// Normalized token usage returned by a provider.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -101,6 +101,15 @@ pub enum ThinkingCapability {
 
 #[allow(dead_code)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReasoningEffortCapability {
+    Unsupported,
+    OpenAiChatCompletions,
+    AnthropicOutputConfig,
+    GeminiThinkingBudget,
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ParallelToolCallCapability {
     Unsupported,
     OpenAiCompatibleField,
@@ -130,6 +139,7 @@ pub struct ProviderProfile {
     pub supports_streaming: bool,
     pub prompt_cache: PromptCacheCapability,
     pub thinking: ThinkingCapability,
+    pub reasoning_effort: ReasoningEffortCapability,
     pub parallel_tool_calls: ParallelToolCallCapability,
     pub requires_api_key: bool,
     pub max_input_tokens: Option<u32>,
@@ -147,6 +157,7 @@ impl ProviderProfile {
             supports_streaming: true,
             prompt_cache: PromptCacheCapability::Unsupported,
             thinking: ThinkingCapability::Unsupported,
+            reasoning_effort: ReasoningEffortCapability::Unsupported,
             parallel_tool_calls: ParallelToolCallCapability::Unsupported,
             requires_api_key: true,
             max_input_tokens: None,
@@ -159,6 +170,7 @@ impl ProviderProfile {
 
     pub const fn openai() -> Self {
         ProviderProfile {
+            reasoning_effort: ReasoningEffortCapability::OpenAiChatCompletions,
             parallel_tool_calls: ParallelToolCallCapability::OpenAiCompatibleField,
             max_input_tokens: Some(128_000),
             max_output_tokens: Some(16_384),
@@ -180,6 +192,7 @@ impl ProviderProfile {
             supports_streaming: true,
             prompt_cache: PromptCacheCapability::AnthropicCacheControl,
             thinking: ThinkingCapability::AnthropicThinking,
+            reasoning_effort: ReasoningEffortCapability::AnthropicOutputConfig,
             parallel_tool_calls: ParallelToolCallCapability::ProviderManaged,
             requires_api_key: true,
             max_input_tokens: Some(200_000),
@@ -197,6 +210,7 @@ impl ProviderProfile {
             supports_streaming: true,
             prompt_cache: PromptCacheCapability::Unsupported,
             thinking: ThinkingCapability::GeminiThinking,
+            reasoning_effort: ReasoningEffortCapability::GeminiThinkingBudget,
             parallel_tool_calls: ParallelToolCallCapability::ProviderManaged,
             requires_api_key: true,
             max_input_tokens: Some(1_000_000),
@@ -255,6 +269,110 @@ impl ProviderProfile {
         !matches!(self.thinking, ThinkingCapability::Unsupported)
     }
 
+    pub fn supports_reasoning_effort(self) -> bool {
+        !matches!(
+            self.reasoning_effort,
+            ReasoningEffortCapability::Unsupported
+        )
+    }
+
+    pub fn supports_reasoning_effort_for_model(self, model: &str) -> bool {
+        if !self.supports_reasoning_effort() {
+            return false;
+        }
+        if env_always_enable_effort() {
+            return true;
+        }
+        let model = model.to_ascii_lowercase();
+        match self.reasoning_effort {
+            ReasoningEffortCapability::OpenAiChatCompletions => {
+                openai_model_supports_reasoning_effort(&model)
+            }
+            ReasoningEffortCapability::AnthropicOutputConfig => {
+                anthropic_model_supports_reasoning_effort(&model)
+            }
+            ReasoningEffortCapability::GeminiThinkingBudget => {
+                gemini_model_supports_thinking_budget(&model)
+            }
+            ReasoningEffortCapability::Unsupported => false,
+        }
+    }
+
+    pub fn effective_reasoning_effort(self, settings: &Settings) -> Option<ReasoningEffort> {
+        if !self.supports_reasoning_effort_for_model(&settings.model) {
+            return None;
+        }
+        let configured = env_reasoning_effort_override().unwrap_or(settings.reasoning_effort);
+        if configured.is_auto() {
+            return None;
+        }
+        Some(configured)
+    }
+
+    pub fn openai_chat_reasoning_effort(self, settings: &Settings) -> Option<&'static str> {
+        if !matches!(
+            self.reasoning_effort,
+            ReasoningEffortCapability::OpenAiChatCompletions
+        ) {
+            return None;
+        }
+        Some(match self.effective_reasoning_effort(settings)? {
+            ReasoningEffort::Auto => return None,
+            ReasoningEffort::Low => "low",
+            ReasoningEffort::Medium => "medium",
+            ReasoningEffort::High => "high",
+            ReasoningEffort::Xhigh | ReasoningEffort::Max => {
+                if openai_model_supports_xhigh_reasoning_effort(&settings.model) {
+                    "xhigh"
+                } else {
+                    "high"
+                }
+            }
+        })
+    }
+
+    pub fn anthropic_output_config_effort(self, settings: &Settings) -> Option<&'static str> {
+        if !matches!(
+            self.reasoning_effort,
+            ReasoningEffortCapability::AnthropicOutputConfig
+        ) {
+            return None;
+        }
+        Some(match self.effective_reasoning_effort(settings)? {
+            ReasoningEffort::Auto => return None,
+            ReasoningEffort::Low => "low",
+            ReasoningEffort::Medium => "medium",
+            ReasoningEffort::High => "high",
+            ReasoningEffort::Xhigh => "xhigh",
+            ReasoningEffort::Max => "max",
+        })
+    }
+
+    pub fn gemini_thinking_budget_tokens(self, settings: &Settings) -> Option<usize> {
+        if !matches!(
+            self.reasoning_effort,
+            ReasoningEffortCapability::GeminiThinkingBudget
+        ) {
+            return None;
+        }
+        let effort = self.effective_reasoning_effort(settings)?;
+        let max_output = self.effective_reserved_output_tokens(settings);
+        if max_output <= 2_048 {
+            return None;
+        }
+        let response_reserve = 1_024;
+        let max_budget = max_output.saturating_sub(response_reserve);
+        let desired = match effort {
+            ReasoningEffort::Auto => return None,
+            ReasoningEffort::Low => 1_024,
+            ReasoningEffort::Medium => 4_096,
+            ReasoningEffort::High => 8_192,
+            ReasoningEffort::Xhigh => 16_384,
+            ReasoningEffort::Max => 32_768,
+        };
+        Some(desired.min(max_budget).max(1_024))
+    }
+
     pub fn effective_max_input_tokens(self, settings: &Settings) -> usize {
         self.max_input_tokens
             .map(|limit| settings.max_input_tokens.min(limit as usize))
@@ -300,6 +418,89 @@ impl ProviderProfile {
             }
         }
     }
+}
+
+fn env_reasoning_effort_override() -> Option<ReasoningEffort> {
+    #[cfg(test)]
+    {
+        return None;
+    }
+    #[cfg(not(test))]
+    {
+        ["DEMIURGE_EFFORT_LEVEL", "CLAUDE_CODE_EFFORT_LEVEL"]
+            .into_iter()
+            .find_map(|name| std::env::var(name).ok())
+            .and_then(|value| ReasoningEffort::parse(&value))
+    }
+}
+
+fn env_always_enable_effort() -> bool {
+    #[cfg(test)]
+    {
+        return false;
+    }
+    #[cfg(not(test))]
+    {
+        [
+            "DEMIURGE_ALWAYS_ENABLE_EFFORT",
+            "CLAUDE_CODE_ALWAYS_ENABLE_EFFORT",
+        ]
+        .into_iter()
+        .find_map(|name| std::env::var(name).ok())
+        .is_some_and(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+    }
+}
+
+fn openai_model_supports_reasoning_effort(model: &str) -> bool {
+    let model = model.trim_start_matches("openai/");
+    model.starts_with("o1")
+        || model.starts_with("o3")
+        || model.starts_with("o4")
+        || model.starts_with("gpt-5")
+        || model.contains("codex")
+}
+
+fn openai_model_supports_xhigh_reasoning_effort(model: &str) -> bool {
+    let model = model
+        .trim()
+        .to_ascii_lowercase()
+        .trim_start_matches("openai/")
+        .to_string();
+    if model.starts_with("gpt-5-pro") {
+        return false;
+    }
+    if model.contains("codex") {
+        return true;
+    }
+    openai_gpt5_minor_version(&model).is_some_and(|minor| minor >= 2)
+}
+
+fn openai_gpt5_minor_version(model: &str) -> Option<u32> {
+    let rest = model.strip_prefix("gpt-5.")?;
+    let digits = rest
+        .chars()
+        .take_while(|ch| ch.is_ascii_digit())
+        .collect::<String>();
+    digits.parse().ok()
+}
+
+fn anthropic_model_supports_reasoning_effort(model: &str) -> bool {
+    model.contains("opus-4-7")
+        || model.contains("opus-4.7")
+        || model.contains("opus-4-6")
+        || model.contains("opus-4.6")
+        || model.contains("sonnet-4-6")
+        || model.contains("sonnet-4.6")
+        || model.contains("deepseek-v4-pro")
+}
+
+fn gemini_model_supports_thinking_budget(model: &str) -> bool {
+    model.contains("gemini-2.5") || model.contains("gemini-3") || model.contains("thinking")
 }
 
 pub(crate) fn normalize_finish_reason(
@@ -405,7 +606,7 @@ pub(crate) fn non_empty_tools(tools: &Value) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::store::{ProviderKind, Settings};
+    use crate::store::{ProviderKind, ReasoningEffort, Settings};
 
     #[test]
     fn provider_profile_matches_kind() {
@@ -432,6 +633,10 @@ mod tests {
             ParallelToolCallCapability::OpenAiCompatibleField
         );
         assert_eq!(
+            ProviderProfile::for_kind(ProviderKind::OpenAi).reasoning_effort,
+            ReasoningEffortCapability::OpenAiChatCompletions
+        );
+        assert_eq!(
             ProviderProfile::for_kind(ProviderKind::Anthropic).tool_schema_dialect,
             ToolSchemaDialect::Anthropic
         );
@@ -444,6 +649,10 @@ mod tests {
             StructuredOutputCapability::AnthropicJsonSchema
         );
         assert_eq!(
+            ProviderProfile::for_kind(ProviderKind::Anthropic).reasoning_effort,
+            ReasoningEffortCapability::AnthropicOutputConfig
+        );
+        assert_eq!(
             ProviderProfile::for_kind(ProviderKind::Gemini).tool_schema_dialect,
             ToolSchemaDialect::Gemini
         );
@@ -454,6 +663,14 @@ mod tests {
         assert_eq!(
             ProviderProfile::for_kind(ProviderKind::Gemini).structured_output,
             StructuredOutputCapability::GeminiSchema
+        );
+        assert_eq!(
+            ProviderProfile::for_kind(ProviderKind::Gemini).reasoning_effort,
+            ReasoningEffortCapability::GeminiThinkingBudget
+        );
+        assert_eq!(
+            ProviderProfile::for_kind(ProviderKind::DeepSeek).reasoning_effort,
+            ReasoningEffortCapability::Unsupported
         );
     }
 
@@ -498,6 +715,97 @@ mod tests {
         assert_eq!(budget.max_input_tokens, 250_000);
         assert_eq!(budget.reserved_output_tokens, 32_000);
         assert!(!profile.supports_parallel_tool_call_field());
+    }
+
+    #[test]
+    fn effort_resolution_is_gated_by_provider_profile() {
+        let settings = Settings {
+            provider: ProviderKind::DeepSeek,
+            reasoning_effort: ReasoningEffort::High,
+            ..Settings::default()
+        };
+        assert_eq!(
+            ProviderProfile::for_kind(ProviderKind::DeepSeek).effective_reasoning_effort(&settings),
+            None
+        );
+    }
+
+    #[test]
+    fn effort_resolution_is_gated_by_model_support() {
+        let unsupported = Settings {
+            provider: ProviderKind::OpenAi,
+            model: "gpt-4o".to_string(),
+            reasoning_effort: ReasoningEffort::High,
+            ..Settings::default()
+        };
+        let supported = Settings {
+            provider: ProviderKind::OpenAi,
+            model: "o3".to_string(),
+            reasoning_effort: ReasoningEffort::High,
+            ..Settings::default()
+        };
+        let profile = ProviderProfile::for_kind(ProviderKind::OpenAi);
+
+        assert_eq!(profile.effective_reasoning_effort(&unsupported), None);
+        assert_eq!(
+            profile.effective_reasoning_effort(&supported),
+            Some(ReasoningEffort::High)
+        );
+    }
+
+    #[test]
+    fn openai_effort_maps_xhigh_and_max_by_model_capability() {
+        let mut settings = Settings {
+            provider: ProviderKind::OpenAi,
+            model: "o3".to_string(),
+            reasoning_effort: ReasoningEffort::Xhigh,
+            ..Settings::default()
+        };
+        let profile = ProviderProfile::for_kind(ProviderKind::OpenAi);
+        assert_eq!(
+            profile.openai_chat_reasoning_effort(&settings),
+            Some("high")
+        );
+        settings.reasoning_effort = ReasoningEffort::Max;
+        assert_eq!(
+            profile.openai_chat_reasoning_effort(&settings),
+            Some("high")
+        );
+
+        settings.model = "gpt-5.2".to_string();
+        assert_eq!(
+            profile.openai_chat_reasoning_effort(&settings),
+            Some("xhigh")
+        );
+        settings.reasoning_effort = ReasoningEffort::Xhigh;
+        assert_eq!(
+            profile.openai_chat_reasoning_effort(&settings),
+            Some("xhigh")
+        );
+    }
+
+    #[test]
+    fn openai_xhigh_support_respects_model_exceptions() {
+        assert!(openai_model_supports_xhigh_reasoning_effort("gpt-5.2"));
+        assert!(openai_model_supports_xhigh_reasoning_effort(
+            "gpt-5.1-codex-max"
+        ));
+        assert!(!openai_model_supports_xhigh_reasoning_effort("gpt-5.1"));
+        assert!(!openai_model_supports_xhigh_reasoning_effort("gpt-5-pro"));
+    }
+
+    #[test]
+    fn auto_effort_sends_no_provider_parameter() {
+        let settings = Settings {
+            provider: ProviderKind::OpenAi,
+            model: "o3".to_string(),
+            reasoning_effort: ReasoningEffort::Auto,
+            ..Settings::default()
+        };
+        assert_eq!(
+            ProviderProfile::for_kind(ProviderKind::OpenAi).effective_reasoning_effort(&settings),
+            None
+        );
     }
 
     #[test]

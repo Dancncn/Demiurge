@@ -27,7 +27,7 @@ use tokio::sync::oneshot;
 
 use agent::conversation::Message;
 use permission::{PermissionResponse, PermissionRule};
-use store::{PermissionMode, Session, SessionMeta, SessionStore, Settings};
+use store::{PermissionMode, ReasoningEffort, Session, SessionMeta, SessionStore, Settings};
 
 const DEFAULT_WINDOW_WIDTH: u32 = 1811;
 const DEFAULT_WINDOW_HEIGHT: u32 = 1213;
@@ -210,6 +210,82 @@ fn session_list(store: &SessionStore) -> SessionList {
     }
 }
 
+fn effort_usage() -> String {
+    let levels = ReasoningEffort::LEVELS
+        .iter()
+        .map(|level| level.as_str())
+        .collect::<Vec<_>>()
+        .join("|");
+    format!(
+        "Usage: /effort [{levels}|auto]\n\n\
+         Current levels:\n\
+         - low: {}\n\
+         - medium: {}\n\
+         - high: {}\n\
+         - xhigh: {}\n\
+         - max: {}\n\
+         - auto: {}",
+        ReasoningEffort::Low.description(),
+        ReasoningEffort::Medium.description(),
+        ReasoningEffort::High.description(),
+        ReasoningEffort::Xhigh.description(),
+        ReasoningEffort::Max.description(),
+        ReasoningEffort::Auto.description()
+    )
+}
+
+fn effort_status(settings: &Settings) -> String {
+    let profile = llm::ProviderProfile::for_kind(settings.provider);
+    if !profile.supports_reasoning_effort_for_model(&settings.model) {
+        return format!(
+            "Configured effort: `{}`.\nProvider/model `{}` does not support Demiurge effort parameters yet, so no request field will be sent.",
+            settings.reasoning_effort.as_str(),
+            settings.model
+        );
+    }
+    let applied = profile
+        .effective_reasoning_effort(settings)
+        .map(|effort| format!("`{}`", effort.as_str()))
+        .unwrap_or_else(|| "provider default".to_string());
+    format!(
+        "Configured effort: `{}`.\nApplied on next supported request: {applied}.",
+        settings.reasoning_effort.as_str()
+    )
+}
+
+fn emit_settings_updated(app: &AppHandle, settings: &Settings) {
+    let _ = app.emit("settings-updated", settings.clone());
+}
+
+fn handle_effort_slash(app: &AppHandle, state: &AppState, text: &str) -> Result<String, String> {
+    let arg = text.trim().strip_prefix("/effort").unwrap_or("").trim();
+    if arg.is_empty() {
+        let settings = state.settings.lock().unwrap().clone();
+        return Ok(format!(
+            "{}\n\n{}",
+            effort_status(&settings),
+            effort_usage()
+        ));
+    }
+    let Some(effort) = ReasoningEffort::parse(arg) else {
+        return Ok(effort_usage());
+    };
+    let next = {
+        let mut settings = state.settings.lock().unwrap();
+        settings.reasoning_effort = effort;
+        settings.clone()
+    };
+    let dir = state.data_dir.lock().unwrap().clone();
+    store::save_settings(&dir, &next)?;
+    emit_settings_updated(app, &next);
+    Ok(format!(
+        "Set effort to `{}`: {}\n\n{}",
+        effort.as_str(),
+        effort.description(),
+        effort_status(&next)
+    ))
+}
+
 // ---------------- Tauri 命令 ----------------
 
 /// 发送一条用户消息，跑完整轮 Agent 循环；过程通过事件流推给前端。
@@ -273,11 +349,16 @@ async fn send(app: AppHandle, state: State<'_, AppState>, text: String) -> Resul
         let body = agent::skills::slash_response(st, trimmed)?;
         events.assistant_done(body);
         Ok(())
+    } else if trimmed == "/effort" || trimmed.starts_with("/effort ") {
+        let body = handle_effort_slash(&app, st, trimmed)?;
+        events.assistant_done(body);
+        Ok(())
     } else if trimmed == "/workflows" {
         should_drive_goal = true;
         let runs = agent::workflow_runtime::panel_state(st).runs;
         let body = if runs.is_empty() {
-            "暂无 workflow run。使用 /ultracode <任务> 或 Workflows 面板会自动创建 run。".to_string()
+            "暂无 workflow run。使用 /ultracode <任务> 或 Workflows 面板会自动创建 run。"
+                .to_string()
         } else {
             let mut out = String::from("Workflow runs:\n");
             for run in runs.iter().take(20) {
@@ -457,7 +538,11 @@ fn get_settings(state: State<'_, AppState>) -> Settings {
 }
 
 #[tauri::command]
-fn save_settings(state: State<'_, AppState>, settings: Settings) -> Result<(), String> {
+fn save_settings(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    settings: Settings,
+) -> Result<(), String> {
     credentials::save_api_key(&settings.api_key)?;
     credentials::save_web_search_api_keys(&settings)?;
     credentials::save_webdav_password(&settings.webdav_password)?;
@@ -465,7 +550,9 @@ fn save_settings(state: State<'_, AppState>, settings: Settings) -> Result<(), S
     credentials::save_mcp_env_secrets(&settings)?;
     *state.settings.lock().unwrap() = settings.clone();
     let dir = state.data_dir.lock().unwrap().clone();
-    store::save_settings(&dir, &settings)
+    store::save_settings(&dir, &settings)?;
+    emit_settings_updated(&app, &settings);
+    Ok(())
 }
 
 #[tauri::command]
@@ -867,7 +954,16 @@ fn memory_update_entry(
     text: String,
 ) -> Result<agent::memory::MemoryPanelState, String> {
     let (data, sandbox, packs, pack_id, session_id) = memory_context(state.inner());
-    agent::memory::update_entry(&data, &sandbox, &packs, &pack_id, &session_id, &id, &kind, &text)
+    agent::memory::update_entry(
+        &data,
+        &sandbox,
+        &packs,
+        &pack_id,
+        &session_id,
+        &id,
+        &kind,
+        &text,
+    )
 }
 
 #[tauri::command]
@@ -922,8 +1018,12 @@ fn context_panel_state(state: State<'_, AppState>) -> ContextPanelState {
     let persona_text = pack::load_pack(&packs_dir, &settings.current_pack)
         .map(|p| p.persona_text)
         .unwrap_or_default();
-    let prompt_build =
-        agent::prompt::build_with_report(state.inner(), &settings, &persona_text, summary.as_deref());
+    let prompt_build = agent::prompt::build_with_report(
+        state.inner(),
+        &settings,
+        &persona_text,
+        summary.as_deref(),
+    );
     let profile = llm::ProviderProfile::for_kind(settings.provider);
     let tools_schema = if profile.supports_tools {
         tools::main_schemas_json_for(profile.tool_schema_dialect)
@@ -947,7 +1047,8 @@ fn context_panel_state(state: State<'_, AppState>) -> ContextPanelState {
     let input_budget_remaining_tokens = budget
         .max_input_tokens
         .saturating_sub(input_budget_used_tokens);
-    let projected_total_tokens = input_budget_used_tokens.saturating_add(budget.reserved_output_tokens);
+    let projected_total_tokens =
+        input_budget_used_tokens.saturating_add(budget.reserved_output_tokens);
     let history_remaining_tokens = budget
         .history_budget_tokens
         .saturating_sub(budget.history_tokens);
@@ -995,7 +1096,9 @@ fn context_budget_items(budget: &agent::budget::ContextBudget) -> Vec<ContextBud
             label: "System prompt".to_string(),
             tokens: budget.system_tokens,
             limit_tokens: Some(budget.max_input_tokens),
-            detail: "Packed persona, instructions, summary, memories, environment and safety sections.".to_string(),
+            detail:
+                "Packed persona, instructions, summary, memories, environment and safety sections."
+                    .to_string(),
         },
         ContextBudgetItem {
             id: "tools".to_string(),
@@ -1061,10 +1164,11 @@ fn context_memory_sources(
     pack_id: &str,
     session_id: &str,
 ) -> Vec<ContextMemorySource> {
-    let mut sources = agent::memory::scoped_memory_paths(data_dir, sandbox_dir, packs_dir, pack_id, session_id)
-        .into_iter()
-        .map(|(id, label, path)| context_memory_source(&id, &format!("{label} memory"), &path))
-        .collect::<Vec<_>>();
+    let mut sources =
+        agent::memory::scoped_memory_paths(data_dir, sandbox_dir, packs_dir, pack_id, session_id)
+            .into_iter()
+            .map(|(id, label, path)| context_memory_source(&id, &format!("{label} memory"), &path))
+            .collect::<Vec<_>>();
     sources.push(context_memory_source(
         "project_legacy",
         "Project legacy memory",
@@ -1136,7 +1240,11 @@ mod context_panel_tests {
         fs::create_dir_all(sandbox.join(".demiurge")).unwrap();
         fs::create_dir_all(sandbox.join(".demiurge").join("session-memory")).unwrap();
         fs::create_dir_all(&pack).unwrap();
-        fs::write(data.join("memory").join("user.md"), "- [user] user preference\n").unwrap();
+        fs::write(
+            data.join("memory").join("user.md"),
+            "- [user] user preference\n",
+        )
+        .unwrap();
         fs::write(sandbox.join("memory.md"), "- [project] remember this\n").unwrap();
         fs::write(
             sandbox.join(".demiurge").join("memory.md"),
@@ -1159,12 +1267,18 @@ mod context_panel_tests {
         assert!(user.exists);
         assert_eq!(user.entries, 1);
 
-        let project = sources.iter().find(|source| source.id == "project").unwrap();
+        let project = sources
+            .iter()
+            .find(|source| source.id == "project")
+            .unwrap();
         assert!(project.exists);
         assert_eq!(project.entries, 1);
         assert!(project.tokens > 0);
 
-        let session = sources.iter().find(|source| source.id == "session").unwrap();
+        let session = sources
+            .iter()
+            .find(|source| source.id == "session")
+            .unwrap();
         assert!(session.exists);
         assert_eq!(session.entries, 1);
 
