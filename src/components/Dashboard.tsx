@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import * as api from "../lib/api";
 import type { DayCell, StatsPanel } from "../lib/types";
 
@@ -45,9 +45,12 @@ function mockStats(): StatsPanel {
   };
 }
 
-function Metric({ label, value }: { label: string; value: string }) {
+function Metric({ label, value, index }: { label: string; value: string; index: number }) {
   return (
-    <div className="rounded-lg border border-[#eceff3] bg-[#fbfcfd] px-3 py-2">
+    <div
+      className="cf-rise rounded-lg border border-[#eceff3] bg-[#fbfcfd] px-3 py-2"
+      style={{ "--i": index } as CSSProperties}
+    >
       <div className="text-[11px] text-[#8a9099]">{label}</div>
       <div className="mt-0.5 truncate text-[15px] font-semibold tabular-nums text-[#202124]" title={value}>
         {value}
@@ -135,8 +138,8 @@ export function Dashboard({
             <span className="text-[11px] text-[#9aa1ab]">Last {Math.round(stats.heatmap_days / 7)} weeks</span>
           </div>
           <div className="grid grid-cols-2 gap-2 p-3 sm:grid-cols-4">
-            {metrics.map((m) => (
-              <Metric key={m.label} label={m.label} value={m.value} />
+            {metrics.map((m, i) => (
+              <Metric key={m.label} index={i} label={m.label} value={m.value} />
             ))}
           </div>
           <div className="overflow-x-auto px-3 pb-3 pt-1">
