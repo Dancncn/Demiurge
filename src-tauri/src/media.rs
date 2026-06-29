@@ -54,7 +54,7 @@ pub struct SpeechSynthesisResult {
     pub usage: Value,
 }
 
-fn dashscope_base_url(settings: &Settings) -> String {
+pub(crate) fn dashscope_base_url(settings: &Settings) -> String {
     let raw = settings.media_base_url.trim();
     let base = if raw.is_empty() {
         DEFAULT_DASHSCOPE_BASE
@@ -67,7 +67,7 @@ fn dashscope_base_url(settings: &Settings) -> String {
         .to_string()
 }
 
-fn dashscope_api_key(settings: &Settings) -> Option<String> {
+pub(crate) fn dashscope_api_key(settings: &Settings) -> Option<String> {
     let media_key = settings.media_api_key.trim();
     if !media_key.is_empty() {
         return Some(media_key.to_string());

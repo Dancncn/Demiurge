@@ -44,6 +44,14 @@ fn default_reserved_output_tokens() -> usize {
     DEFAULT_RESERVED_OUTPUT_TOKENS
 }
 
+fn default_context_budget_auto() -> bool {
+    true
+}
+
+fn default_language() -> String {
+    "zh".to_string()
+}
+
 fn default_auto_memory_enabled() -> bool {
     DEFAULT_AUTO_MEMORY_ENABLED
 }
@@ -128,6 +136,22 @@ pub enum ProviderKind {
     Glm,
     #[serde(rename = "minimax")]
     MiniMax,
+    #[serde(rename = "xai")]
+    Xai,
+    #[serde(rename = "groq")]
+    Groq,
+    #[serde(rename = "mistral")]
+    Mistral,
+    #[serde(rename = "moonshot")]
+    Moonshot,
+    #[serde(rename = "perplexity")]
+    Perplexity,
+    #[serde(rename = "doubao")]
+    Doubao,
+    #[serde(rename = "hunyuan")]
+    Hunyuan,
+    #[serde(rename = "stepfun")]
+    StepFun,
     #[serde(rename = "custom")]
     Custom,
 }
@@ -213,6 +237,12 @@ pub struct Settings {
     pub max_input_tokens: usize,
     #[serde(default = "default_reserved_output_tokens")]
     pub reserved_output_tokens: usize,
+    /// 当为 true 时，输入预算自动跟随所选模型的上下文窗口，忽略手填的 max_input_tokens。
+    #[serde(default = "default_context_budget_auto")]
+    pub context_budget_auto: bool,
+    /// 界面语言：zh（默认）/ en。
+    #[serde(default = "default_language")]
+    pub language: String,
     #[serde(default = "default_reasoning_effort")]
     pub reasoning_effort: ReasoningEffort,
     #[serde(default = "default_auto_memory_enabled")]
@@ -278,6 +308,8 @@ impl Default for Settings {
             max_context_chars: DEFAULT_MAX_CONTEXT_CHARS,
             max_input_tokens: DEFAULT_MAX_INPUT_TOKENS,
             reserved_output_tokens: DEFAULT_RESERVED_OUTPUT_TOKENS,
+            context_budget_auto: true,
+            language: default_language(),
             reasoning_effort: default_reasoning_effort(),
             auto_memory_enabled: DEFAULT_AUTO_MEMORY_ENABLED,
             voice_enabled: DEFAULT_VOICE_ENABLED,

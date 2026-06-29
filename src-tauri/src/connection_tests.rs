@@ -517,6 +517,14 @@ fn provider_label(provider: ProviderKind) -> &'static str {
         ProviderKind::Gemini => "Gemini",
         ProviderKind::Glm => "GLM",
         ProviderKind::MiniMax => "MiniMax",
+        ProviderKind::Xai => "xAI Grok",
+        ProviderKind::Groq => "Groq",
+        ProviderKind::Mistral => "Mistral AI",
+        ProviderKind::Moonshot => "Moonshot / Kimi",
+        ProviderKind::Perplexity => "Perplexity",
+        ProviderKind::Doubao => "Doubao (Volcengine Ark)",
+        ProviderKind::Hunyuan => "Tencent Hunyuan",
+        ProviderKind::StepFun => "StepFun",
         ProviderKind::Custom => "Custom Provider",
     }
 }

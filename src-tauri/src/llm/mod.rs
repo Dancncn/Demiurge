@@ -172,8 +172,9 @@ impl ProviderProfile {
         ProviderProfile {
             reasoning_effort: ReasoningEffortCapability::OpenAiChatCompletions,
             parallel_tool_calls: ParallelToolCallCapability::OpenAiCompatibleField,
-            max_input_tokens: Some(128_000),
-            max_output_tokens: Some(16_384),
+            // GPT-5 系列输入窗口 ~272K（总 400K，输出 ~128K）。
+            max_input_tokens: Some(272_000),
+            max_output_tokens: Some(128_000),
             ..ProviderProfile::openai_compatible()
         }
     }
@@ -229,6 +230,14 @@ impl ProviderProfile {
             | ProviderKind::OpenRouter
             | ProviderKind::Glm
             | ProviderKind::MiniMax
+            | ProviderKind::Xai
+            | ProviderKind::Groq
+            | ProviderKind::Mistral
+            | ProviderKind::Moonshot
+            | ProviderKind::Perplexity
+            | ProviderKind::Doubao
+            | ProviderKind::Hunyuan
+            | ProviderKind::StepFun
             | ProviderKind::Custom
             | ProviderKind::OpenAiCompatible => ProviderProfile::openai_compatible(),
             ProviderKind::Local => ProviderProfile::local_openai_compatible(),

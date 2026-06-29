@@ -106,12 +106,10 @@ type Props = {
   items: DisplayItem[];
   thinking: boolean;
   greeting: string;
-  suggestions: string[];
-  onSuggestionClick: (text: string) => void;
   onRetry: (text: string) => void;
 };
 
-export function MessageList({ items, thinking, greeting, suggestions, onSuggestionClick, onRetry }: Props) {
+export function MessageList({ items, thinking, greeting, onRetry }: Props) {
   const bottomRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
@@ -122,7 +120,7 @@ export function MessageList({ items, thinking, greeting, suggestions, onSuggesti
       <div className="mx-auto flex w-full max-w-3xl flex-col px-4 pb-40 pt-5">
         {items.length === 0 && !thinking ? (
           <div className="cf-message-in">
-            <Dashboard greeting={greeting} suggestions={suggestions} onSuggestionClick={onSuggestionClick} />
+            <Dashboard greeting={greeting} />
           </div>
         ) : (
           <div className="space-y-5">

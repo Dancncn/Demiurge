@@ -76,12 +76,15 @@ Demiurge 当前已经从 MVP 进入 Agent 能力打磨阶段。下面把现有 T
 - [x] **Skills 支持**：实现 Markdown skills、slash command、pack-scoped/global skill directories、自动推荐、`SKILL.md` context injection、declared tool needs、required_permissions 和 references。
 - [x] **记忆分层与手动维护**：把 memory 分为 user/project/session/pack scopes；先做 read-only loading 和手动编辑，再考虑自动总结/抽取增强。
 - [x] **Provider / adapter 扩展**：在能力画像基础上继续规范 Anthropic、OpenAI-compatible、Gemini、本地模型适配器、schema dialect adaptation 与 streaming normalization。
-- [ ] **应用体验补齐**：增加 i18n 中英文切换；拆分 MiSans、KaTeX 和前端 chunks 以瘦身安装包。
+- [x] **i18n 中英文切换**：内置中英文词典与 `LanguageProvider`，设置页「通用」可切换语言，默认简体中文（持久化到 settings + localStorage）。
+- [x] **MiSans 子集化瘦身**：把 MiSans 从 ~8MB 子集到 ~1.9MB（GB2312 一级常用字 + 仓库实际用字，标准字重 400/500/600/700，罕用字回退系统字体）；新增 JetBrains Mono 等宽。
+- [ ] **打包瘦身续做**：进一步拆分 KaTeX / mermaid / pdf 等前端大 chunk（mermaid.core ~634KB、cynefin ~690KB、index ~1MB），按需动态 import。
+- [x] **模型供应商扩展**：在百炼/DeepSeek/OpenAI/OpenRouter/Anthropic/Gemini/GLM/MiniMax 基础上新增 xAI Grok、Groq、Mistral、Moonshot(Kimi)、Perplexity、火山方舟(豆包)、腾讯混元、阶跃星辰；模型清单以 OpenRouter 实测目录为准（含按模型上下文窗口自动预算）。
 
 ## Optional / 方向探索
 
 - [ ] **TTS adapter**：优先接外部 HTTP 服务，例如 GPT-SoVITS、CosyVoice。
-- [ ] **ASR adapter**：支持热键或按钮触发的语音输入。
+- [x] **ASR adapter**：Composer 录音按钮 + 录音设备选择菜单；后端 `voice_transcribe` 接收音频字节，按 `voice_stt_backend` 走 DashScope ASR(`qwen3-asr-flash`) 或 OpenAI 兼容 Whisper(`/audio/transcriptions` multipart)。后续可加热键触发与流式。
 - [ ] **流式语音合成**：复用流式文本，按句切分发送给 TTS。
 - [ ] **桌面宠物壳**：透明置顶窗口、Live2D、点击穿透、主动提醒、可选屏幕感知。
 - [ ] **运行时 scheduled tasks**：作为中期能力探索，等 Session Engine、权限和 durable workflow 稳定后再接入。

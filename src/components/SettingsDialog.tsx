@@ -26,7 +26,8 @@ import type {
 } from "../lib/types";
 import { CheckIcon, CloseIcon, DownloadIcon } from "./Icons";
 import { Select } from "./Select";
-import { PROVIDER_OPTIONS, PROVIDER_ICON_SET } from "../lib/providers";
+import { PROVIDER_OPTIONS, PROVIDER_ICON_SET, modelContextWindow, autoContextBudget } from "../lib/providers";
+import { useI18n, type TFunction } from "../lib/i18n";
 
 interface Props {
   open: boolean;
@@ -39,40 +40,40 @@ interface Props {
   onAgentPanelChange: (state: AgentPanelState) => void;
 }
 
-type SettingsTab = "provider" | "media" | "web" | "files" | "context" | "tools" | "voice" | "advanced";
+type SettingsTab = "general" | "provider" | "media" | "web" | "files" | "context" | "tools" | "voice" | "advanced";
 
 
-const webSearchProviders: { value: WebSearchProvider; label: string; help: string }[] = [
-  { value: "auto", label: "Auto", help: "Try Bing first, then fall back to DuckDuckGo." },
-  { value: "bing", label: "Bing", help: "Public Bing result page. No API key required." },
-  { value: "duckduckgo", label: "DuckDuckGo", help: "DuckDuckGo Instant Answer API. No API key required." },
-  { value: "tavily", label: "Tavily", help: "Requires a Tavily API key." },
-  { value: "brave", label: "Brave", help: "Requires a Brave Search API key." },
-  { value: "exa", label: "Exa", help: "Requires an Exa API key." },
+const webSearchProviders: { value: WebSearchProvider; label: string; helpKey: string }[] = [
+  { value: "auto", label: "Auto", helpKey: "settings.web.help.auto" },
+  { value: "bing", label: "Bing", helpKey: "settings.web.help.bing" },
+  { value: "duckduckgo", label: "DuckDuckGo", helpKey: "settings.web.help.duckduckgo" },
+  { value: "tavily", label: "Tavily", helpKey: "settings.web.help.tavily" },
+  { value: "brave", label: "Brave", helpKey: "settings.web.help.brave" },
+  { value: "exa", label: "Exa", helpKey: "settings.web.help.exa" },
 ];
 
-const ocrSources: { value: OcrModelSource; label: string; note: string; url: string }[] = [
+const ocrSources: { value: OcrModelSource; label: string; noteKey: string; url: string }[] = [
   {
     value: "modelscope",
     label: "ModelScope",
-    note: "Recommended for mainland China. Uses the ModelScope mirror for PP-OCRv5 mobile files.",
+    noteKey: "settings.ocr.note.modelscope",
     url: "https://modelscope.cn/models/greatv/oar-ocr",
   },
   {
     value: "huggingface",
     label: "Hugging Face",
-    note: "Use this when Hugging Face is reachable from the current network.",
+    noteKey: "settings.ocr.note.huggingface",
     url: "https://huggingface.co/monkt/paddleocr-onnx",
   },
 ];
 
-const reasoningEfforts: { value: ReasoningEffort; label: string; help: string }[] = [
-  { value: "auto", label: "Auto", help: "Provider default" },
-  { value: "low", label: "Low", help: "Fastest" },
-  { value: "medium", label: "Medium", help: "Balanced" },
-  { value: "high", label: "High", help: "Deep" },
-  { value: "xhigh", label: "XHigh", help: "Extended" },
-  { value: "max", label: "Max", help: "Maximum" },
+const reasoningEfforts: { value: ReasoningEffort; label: string; helpKey: string }[] = [
+  { value: "auto", label: "Auto", helpKey: "settings.effort.auto" },
+  { value: "low", label: "Low", helpKey: "settings.effort.low" },
+  { value: "medium", label: "Medium", helpKey: "settings.effort.medium" },
+  { value: "high", label: "High", helpKey: "settings.effort.high" },
+  { value: "xhigh", label: "XHigh", helpKey: "settings.effort.xhigh" },
+  { value: "max", label: "Max", helpKey: "settings.effort.max" },
 ];
 
 const inputCls =
@@ -142,24 +143,24 @@ function normalizeMediaProvider(value: string) {
   return value.trim() || "dashscope";
 }
 
-function permissionEffectLabel(effect: string) {
-  if (effect === "allow") return "Allow";
-  if (effect === "deny") return "Deny";
-  return "Ask";
+function permissionEffectLabel(effect: string, t: TFunction) {
+  if (effect === "allow") return t("settings.perm.effect.allow");
+  if (effect === "deny") return t("settings.perm.effect.deny");
+  return t("settings.perm.effect.ask");
 }
 
-function permissionScopeLabel(scope: string) {
-  if (scope === "user") return "User";
-  if (scope === "session") return "Session";
-  if (scope === "project") return "Project";
-  return "Once";
+function permissionScopeLabel(scope: string, t: TFunction) {
+  if (scope === "user") return t("settings.perm.scope.user");
+  if (scope === "session") return t("settings.perm.scope.session");
+  if (scope === "project") return t("settings.perm.scope.project");
+  return t("settings.perm.scope.once");
 }
 
-function permissionRiskLabel(risk: string) {
-  if (risk === "read_only") return "Read only";
-  if (risk === "mutating") return "Writes";
-  if (risk === "external") return "Network";
-  if (risk === "privileged") return "System";
+function permissionRiskLabel(risk: string, t: TFunction) {
+  if (risk === "read_only") return t("settings.perm.risk.readOnly");
+  if (risk === "mutating") return t("settings.perm.risk.mutating");
+  if (risk === "external") return t("settings.perm.risk.external");
+  if (risk === "privileged") return t("settings.perm.risk.privileged");
   return risk;
 }
 
@@ -233,12 +234,12 @@ function formatEnvLines(server: McpServerConfig) {
   return server.env.map((env) => `${env.key}=${env.value}`).join("\n");
 }
 
-function mcpStatusLabel(status?: string) {
-  if (status === "connected") return "Connected";
-  if (status === "failed") return "Failed";
-  if (status === "pending") return "Pending";
-  if (status === "disabled") return "Disabled";
-  return "Not started";
+function mcpStatusLabel(status: string | undefined, t: TFunction) {
+  if (status === "connected") return t("settings.mcp.status.connected");
+  if (status === "failed") return t("settings.mcp.status.failed");
+  if (status === "pending") return t("settings.mcp.status.pending");
+  if (status === "disabled") return t("settings.mcp.status.disabled");
+  return t("settings.mcp.status.notStarted");
 }
 
 function ProviderMark({ short, selected }: { short: string; selected?: boolean }) {
@@ -364,16 +365,19 @@ const contextBudgetColors: Record<string, string> = {
   output_reserve: "bg-[#c2410c]",
 };
 
-function ContextBudgetBreakdown({ state }: { state: ContextPanelState | null }) {
+function ContextBudgetBreakdown({ state, t }: { state: ContextPanelState | null; t: TFunction }) {
   if (!state) return null;
   const maxInput = Math.max(1, state.max_input_tokens);
   const projectedPct = contextPct(state.projected_total_tokens, maxInput);
   return (
     <div className="mt-3 rounded-lg border border-[#e2e5ea] bg-white p-3">
       <div className="mb-2 flex items-center justify-between gap-3 text-[12px]">
-        <span className="font-medium text-[#202124]">Budget allocation</span>
+        <span className="font-medium text-[#202124]">{t("settings.context.budgetAllocation")}</span>
         <span className={state.projected_total_tokens > state.max_input_tokens ? "text-[#b42318]" : "text-[#7a8088]"}>
-          {state.projected_total_tokens.toLocaleString()} / {state.max_input_tokens.toLocaleString()} tokens
+          {t("settings.context.tokensRatio", {
+            used: state.projected_total_tokens.toLocaleString(),
+            total: state.max_input_tokens.toLocaleString(),
+          })}
         </span>
       </div>
       <div className="flex h-2 overflow-hidden rounded-full bg-[#e8ebef]">
@@ -415,14 +419,14 @@ function ContextBudgetBreakdown({ state }: { state: ContextPanelState | null }) 
   );
 }
 
-function ContextHistoryBreakdown({ buckets }: { buckets: ContextPanelState["history_buckets"] }) {
+function ContextHistoryBreakdown({ buckets, t }: { buckets: ContextPanelState["history_buckets"]; t: TFunction }) {
   if (!buckets.length) return null;
   return (
     <div className="mt-3 overflow-hidden rounded-lg border border-[#e2e5ea] bg-white">
       <div className="grid grid-cols-[minmax(0,1fr)_80px_96px] gap-3 border-b border-[#eceff3] bg-[#fbfcfd] px-3 py-2 text-[11px] font-medium uppercase text-[#7a8088]">
-        <span>History</span>
-        <span className="text-right">Messages</span>
-        <span className="text-right">Tokens</span>
+        <span>{t("settings.context.colHistory")}</span>
+        <span className="text-right">{t("settings.context.colMessages")}</span>
+        <span className="text-right">{t("settings.context.colTokens")}</span>
       </div>
       {buckets.map((bucket) => (
         <div
@@ -442,7 +446,7 @@ function ContextHistoryBreakdown({ buckets }: { buckets: ContextPanelState["hist
   );
 }
 
-function ContextMemorySources({ sources }: { sources: ContextPanelState["memory_sources"] }) {
+function ContextMemorySources({ sources, t }: { sources: ContextPanelState["memory_sources"]; t: TFunction }) {
   if (!sources.length) return null;
   return (
     <div className="mt-3 grid gap-2">
@@ -452,10 +456,10 @@ function ContextMemorySources({ sources }: { sources: ContextPanelState["memory_
             <div className="text-[12px] font-medium text-[#202124]">{source.label}</div>
             <div className="flex items-center gap-2 text-[11px] text-[#7a8088]">
               <span className={source.exists ? "text-[#177245]" : "text-[#8a9099]"}>
-                {source.exists ? "Loaded" : "Missing"}
+                {source.exists ? t("settings.context.loaded") : t("settings.context.missing")}
               </span>
-              <span>{source.entries.toLocaleString()} entries</span>
-              <span>{source.tokens.toLocaleString()} tokens</span>
+              <span>{t("settings.context.entries", { n: source.entries.toLocaleString() })}</span>
+              <span>{t("settings.context.colTokens")} {source.tokens.toLocaleString()}</span>
             </div>
           </div>
           <div className="mt-1 break-all text-[11px] leading-4 text-[#8a9099]">{source.path}</div>
@@ -465,16 +469,16 @@ function ContextMemorySources({ sources }: { sources: ContextPanelState["memory_
   );
 }
 
-function PromptSectionList({ sections }: { sections: ContextPanelState["prompt_sections"] }) {
+function PromptSectionList({ sections, t }: { sections: ContextPanelState["prompt_sections"]; t: TFunction }) {
   if (!sections.length) return null;
   const ordered = [...sections].sort((a, b) => b.priority - a.priority);
   return (
     <div className="mt-3 overflow-hidden rounded-lg border border-[#e2e5ea] bg-white">
       <div className="grid grid-cols-[minmax(0,1fr)_82px_92px_92px] gap-3 border-b border-[#eceff3] bg-[#fbfcfd] px-3 py-2 text-[11px] font-medium uppercase text-[#7a8088]">
-        <span>Prompt Sections</span>
-        <span>Priority</span>
-        <span className="text-right">Tokens</span>
-        <span className="text-right">Chars</span>
+        <span>{t("settings.context.colPromptSections")}</span>
+        <span>{t("settings.context.colPriority")}</span>
+        <span className="text-right">{t("settings.context.colTokens")}</span>
+        <span className="text-right">{t("settings.context.colChars")}</span>
       </div>
       <div className="max-h-52 overflow-y-auto">
         {ordered.map((section) => (
@@ -485,9 +489,11 @@ function PromptSectionList({ sections }: { sections: ContextPanelState["prompt_s
             <div className="min-w-0">
               <div className="truncate font-medium text-[#202124]">{section.title}</div>
               <div className="mt-0.5 text-[11px] text-[#8a9099]">
-                {section.included ? "Included" : "Skipped"}
-                {section.truncated ? " / truncated" : ""}
-                {section.original_chars > section.chars ? ` / ${section.original_chars.toLocaleString()} original chars` : ""}
+                {section.included ? t("settings.context.included") : t("settings.context.skipped")}
+                {section.truncated ? t("settings.context.truncated") : ""}
+                {section.original_chars > section.chars
+                  ? t("settings.context.originalChars", { n: section.original_chars.toLocaleString() })
+                  : ""}
               </div>
             </div>
             <span className="rounded-md bg-[#eef1f5] px-2 py-1 font-mono text-[11px] text-[#59616d]">
@@ -516,6 +522,7 @@ export default function SettingsDialog({
   onPacksChange,
   onAgentPanelChange,
 }: Props) {
+  const { t, setLang } = useI18n();
   const [form, setForm] = useState<Settings>(settings);
   const [agentState, setAgentState] = useState<AgentPanelState>(agentPanel);
   const [agentFile, setAgentFile] = useState<AgentEditorFile | null>(null);
@@ -556,6 +563,7 @@ export default function SettingsDialog({
   const [webdavFiles, setWebdavFiles] = useState<WebDavBackupFile[]>([]);
   const [packImportBusy, setPackImportBusy] = useState(false);
   const [packImportStatus, setPackImportStatus] = useState("");
+  const [packImportFailed, setPackImportFailed] = useState(false);
   const agentImportInputRef = useRef<HTMLInputElement>(null);
   const packImportInputRef = useRef<HTMLInputElement>(null);
 
@@ -569,6 +577,7 @@ export default function SettingsDialog({
       setWebdavFiles([]);
       setMcpError("");
       setPackImportStatus("");
+      setPackImportFailed(false);
       setMemoryDrafts({});
     }
   }, [open, settings, agentPanel]);
@@ -685,6 +694,17 @@ export default function SettingsDialog({
 
   if (!open) return null;
 
+  // When the budget follows the model, keep it in sync as provider/model change.
+  useEffect(() => {
+    if (!form.context_budget_auto) return;
+    const budget = autoContextBudget(form.provider, form.model);
+    if (!budget) return;
+    setForm((f) => {
+      if (f.max_input_tokens === budget.maxInput && f.reserved_output_tokens === budget.reservedOutput) return f;
+      return { ...f, max_input_tokens: budget.maxInput, reserved_output_tokens: budget.reservedOutput };
+    });
+  }, [form.provider, form.model, form.context_budget_auto]);
+
   const set = <K extends keyof Settings>(k: K, v: Settings[K]) => {
     const key = String(k);
     setForm((f) => ({ ...f, [k]: v }));
@@ -711,15 +731,17 @@ export default function SettingsDialog({
     if (!file) return;
     setPackImportBusy(true);
     setPackImportStatus("");
+    setPackImportFailed(false);
     try {
       const bytes = Array.from(new Uint8Array(await file.arrayBuffer()));
       const imported = await api.importPackZip(file.name, bytes);
       const nextPacks = await api.listPacks();
       onPacksChange(nextPacks);
       set("current_pack", imported.id);
-      setPackImportStatus(`Imported ${imported.name} (${imported.id}). Save settings to use it.`);
+      setPackImportStatus(t("settings.provider.importResult", { name: imported.name, id: imported.id }));
     } catch (err) {
-      setPackImportStatus(`Import failed: ${String(err)}`);
+      setPackImportFailed(true);
+      setPackImportStatus(t("settings.provider.importFailed", { error: String(err) }));
     } finally {
       setPackImportBusy(false);
       if (packImportInputRef.current) packImportInputRef.current.value = "";
@@ -786,7 +808,7 @@ export default function SettingsDialog({
     try {
       const next = await api.agentPanelState();
       setAgentPanelState(next);
-      setAgentStatus("Agent list refreshed.");
+      setAgentStatus(t("settings.agents.listRefreshed"));
     } catch (err) {
       setAgentStatus(String(err));
     } finally {
@@ -803,7 +825,7 @@ export default function SettingsDialog({
       setAgentFileName("researcher.json");
       setAgentJson(raw);
       setAgentValidation(await api.agentValidateJson(raw));
-      setAgentStatus("Template ready.");
+      setAgentStatus(t("settings.agents.templateReady"));
     } catch (err) {
       setAgentStatus(String(err));
     } finally {
@@ -820,7 +842,7 @@ export default function SettingsDialog({
       setAgentFileName(file.file_name);
       setAgentJson(file.raw_json);
       setAgentValidation(await api.agentValidateJson(file.raw_json));
-      setAgentStatus(`Loaded ${file.file_name}.`);
+      setAgentStatus(t("settings.agents.loaded", { name: file.file_name }));
     } catch (err) {
       setAgentStatus(String(err));
     } finally {
@@ -835,7 +857,7 @@ export default function SettingsDialog({
       const result = await api.agentValidateJson(agentJson);
       setAgentValidation(result);
       if (!agentFileName.trim()) setAgentFileName(result.suggested_file_name);
-      setAgentStatus(result.ok ? "Validation passed." : "Validation failed.");
+      setAgentStatus(result.ok ? t("settings.agents.validationPassedMsg") : t("settings.agents.validationFailedMsg"));
     } catch (err) {
       setAgentStatus(String(err));
     } finally {
@@ -850,13 +872,13 @@ export default function SettingsDialog({
       const validation = await api.agentValidateJson(agentJson);
       setAgentValidation(validation);
       if (!validation.ok) {
-        setAgentStatus("Fix validation errors before saving.");
+        setAgentStatus(t("settings.agents.fixBeforeSave"));
         return;
       }
       const next = await api.agentSaveFile(agentFileName || validation.suggested_file_name, agentJson);
       setAgentPanelState(next);
       setAgentFileName(agentFileName || validation.suggested_file_name);
-      setAgentStatus("Agent saved.");
+      setAgentStatus(t("settings.agents.saved"));
     } catch (err) {
       setAgentStatus(String(err));
     } finally {
@@ -865,7 +887,7 @@ export default function SettingsDialog({
   }
 
   async function deleteAgentJson(name: string) {
-    if (!window.confirm(`Delete agent ${name}?`)) return;
+    if (!window.confirm(t("settings.agents.confirmDelete", { name }))) return;
     setAgentBusy(true);
     setAgentStatus("");
     try {
@@ -877,7 +899,7 @@ export default function SettingsDialog({
         setAgentFileName("");
         setAgentValidation(null);
       }
-      setAgentStatus("Agent deleted.");
+      setAgentStatus(t("settings.agents.deleted"));
     } catch (err) {
       setAgentStatus(String(err));
     } finally {
@@ -896,7 +918,11 @@ export default function SettingsDialog({
       setAgentJson(raw);
       setAgentValidation(validation);
       setAgentFileName(file.name.endsWith(".json") ? file.name : validation.suggested_file_name);
-      setAgentStatus(validation.ok ? `Imported ${file.name}. Review and save it.` : `Imported ${file.name}; validation failed.`);
+      setAgentStatus(
+        validation.ok
+          ? t("settings.agents.importedReview", { name: file.name })
+          : t("settings.agents.importedFailed", { name: file.name }),
+      );
     } catch (err) {
       setAgentStatus(String(err));
     } finally {
@@ -908,7 +934,7 @@ export default function SettingsDialog({
     if (!agentJson.trim()) return;
     const fileName = agentFileName.trim() || agentValidation?.suggested_file_name || "agent.json";
     downloadTextFile(fileName, agentJson);
-    setAgentStatus(`Exported ${fileName}.`);
+    setAgentStatus(t("settings.agents.exported", { name: fileName }));
   }
 
   async function exportAllAgents() {
@@ -928,7 +954,7 @@ export default function SettingsDialog({
         })),
       };
       downloadTextFile("demiurge-agents-export.json", JSON.stringify(payload, null, 2));
-      setAgentStatus(`Exported ${files.length} agents.`);
+      setAgentStatus(t("settings.agents.exportedAll", { n: files.length }));
     } catch (err) {
       setAgentStatus(String(err));
     } finally {
@@ -1051,7 +1077,7 @@ export default function SettingsDialog({
     setWebdavStatus("");
     try {
       const fileName = await api.webdavBackupNow(webdavConfig);
-      setWebdavStatus(`Backup created: ${fileName}`);
+      setWebdavStatus(t("settings.files.backupCreated", { name: fileName }));
       setWebdavFiles(await api.webdavListBackups(webdavConfig));
     } catch (err) {
       setWebdavStatus(String(err));
@@ -1065,7 +1091,7 @@ export default function SettingsDialog({
     setWebdavStatus("");
     try {
       setWebdavFiles(await api.webdavListBackups(webdavConfig));
-      setWebdavStatus("Backup list refreshed.");
+      setWebdavStatus(t("settings.files.backupListRefreshed"));
     } catch (err) {
       setWebdavStatus(String(err));
     } finally {
@@ -1079,7 +1105,7 @@ export default function SettingsDialog({
     try {
       await api.webdavDeleteBackup(webdavConfig, fileName);
       setWebdavFiles((files) => files.filter((file) => file.file_name !== fileName));
-      setWebdavStatus(`Deleted: ${fileName}`);
+      setWebdavStatus(t("settings.files.deleted", { name: fileName }));
     } catch (err) {
       setWebdavStatus(String(err));
     } finally {
@@ -1111,14 +1137,29 @@ export default function SettingsDialog({
   );
 
   const navItems: { id: SettingsTab; label: string; detail: string }[] = [
-    { id: "provider", label: "Providers", detail: selectedProvider.label },
-    { id: "media", label: "Media", detail: form.image_model || "DashScope" },
-    { id: "web", label: "Web Search", detail: selectedWebSearchProvider.label },
-    { id: "files", label: "Files", detail: form.webdav_enabled ? "WebDAV enabled" : "Docs and backup" },
-    { id: "context", label: "Context", detail: `${form.max_input_tokens} tokens` },
-    { id: "tools", label: "Tools", detail: `${form.mcp_servers.length} MCP / ${ocrStatus?.installed ? "OCR ready" : "OCR"}` },
-    { id: "voice", label: "Voice", detail: form.voice_enabled ? "Enabled" : "Disabled" },
-    { id: "advanced", label: "Advanced", detail: "Storage and limits" },
+    { id: "general", label: t("settings.general"), detail: form.language === "zh" ? "简体中文" : "English" },
+    { id: "provider", label: t("settings.nav.providers"), detail: selectedProvider.label },
+    { id: "media", label: t("settings.nav.media"), detail: form.image_model || t("settings.nav.detail.media") },
+    { id: "web", label: t("settings.nav.web"), detail: selectedWebSearchProvider.label },
+    {
+      id: "files",
+      label: t("settings.nav.files"),
+      detail: form.webdav_enabled ? t("settings.nav.detail.webdavOn") : t("settings.nav.detail.docsBackup"),
+    },
+    { id: "context", label: t("settings.nav.context"), detail: t("settings.nav.detail.tokens", { n: form.max_input_tokens }) },
+    {
+      id: "tools",
+      label: t("settings.nav.tools"),
+      detail: ocrStatus?.installed
+        ? t("settings.nav.detail.mcpOcrReady", { n: form.mcp_servers.length })
+        : t("settings.nav.detail.mcpOcr", { n: form.mcp_servers.length }),
+    },
+    {
+      id: "voice",
+      label: t("settings.nav.voice"),
+      detail: form.voice_enabled ? t("settings.nav.detail.enabled") : t("settings.nav.detail.disabled"),
+    },
+    { id: "advanced", label: t("settings.nav.advanced"), detail: t("settings.nav.detail.storage") },
   ];
 
   function save() {
@@ -1171,11 +1212,11 @@ export default function SettingsDialog({
     <div className="flex h-full min-h-0 w-full overflow-hidden bg-[#f6f7f9]">
         <aside className="flex w-[232px] shrink-0 flex-col border-r border-[#dfe3e8] bg-[#eef1f5]">
           <div className="flex h-12 items-center border-b border-[#dfe3e8] px-4">
-            <div className="text-[13px] font-semibold text-[#202124]">Settings</div>
+            <div className="text-[13px] font-semibold text-[#202124]">{t("settings.heading")}</div>
             <button
               className="ml-auto grid size-8 place-items-center rounded-md text-[#69707a] transition hover:bg-[#e3e7ed] hover:text-[#202124]"
               onClick={onClose}
-              aria-label="Close settings"
+              aria-label={t("settings.close")}
             >
               <CloseIcon size={16} />
             </button>
@@ -1205,7 +1246,7 @@ export default function SettingsDialog({
             })}
           </nav>
           <div className="border-t border-[#dfe3e8] p-3 text-[11px] leading-5 text-[#7a8088]">
-            API keys are stored in the system credential manager.
+            {t("settings.credentialNote")}
           </div>
         </aside>
 
@@ -1218,29 +1259,56 @@ export default function SettingsDialog({
             </div>
             <div className="ml-auto flex items-center gap-2">
               <button type="button" className={secondaryButtonCls} onClick={onClose}>
-                Cancel
+                {t("settings.cancel")}
               </button>
               <button
                 type="button"
                 className="cf-press inline-flex h-8 items-center justify-center rounded-md bg-[#111827] px-4 text-[12px] font-medium text-white hover:bg-[#2b3442]"
                 onClick={save}
               >
-                Save
+                {t("settings.save")}
               </button>
             </div>
           </header>
 
           <div className="min-h-0 flex-1 overflow-y-auto">
             <div className="mx-auto max-w-[760px] px-6 py-5">
+              {activeTab === "general" && (
+                <>
+                  <Section title={t("settings.language")} description={t("settings.languageDesc")}>
+                    <div className="inline-flex rounded-lg border border-[#dfe3e8] bg-[#f6f7f9] p-1">
+                      {(["zh", "en"] as const).map((lng) => {
+                        const active = form.language === lng;
+                        return (
+                          <button
+                            key={lng}
+                            type="button"
+                            onClick={() => {
+                              set("language", lng);
+                              setLang(lng);
+                            }}
+                            className={`cf-press min-w-[120px] rounded-md px-4 py-2 text-[13px] font-medium transition ${
+                              active ? "bg-white text-[#111827] shadow-sm" : "text-[#5f6368] hover:text-[#202124]"
+                            }`}
+                          >
+                            {lng === "zh" ? t("settings.langZh") : t("settings.langEn")}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </Section>
+                </>
+              )}
+
               {activeTab === "provider" && (
                 <>
-                  <Section title="Provider" description="Select the active LLM provider and configure its endpoint.">
+                  <Section title={t("settings.provider.title")} description={t("settings.provider.desc")}>
                     <div className="grid gap-3 md:grid-cols-[240px_minmax(0,1fr)]">
                       <div className="flex flex-col gap-2">
                         <input
                           value={providerQuery}
                           onChange={(e) => setProviderQuery(e.target.value)}
-                          placeholder="Search providers"
+                          placeholder={t("settings.provider.searchPlaceholder")}
                           className="h-8 w-full rounded-md border border-[#d9d9d9] bg-white px-2.5 text-[12px] text-[#202124] outline-none transition placeholder:text-[#9aa1ab] focus:border-[#7a7f87] focus:ring-1 focus:ring-[#202124]/10"
                         />
                         <div className="space-y-1 rounded-lg border border-[#e2e5ea] bg-[#f8f9fb] p-1.5">
@@ -1290,7 +1358,7 @@ export default function SettingsDialog({
                           </div>
                         </div>
                         <div className="grid gap-4 p-4">
-                          <Field label="Base URL" help={`Default: ${selectedProvider.baseUrl}`}>
+                          <Field label={t("settings.provider.baseUrl")} help={t("settings.provider.baseUrlHelp", { url: selectedProvider.baseUrl })}>
                             <input
                               className={inputCls}
                               value={form.base_url}
@@ -1298,7 +1366,7 @@ export default function SettingsDialog({
                               onChange={(e) => set("base_url", e.target.value)}
                             />
                           </Field>
-                          <Field label="API Key" help="Saved securely outside settings.json. Local providers may leave this empty.">
+                          <Field label={t("settings.provider.apiKey")} help={t("settings.provider.apiKeyHelp")}>
                             <input
                               className={inputCls}
                               type="password"
@@ -1307,7 +1375,7 @@ export default function SettingsDialog({
                               onChange={(e) => set("api_key", e.target.value)}
                             />
                           </Field>
-                          <Field label="Model" help="Pick a suggested model or type any model name.">
+                          <Field label={t("settings.provider.model")} help={t("settings.provider.modelHelp")}>
                             <input
                               className={inputCls}
                               value={form.model}
@@ -1337,11 +1405,11 @@ export default function SettingsDialog({
                             )}
                           </Field>
                           <Field
-                            label="Reasoning effort"
+                            label={t("settings.provider.effort")}
                             help={
                               effortSupported
-                                ? "Also available as /effort low|medium|high|xhigh|max|auto."
-                                : "Stored for later, but this provider profile does not send effort fields."
+                                ? t("settings.provider.effortHelpOn")
+                                : t("settings.provider.effortHelpOff")
                             }
                           >
                             <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
@@ -1363,18 +1431,18 @@ export default function SettingsDialog({
                                       {selected && <CheckIcon size={13} className="ml-auto shrink-0" />}
                                     </span>
                                     <span className="mt-0.5 block truncate text-[11px] text-[#8a9099]">
-                                      {effort.help}
+                                      {t(effort.helpKey)}
                                     </span>
                                   </button>
                                 );
                               })}
                             </div>
                           </Field>
-                          <Field label="Persona Pack">
+                          <Field label={t("settings.provider.pack")}>
                             <Select
                               value={form.current_pack}
                               onChange={(v) => set("current_pack", v)}
-                              placeholder="Select a persona pack"
+                              placeholder={t("settings.provider.packPlaceholder")}
                               options={packs.map((p) => ({ value: p.id, label: p.name, hint: p.id }))}
                             />
                           </Field>
@@ -1398,9 +1466,9 @@ export default function SettingsDialog({
                                 <DownloadIcon size={18} />
                               </div>
                               <div className="min-w-[180px] flex-1">
-                                <div className="text-[13px] font-medium text-[#202124]">Import persona pack</div>
+                                <div className="text-[13px] font-medium text-[#202124]">{t("settings.provider.importPack")}</div>
                                 <div className="mt-0.5 text-[12px] leading-5 text-[#7a8088]">
-                                  Drop a zip here, or choose a file. The manifest is validated before extraction.
+                                  {t("settings.provider.importPackDesc")}
                                 </div>
                               </div>
                               <button
@@ -1409,13 +1477,13 @@ export default function SettingsDialog({
                                 disabled={packImportBusy}
                                 onClick={() => packImportInputRef.current?.click()}
                               >
-                                {packImportBusy ? "Importing..." : "Choose zip"}
+                                {packImportBusy ? t("settings.provider.importing") : t("settings.provider.chooseZip")}
                               </button>
                             </div>
                             {packImportStatus && (
                               <div
                                 className={`mt-3 rounded-md border px-3 py-2 text-[12px] leading-5 ${
-                                  packImportStatus.startsWith("Import failed:")
+                                  packImportFailed
                                     ? "border-[#f3c3c3] bg-[#fff7f7] text-[#b42318]"
                                     : "border-[#dce6d8] bg-[#f8fbf6] text-[#3f6212]"
                                 }`}
@@ -1433,7 +1501,7 @@ export default function SettingsDialog({
                                 set("model", selectedProvider.model);
                               }}
                             >
-                              Use defaults
+                              {t("settings.provider.useDefaults")}
                             </button>
                             <button
                               type="button"
@@ -1441,7 +1509,7 @@ export default function SettingsDialog({
                               disabled={providerTestBusy}
                               onClick={checkProviderConnection}
                             >
-                              {providerTestBusy ? "Testing..." : "Test connection"}
+                              {providerTestBusy ? t("settings.provider.testing") : t("settings.provider.testConnection")}
                             </button>
                           </div>
                           {providerTestStatus && (
@@ -1459,11 +1527,11 @@ export default function SettingsDialog({
               {activeTab === "media" && (
                 <>
                   <Section
-                    title="Media Provider"
-                    description="Image generation and TTS use DashScope native AIGC APIs. The key is stored outside settings.json."
+                    title={t("settings.media.title")}
+                    description={t("settings.media.desc")}
                   >
                     <div className="grid gap-4">
-                      <Field label="Provider">
+                      <Field label={t("settings.media.provider")}>
                         <select
                           className={inputCls}
                           value={form.media_provider}
@@ -1472,7 +1540,7 @@ export default function SettingsDialog({
                           <option value="dashscope">阿里云百炼 / DashScope</option>
                         </select>
                       </Field>
-                      <Field label="Media Base URL" help="Use the origin only. Compatible-mode suffix is stripped automatically.">
+                      <Field label={t("settings.media.baseUrl")} help={t("settings.media.baseUrlHelp")}>
                         <input
                           className={inputCls}
                           value={form.media_base_url}
@@ -1480,7 +1548,7 @@ export default function SettingsDialog({
                           onChange={(e) => set("media_base_url", e.target.value)}
                         />
                       </Field>
-                      <Field label="Media API Key" help="Optional when the active LLM provider is DashScope and uses the same key.">
+                      <Field label={t("settings.media.apiKey")} help={t("settings.media.apiKeyHelp")}>
                         <input
                           className={inputCls}
                           type="password"
@@ -1491,9 +1559,9 @@ export default function SettingsDialog({
                       </Field>
                     </div>
                   </Section>
-                  <Section title="Image Generation" description="Defaults used by the Images workspace.">
+                  <Section title={t("settings.media.imageTitle")} description={t("settings.media.imageDesc")}>
                     <div className="grid gap-4 sm:grid-cols-2">
-                      <Field label="Image model">
+                      <Field label={t("settings.media.imageModel")}>
                         <input
                           className={inputCls}
                           value={form.image_model}
@@ -1501,11 +1569,11 @@ export default function SettingsDialog({
                           onChange={(e) => set("image_model", e.target.value)}
                         />
                       </Field>
-                      <Field label="Default size">
+                      <Field label={t("settings.media.imageSize")}>
                         <Select
                           value={form.image_size}
                           onChange={(v) => set("image_size", v)}
-                          placeholder="Select size"
+                          placeholder={t("settings.media.imageSizePlaceholder")}
                           options={["512*512", "768*768", "1024*1024", "1280*720", "720*1280"].map((size) => ({
                             value: size,
                             label: size,
@@ -1514,9 +1582,9 @@ export default function SettingsDialog({
                       </Field>
                     </div>
                   </Section>
-                  <Section title="Text To Speech" description="Defaults for DashScope TTS testing in the Images workspace.">
+                  <Section title={t("settings.media.ttsTitle")} description={t("settings.media.ttsDesc")}>
                     <div className="grid gap-4 sm:grid-cols-2">
-                      <Field label="TTS model">
+                      <Field label={t("settings.media.ttsModel")}>
                         <input
                           className={inputCls}
                           value={form.tts_model}
@@ -1524,7 +1592,7 @@ export default function SettingsDialog({
                           onChange={(e) => set("tts_model", e.target.value)}
                         />
                       </Field>
-                      <Field label="Voice">
+                      <Field label={t("settings.media.voice")}>
                         <input
                           className={inputCls}
                           value={form.tts_voice}
@@ -1539,7 +1607,7 @@ export default function SettingsDialog({
 
               {activeTab === "web" && (
                 <>
-                  <Section title="Search Provider" description="Configure the search backend used by the web_search tool.">
+                  <Section title={t("settings.web.providerTitle")} description={t("settings.web.providerDesc")}>
                     <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
                       {webSearchProviders.map((provider) => {
                         const selected = provider.value === form.web_search_provider;
@@ -1558,15 +1626,15 @@ export default function SettingsDialog({
                               <span className="text-[13px] font-semibold text-[#202124]">{provider.label}</span>
                               {selected && <CheckIcon size={14} className="ml-auto text-[#111827]" />}
                             </div>
-                            <div className="mt-1 text-[12px] leading-5 text-[#7a8088]">{provider.help}</div>
+                            <div className="mt-1 text-[12px] leading-5 text-[#7a8088]">{t(provider.helpKey)}</div>
                           </button>
                         );
                       })}
                     </div>
                   </Section>
-                  <Section title="API Keys" description="Only Tavily, Brave and Exa require keys. Environment variables still work.">
+                  <Section title={t("settings.web.keysTitle")} description={t("settings.web.keysDesc")}>
                     <div className="grid gap-4">
-                      <Field label="Tavily API Key">
+                      <Field label={t("settings.web.tavilyKey")}>
                         <input
                           className={inputCls}
                           type="password"
@@ -1575,7 +1643,7 @@ export default function SettingsDialog({
                           onChange={(e) => set("tavily_api_key", e.target.value)}
                         />
                       </Field>
-                      <Field label="Brave Search API Key">
+                      <Field label={t("settings.web.braveKey")}>
                         <input
                           className={inputCls}
                           type="password"
@@ -1584,7 +1652,7 @@ export default function SettingsDialog({
                           onChange={(e) => set("brave_search_api_key", e.target.value)}
                         />
                       </Field>
-                      <Field label="Exa API Key">
+                      <Field label={t("settings.web.exaKey")}>
                         <input
                           className={inputCls}
                           type="password"
@@ -1601,7 +1669,7 @@ export default function SettingsDialog({
                         disabled={webSearchTestBusy}
                         onClick={checkWebSearchConnection}
                       >
-                        {webSearchTestBusy ? "Testing..." : "Test connection"}
+                        {webSearchTestBusy ? t("settings.provider.testing") : t("settings.provider.testConnection")}
                       </button>
                     </div>
                     {webSearchTestStatus && (
@@ -1616,38 +1684,38 @@ export default function SettingsDialog({
               {activeTab === "files" && (
                 <>
                   <Section
-                    title="Document Processing"
-                    description="Composer attachments are converted into prompt context before the agent turn starts."
+                    title={t("settings.files.docTitle")}
+                    description={t("settings.files.docDesc")}
                   >
                     <div className="grid gap-2 sm:grid-cols-2">
                       {[
-                        ["Text and code", "TXT, Markdown, JSON, CSV and common source files are read as text."],
-                        ["Images", "Images show as attachment previews. OCR can be run separately through screen/OCR tools."],
-                        ["PDF", "PDF text is extracted in the renderer, up to the first 80 pages."],
-                        ["Office", "DOCX, PPTX, XLSX and XLSM are parsed from OpenXML content into plain text."],
-                        ["Mermaid", "```mermaid code blocks render as diagrams in assistant messages."],
-                        ["Syntax highlight", "Language-tagged code blocks use highlight.js and keep copy controls."],
-                      ].map(([title, description]) => (
-                        <div key={title} className="rounded-lg border border-[#e2e5ea] bg-[#fbfcfd] p-3">
-                          <div className="text-[13px] font-semibold text-[#202124]">{title}</div>
-                          <div className="mt-1 text-[12px] leading-5 text-[#7a8088]">{description}</div>
+                        ["settings.files.text", "settings.files.textDesc"],
+                        ["settings.files.images", "settings.files.imagesDesc"],
+                        ["settings.files.pdf", "settings.files.pdfDesc"],
+                        ["settings.files.office", "settings.files.officeDesc"],
+                        ["settings.files.mermaid", "settings.files.mermaidDesc"],
+                        ["settings.files.highlight", "settings.files.highlightDesc"],
+                      ].map(([titleKey, descKey]) => (
+                        <div key={titleKey} className="rounded-lg border border-[#e2e5ea] bg-[#fbfcfd] p-3">
+                          <div className="text-[13px] font-semibold text-[#202124]">{t(titleKey)}</div>
+                          <div className="mt-1 text-[12px] leading-5 text-[#7a8088]">{t(descKey)}</div>
                         </div>
                       ))}
                     </div>
                   </Section>
 
                   <Section
-                    title="WebDAV Backup"
-                    description="Back up Demiurge settings and sessions to a WebDAV directory. Passwords are stored in the system credential manager."
+                    title={t("settings.files.webdavTitle")}
+                    description={t("settings.files.webdavDesc")}
                   >
                     <ToggleRow
                       checked={form.webdav_enabled}
-                      title="Enable WebDAV backup controls"
-                      description="Keeps the configuration visible and ready for manual backup operations."
+                      title={t("settings.files.webdavToggle")}
+                      description={t("settings.files.webdavToggleDesc")}
                       onChange={(checked) => set("webdav_enabled", checked)}
                     />
                     <div className="mt-4 grid gap-4">
-                      <Field label="WebDAV URL" help="Example: https://example.com/remote.php/dav/files/you">
+                      <Field label={t("settings.files.webdavUrl")} help={t("settings.files.webdavUrlHelp")}>
                         <input
                           className={inputCls}
                           value={form.webdav_url}
@@ -1656,14 +1724,14 @@ export default function SettingsDialog({
                         />
                       </Field>
                       <div className="grid gap-4 sm:grid-cols-2">
-                        <Field label="Username">
+                        <Field label={t("settings.files.username")}>
                           <input
                             className={inputCls}
                             value={form.webdav_username}
                             onChange={(e) => set("webdav_username", e.target.value)}
                           />
                         </Field>
-                        <Field label="Password">
+                        <Field label={t("settings.files.password")}>
                           <input
                             className={inputCls}
                             type="password"
@@ -1672,7 +1740,7 @@ export default function SettingsDialog({
                           />
                         </Field>
                       </div>
-                      <Field label="Backup path" help="A collection under the WebDAV URL. Demiurge will create it if possible.">
+                      <Field label={t("settings.files.backupPath")} help={t("settings.files.backupPathHelp")}>
                         <input
                           className={inputCls}
                           value={form.webdav_path}
@@ -1684,13 +1752,13 @@ export default function SettingsDialog({
 
                     <div className="mt-4 flex flex-wrap gap-2">
                       <button className={secondaryButtonCls} disabled={webdavBusy} type="button" onClick={checkWebDav}>
-                        Test connection
+                        {t("settings.files.testConnection")}
                       </button>
                       <button className={secondaryButtonCls} disabled={webdavBusy} type="button" onClick={backupToWebDav}>
-                        Backup now
+                        {t("settings.files.backupNow")}
                       </button>
                       <button className={secondaryButtonCls} disabled={webdavBusy} type="button" onClick={refreshWebDavFiles}>
-                        List backups
+                        {t("settings.files.listBackups")}
                       </button>
                     </div>
                     {webdavStatus && (
@@ -1700,9 +1768,9 @@ export default function SettingsDialog({
                     )}
                     <div className="mt-4 overflow-hidden rounded-lg border border-[#e2e5ea]">
                       <div className="grid grid-cols-[minmax(0,1fr)_120px_80px] gap-2 border-b border-[#eceff3] bg-[#f8f9fb] px-3 py-2 text-[11px] font-semibold text-[#7a8088]">
-                        <span>File</span>
-                        <span>Modified</span>
-                        <span className="text-right">Action</span>
+                        <span>{t("settings.files.colFile")}</span>
+                        <span>{t("settings.files.colModified")}</span>
+                        <span className="text-right">{t("settings.files.colAction")}</span>
                       </div>
                       {webdavFiles.length ? (
                         webdavFiles.map((file) => (
@@ -1725,12 +1793,12 @@ export default function SettingsDialog({
                               type="button"
                               onClick={() => deleteWebDavFile(file.file_name)}
                             >
-                              Delete
+                              {t("settings.files.delete")}
                             </button>
                           </div>
                         ))
                       ) : (
-                        <div className="px-3 py-4 text-[12px] text-[#7a8088]">No backup files loaded.</div>
+                        <div className="px-3 py-4 text-[12px] text-[#7a8088]">{t("settings.files.noBackups")}</div>
                       )}
                     </div>
                   </Section>
@@ -1739,68 +1807,111 @@ export default function SettingsDialog({
 
               {activeTab === "context" && (
                 <>
-                  <Section title="Context Budget" description="These limits control prompt assembly and history trimming.">
-                    <div className="grid gap-4 sm:grid-cols-2">
-                      <Field label="Max input tokens">
+                  <Section title={t("settings.context.budgetTitle")} description={t("settings.context.budgetDesc")}>
+                    <ToggleRow
+                      checked={form.context_budget_auto}
+                      title={t("settings.context.auto")}
+                      description={t("settings.context.autoDesc")}
+                      onChange={(checked) => set("context_budget_auto", checked)}
+                    />
+                    <div className="mt-3 rounded-lg border border-[#e2e5ea] bg-[#fbfcfd] px-3 py-2.5 text-[12px]">
+                      {(() => {
+                        const win = modelContextWindow(form.provider, form.model);
+                        return win ? (
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="min-w-0 truncate text-[#5f6368]">
+                              {t("settings.context.detected")} ·{" "}
+                              <span className="font-medium text-[#202124]">
+                                {form.model.trim() || selectedProvider.model}
+                              </span>
+                            </span>
+                            <span className="shrink-0 tabular-nums font-semibold text-[#202124]">
+                              {win.toLocaleString()} tok
+                            </span>
+                          </div>
+                        ) : (
+                          <span className="text-[#b54708]">{t("settings.context.detectedUnknown")}</span>
+                        );
+                      })()}
+                    </div>
+                    <div className="mt-4 grid gap-4 sm:grid-cols-2">
+                      <Field label={t("settings.context.maxInput")}>
                         <input
-                          className={inputCls}
+                          className={`${inputCls} disabled:cursor-not-allowed disabled:bg-[#f2f4f7] disabled:text-[#9aa1ab]`}
                           type="number"
                           min={4000}
                           step={1000}
+                          disabled={form.context_budget_auto}
                           value={form.max_input_tokens}
                           onChange={(e) => set("max_input_tokens", Number(e.target.value) || 0)}
                         />
                       </Field>
-                      <Field label="Reserved output tokens">
+                      <Field label={t("settings.context.reservedOutput")}>
                         <input
-                          className={inputCls}
+                          className={`${inputCls} disabled:cursor-not-allowed disabled:bg-[#f2f4f7] disabled:text-[#9aa1ab]`}
                           type="number"
                           min={512}
                           step={256}
+                          disabled={form.context_budget_auto}
                           value={form.reserved_output_tokens}
                           onChange={(e) => set("reserved_output_tokens", Number(e.target.value) || 0)}
                         />
                       </Field>
                     </div>
+                    {!form.context_budget_auto && modelContextWindow(form.provider, form.model) != null && (
+                      <button
+                        type="button"
+                        className={`${secondaryButtonCls} mt-3`}
+                        onClick={() => {
+                          const budget = autoContextBudget(form.provider, form.model);
+                          if (budget) {
+                            set("max_input_tokens", budget.maxInput);
+                            set("reserved_output_tokens", budget.reservedOutput);
+                          }
+                        }}
+                      >
+                        {t("settings.context.applyWindow")}
+                      </button>
+                    )}
                     <div className="mt-4 rounded-lg border border-[#e2e5ea] bg-[#fbfcfd] p-3">
                       <div className="mb-3 flex items-center justify-between gap-3">
-                        <div className="text-[13px] font-medium text-[#202124]">Current session</div>
+                        <div className="text-[13px] font-medium text-[#202124]">{t("settings.context.currentSession")}</div>
                         <button
                           className={secondaryButtonCls}
                           type="button"
                           onClick={async () => setContextState(await api.contextPanelState())}
                         >
-                          Refresh
+                          {t("settings.context.refresh")}
                         </button>
                       </div>
                       <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-                        <ContextMetric label="Messages" value={contextState?.message_count ?? 0} />
-                        <ContextMetric label="User" value={contextState?.user_messages ?? 0} />
-                        <ContextMetric label="Assistant" value={contextState?.assistant_messages ?? 0} />
-                        <ContextMetric label="Tool" value={contextState?.tool_messages ?? 0} />
+                        <ContextMetric label={t("settings.context.metric.messages")} value={contextState?.message_count ?? 0} />
+                        <ContextMetric label={t("settings.context.metric.user")} value={contextState?.user_messages ?? 0} />
+                        <ContextMetric label={t("settings.context.metric.assistant")} value={contextState?.assistant_messages ?? 0} />
+                        <ContextMetric label={t("settings.context.metric.tool")} value={contextState?.tool_messages ?? 0} />
                       </div>
                       <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4">
-                        <ContextMetric label="System chars" value={contextState?.system_prompt_chars ?? 0} />
-                        <ContextMetric label="System tokens" value={contextState?.system_prompt_tokens ?? 0} />
-                        <ContextMetric label="Tools tokens" value={contextState?.tools_tokens ?? 0} />
-                        <ContextMetric label="Output reserve" value={contextState?.reserved_output_tokens ?? 0} />
+                        <ContextMetric label={t("settings.context.metric.systemChars")} value={contextState?.system_prompt_chars ?? 0} />
+                        <ContextMetric label={t("settings.context.metric.systemTokens")} value={contextState?.system_prompt_tokens ?? 0} />
+                        <ContextMetric label={t("settings.context.metric.toolsTokens")} value={contextState?.tools_tokens ?? 0} />
+                        <ContextMetric label={t("settings.context.metric.outputReserve")} value={contextState?.reserved_output_tokens ?? 0} />
                       </div>
                       <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4">
-                        <ContextMetric label="History tokens" value={contextState?.estimated_history_tokens ?? 0} />
-                        <ContextMetric label="History budget" value={contextState?.history_budget_tokens ?? 0} />
-                        <ContextMetric label="History remaining" value={contextState?.history_remaining_tokens ?? 0} />
-                        <ContextMetric label="Summary tokens" value={contextState?.summary_tokens ?? 0} />
+                        <ContextMetric label={t("settings.context.metric.historyTokens")} value={contextState?.estimated_history_tokens ?? 0} />
+                        <ContextMetric label={t("settings.context.metric.historyBudget")} value={contextState?.history_budget_tokens ?? 0} />
+                        <ContextMetric label={t("settings.context.metric.historyRemaining")} value={contextState?.history_remaining_tokens ?? 0} />
+                        <ContextMetric label={t("settings.context.metric.summaryTokens")} value={contextState?.summary_tokens ?? 0} />
                       </div>
                       <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4">
-                        <ContextMetric label="Input used" value={contextState?.input_budget_used_tokens ?? 0} />
-                        <ContextMetric label="Input remaining" value={contextState?.input_budget_remaining_tokens ?? 0} />
-                        <ContextMetric label="Projected total" value={contextState?.projected_total_tokens ?? 0} />
-                        <ContextMetric label="Section tokens" value={contextState?.prompt_section_tokens ?? 0} />
+                        <ContextMetric label={t("settings.context.metric.inputUsed")} value={contextState?.input_budget_used_tokens ?? 0} />
+                        <ContextMetric label={t("settings.context.metric.inputRemaining")} value={contextState?.input_budget_remaining_tokens ?? 0} />
+                        <ContextMetric label={t("settings.context.metric.projectedTotal")} value={contextState?.projected_total_tokens ?? 0} />
+                        <ContextMetric label={t("settings.context.metric.sectionTokens")} value={contextState?.prompt_section_tokens ?? 0} />
                       </div>
-                      <ContextBudgetBreakdown state={contextState} />
+                      <ContextBudgetBreakdown state={contextState} t={t} />
                       <div className="mt-3 rounded-lg border border-[#e2e5ea] bg-white p-3">
                         <div className="mb-2 flex items-center justify-between gap-3 text-[12px]">
-                          <span className="font-medium text-[#202124]">History budget</span>
+                          <span className="font-medium text-[#202124]">{t("settings.context.historyBudgetTitle")}</span>
                           <span
                             className={
                               (contextState?.history_over_budget_tokens ?? 0) > 0 ? "text-[#b42318]" : "text-[#7a8088]"
@@ -1820,31 +1931,33 @@ export default function SettingsDialog({
                           />
                         </div>
                         <div className="mt-2 text-[12px] leading-5 text-[#7a8088]">
-                          Estimated history {(contextState?.estimated_history_tokens ?? 0).toLocaleString()} /{" "}
-                          {(contextState?.history_budget_tokens ?? form.max_input_tokens).toLocaleString()} tokens.
-                          Projected total {(contextState?.projected_total_tokens ?? 0).toLocaleString()} tokens; input
-                          remaining {(contextState?.input_budget_remaining_tokens ?? 0).toLocaleString()}. Summary{" "}
-                          {(contextState?.summary_chars ?? 0).toLocaleString()} chars.
+                          {t("settings.context.historySummary", {
+                            history: (contextState?.estimated_history_tokens ?? 0).toLocaleString(),
+                            budget: (contextState?.history_budget_tokens ?? form.max_input_tokens).toLocaleString(),
+                            projected: (contextState?.projected_total_tokens ?? 0).toLocaleString(),
+                            remaining: (contextState?.input_budget_remaining_tokens ?? 0).toLocaleString(),
+                            summary: (contextState?.summary_chars ?? 0).toLocaleString(),
+                          })}
                         </div>
                       </div>
-                      <ContextHistoryBreakdown buckets={contextState?.history_buckets ?? []} />
-                      <ContextMemorySources sources={contextState?.memory_sources ?? []} />
-                      <PromptSectionList sections={contextState?.prompt_sections ?? []} />
+                      <ContextHistoryBreakdown buckets={contextState?.history_buckets ?? []} t={t} />
+                      <ContextMemorySources sources={contextState?.memory_sources ?? []} t={t} />
+                      <PromptSectionList sections={contextState?.prompt_sections ?? []} t={t} />
                     </div>
                   </Section>
-                  <Section title="Memory">
+                  <Section title={t("settings.memory.title")}>
                     <ToggleRow
                       checked={form.auto_memory_enabled}
-                      title="Automatic long-term memory extraction"
-                      description="Extract durable user preferences and project constraints into the project memory scope."
+                      title={t("settings.memory.autoToggle")}
+                      description={t("settings.memory.autoToggleDesc")}
                       onChange={(checked) => set("auto_memory_enabled", checked)}
                     />
                     <div className="mt-4 rounded-lg border border-[#e2e5ea] bg-[#fbfcfd] p-3">
                       <div className="flex items-start justify-between gap-3">
                         <div className="min-w-0">
-                          <div className="text-[13px] font-medium text-[#202124]">Scoped memory maintenance</div>
+                          <div className="text-[13px] font-medium text-[#202124]">{t("settings.memory.maintTitle")}</div>
                           <div className="mt-1 text-[12px] text-[#7a8088]">
-                            User, project, session, and pack memories are loaded into prompt context.
+                            {t("settings.memory.maintDesc")}
                           </div>
                         </div>
                         <div className="flex shrink-0 gap-2">
@@ -1854,7 +1967,7 @@ export default function SettingsDialog({
                             disabled={memoryBusy}
                             onClick={() => runMemoryAction(api.memoryPanelState)}
                           >
-                            Refresh
+                            {t("settings.memory.refresh")}
                           </button>
                           <button
                             className={secondaryButtonCls}
@@ -1862,7 +1975,7 @@ export default function SettingsDialog({
                             disabled={memoryBusy || !memoryState?.duplicates.length}
                             onClick={() => runMemoryAction(api.memoryDedupeApply)}
                           >
-                            Dedupe {memoryState?.duplicates.length || 0}
+                            {t("settings.memory.dedupe", { n: memoryState?.duplicates.length || 0 })}
                           </button>
                         </div>
                       </div>
@@ -1892,8 +2005,8 @@ export default function SettingsDialog({
                                       <div className="mt-0.5 break-all text-[11px] text-[#8a9099]">{scope.path}</div>
                                     </div>
                                     <span className="rounded-md bg-[#eef1f5] px-1.5 py-0.5 text-[11px] text-[#59616d]">
-                                      {scope.entries.length} entries
-                                      {scope.duplicates.length ? ` / ${scope.duplicates.length} dupes` : ""}
+                                      {t("settings.memory.entriesCount", { n: scope.entries.length })}
+                                      {scope.duplicates.length ? t("settings.memory.dupesCount", { n: scope.duplicates.length }) : ""}
                                     </span>
                                   </div>
                                 </div>
@@ -1919,7 +2032,7 @@ export default function SettingsDialog({
                                       <input
                                         className={inputCls}
                                         value={draft.text}
-                                        placeholder={`Add ${scope.label.toLowerCase()} memory`}
+                                        placeholder={t("settings.memory.addPlaceholder", { scope: scope.label })}
                                         onChange={(e) =>
                                           setMemoryDrafts((cur) => ({
                                             ...cur,
@@ -1942,7 +2055,7 @@ export default function SettingsDialog({
                                           })
                                         }
                                       >
-                                        Add
+                                        {t("settings.memory.add")}
                                       </button>
                                     </div>
                                   </div>
@@ -1983,10 +2096,10 @@ export default function SettingsDialog({
                                               <option value="pack">pack</option>
                                               <option value="preference">preference</option>
                                             </select>
-                                            <span>line {entry.line}</span>
+                                            <span>{t("settings.memory.line", { n: entry.line })}</span>
                                             {duplicate && (
                                               <span className="rounded-md bg-[#fff6dd] px-1.5 py-0.5 text-[#8a5a00]">
-                                                duplicate
+                                                {t("settings.memory.duplicate")}
                                               </span>
                                             )}
                                           </div>
@@ -2020,7 +2133,7 @@ export default function SettingsDialog({
                                               disabled={memoryBusy}
                                               onClick={() => runMemoryAction(() => api.memoryDeleteEntry(entry.id))}
                                             >
-                                              Delete
+                                              {t("settings.memory.delete")}
                                             </button>
                                             <button
                                               className="inline-flex h-8 items-center justify-center rounded-md bg-[#111827] px-3 text-[12px] font-medium text-white transition hover:bg-[#2b3442] disabled:cursor-not-allowed disabled:bg-[#b8bec8]"
@@ -2032,7 +2145,7 @@ export default function SettingsDialog({
                                                 )
                                               }
                                             >
-                                              Save
+                                              {t("settings.memory.save")}
                                             </button>
                                           </div>
                                         </div>
@@ -2040,7 +2153,7 @@ export default function SettingsDialog({
                                     })
                                   ) : (
                                     <div className="rounded-md border border-dashed border-[#d8dde5] bg-white p-3 text-[12px] text-[#7a8088]">
-                                      No {scope.label.toLowerCase()} memory entries.
+                                      {t("settings.memory.noEntries", { scope: scope.label })}
                                     </div>
                                   )}
                                 </div>
@@ -2049,13 +2162,13 @@ export default function SettingsDialog({
                           })
                         ) : (
                           <div className="rounded-lg border border-dashed border-[#d8dde5] bg-white p-4 text-[12px] text-[#7a8088]">
-                            No memory scopes loaded.
+                            {t("settings.memory.noScopes")}
                           </div>
                         )}
                       </div>
                     </div>
                   </Section>
-                  <Section title="Custom Agents" description="Agent definitions loaded from the project sandbox.">
+                  <Section title={t("settings.agents.title")} description={t("settings.agents.desc")}>
                     <div className="rounded-lg border border-[#e2e5ea] bg-[#fbfcfd]">
                       <input
                         ref={agentImportInputRef}
@@ -2071,7 +2184,7 @@ export default function SettingsDialog({
                       <div className="flex items-center justify-between gap-3 border-b border-[#e8ebef] px-3 py-3">
                         <div className="min-w-0">
                           <div className="text-[13px] font-medium text-[#202124]">
-                            {agentState.definitions.length} definitions
+                            {t("settings.agents.definitions", { n: agentState.definitions.length })}
                           </div>
                           <div className="mt-1 break-all text-[12px] text-[#7a8088]">
                             {agentState.agents_dir || ".demiurge/agents"}
@@ -2079,7 +2192,7 @@ export default function SettingsDialog({
                         </div>
                         <div className="flex shrink-0 flex-wrap justify-end gap-2">
                           <button className={secondaryButtonCls} type="button" disabled={agentBusy} onClick={refreshAgents}>
-                            Refresh
+                            {t("settings.agents.refresh")}
                           </button>
                           <button
                             className={secondaryButtonCls}
@@ -2087,7 +2200,7 @@ export default function SettingsDialog({
                             disabled={agentBusy}
                             onClick={() => agentImportInputRef.current?.click()}
                           >
-                            Import
+                            {t("settings.agents.import")}
                           </button>
                           <button
                             className={secondaryButtonCls}
@@ -2095,10 +2208,10 @@ export default function SettingsDialog({
                             disabled={agentBusy || !agentState.definitions.length}
                             onClick={exportAllAgents}
                           >
-                            Export All
+                            {t("settings.agents.exportAll")}
                           </button>
                           <button className={secondaryButtonCls} type="button" disabled={agentBusy} onClick={newAgentTemplate}>
-                            New Template
+                            {t("settings.agents.newTemplate")}
                           </button>
                         </div>
                       </div>
@@ -2124,20 +2237,20 @@ export default function SettingsDialog({
                                     </div>
                                     <div className="mt-1 flex flex-wrap gap-1 text-[10px] text-[#8a9099]">
                                       <span className="rounded bg-[#eef1f5] px-1.5 py-0.5">
-                                        runs {agent.runtime.run_count}
+                                        {t("settings.agents.runs", { n: agent.runtime.run_count })}
                                       </span>
                                       <span className="rounded bg-[#eef1f5] px-1.5 py-0.5">
-                                        tokens {agent.runtime.total_tokens.toLocaleString()}
+                                        {t("settings.agents.tokens", { n: agent.runtime.total_tokens.toLocaleString() })}
                                       </span>
                                       {agent.runtime.error_count > 0 && (
                                         <span className="rounded bg-[#fff1f0] px-1.5 py-0.5 text-[#b42318]">
-                                          errors {agent.runtime.error_count}
+                                          {t("settings.agents.errors", { n: agent.runtime.error_count })}
                                         </span>
                                       )}
                                     </div>
                                     {agent.invalid_tools.length ? (
                                       <div className="mt-0.5 truncate text-[11px] text-[#b42318]">
-                                        invalid: {agent.invalid_tools.join(", ")}
+                                        {t("settings.agents.invalid", { tools: agent.invalid_tools.join(", ") })}
                                       </div>
                                     ) : null}
                                   </button>
@@ -2145,7 +2258,7 @@ export default function SettingsDialog({
                               })
                             ) : (
                               <div className="rounded-md border border-dashed border-[#d8dde5] bg-white p-3 text-[12px] text-[#7a8088]">
-                                No custom agent definitions loaded.
+                                {t("settings.agents.noDefinitions")}
                               </div>
                             )}
                           </div>
@@ -2153,7 +2266,7 @@ export default function SettingsDialog({
 
                         <div className="min-w-0 p-3">
                           <div className="grid gap-3 sm:grid-cols-[1fr_auto]">
-                            <Field label="File name">
+                            <Field label={t("settings.agents.fileName")}>
                               <input
                                 className={inputCls}
                                 value={agentFileName}
@@ -2168,7 +2281,7 @@ export default function SettingsDialog({
                                 disabled={agentBusy || !agentJson.trim()}
                                 onClick={validateAgentJson}
                               >
-                                Validate
+                                {t("settings.agents.validate")}
                               </button>
                               <button
                                 className={secondaryButtonCls}
@@ -2176,7 +2289,7 @@ export default function SettingsDialog({
                                 disabled={agentBusy || !agentJson.trim()}
                                 onClick={exportCurrentAgentJson}
                               >
-                                Export
+                                {t("settings.agents.export")}
                               </button>
                               <button
                                 className="inline-flex h-9 items-center justify-center rounded-md bg-[#111827] px-4 text-[12px] font-medium text-white transition hover:bg-[#2b3442] disabled:cursor-not-allowed disabled:bg-[#b8bec8]"
@@ -2184,7 +2297,7 @@ export default function SettingsDialog({
                                 disabled={agentBusy || !agentJson.trim()}
                                 onClick={saveAgentJson}
                               >
-                                Save
+                                {t("settings.agents.save")}
                               </button>
                             </div>
                           </div>
@@ -2203,32 +2316,32 @@ export default function SettingsDialog({
                           {selectedAgentDefinition && (
                             <div className="mt-3 grid gap-2 rounded-lg border border-[#e2e5ea] bg-white p-3 text-[12px] text-[#6f7782] sm:grid-cols-4">
                               <div>
-                                <div className="text-[11px] text-[#8a9099]">Runs</div>
+                                <div className="text-[11px] text-[#8a9099]">{t("settings.agents.statRuns")}</div>
                                 <div className="mt-1 font-semibold text-[#202124]">
                                   {selectedAgentDefinition.runtime.run_count.toLocaleString()}
                                 </div>
                               </div>
                               <div>
-                                <div className="text-[11px] text-[#8a9099]">Tokens</div>
+                                <div className="text-[11px] text-[#8a9099]">{t("settings.agents.statTokens")}</div>
                                 <div className="mt-1 font-semibold text-[#202124]">
                                   {selectedAgentDefinition.runtime.total_tokens.toLocaleString()}
                                 </div>
                               </div>
                               <div>
-                                <div className="text-[11px] text-[#8a9099]">Errors</div>
+                                <div className="text-[11px] text-[#8a9099]">{t("settings.agents.statErrors")}</div>
                                 <div className="mt-1 font-semibold text-[#202124]">
                                   {selectedAgentDefinition.runtime.error_count.toLocaleString()}
                                 </div>
                               </div>
                               <div>
-                                <div className="text-[11px] text-[#8a9099]">Last Used</div>
+                                <div className="text-[11px] text-[#8a9099]">{t("settings.agents.statLastUsed")}</div>
                                 <div className="mt-1 font-semibold text-[#202124]">
                                   {formatTime(selectedAgentDefinition.runtime.last_used_at || 0)}
                                 </div>
                               </div>
                               {selectedAgentDefinition.runtime.last_error && (
                                 <div className="min-w-0 sm:col-span-4">
-                                  <div className="text-[11px] text-[#8a9099]">Last Error</div>
+                                  <div className="text-[11px] text-[#8a9099]">{t("settings.agents.statLastError")}</div>
                                   <div className="mt-1 break-words text-[#b42318]">
                                     {selectedAgentDefinition.runtime.last_error}
                                   </div>
@@ -2245,7 +2358,7 @@ export default function SettingsDialog({
                                 disabled={agentBusy}
                                 onClick={() => deleteAgentJson(agentFile.name)}
                               >
-                                Delete
+                                {t("settings.agents.delete")}
                               </button>
                             )}
                             {agentFile?.path && (
@@ -2265,7 +2378,7 @@ export default function SettingsDialog({
                               }`}
                             >
                               <div className="font-semibold">
-                                {agentValidation.ok ? "Validation passed" : "Validation failed"}
+                                {agentValidation.ok ? t("settings.agents.validationPassed") : t("settings.agents.validationFailed")}
                               </div>
                               {agentValidation.normalized_name && (
                                 <div>
@@ -2273,10 +2386,10 @@ export default function SettingsDialog({
                                 </div>
                               )}
                               {agentValidation.errors.map((error) => (
-                                <div key={error}>Error: {error}</div>
+                                <div key={error}>{t("settings.agents.errorPrefix", { msg: error })}</div>
                               ))}
                               {agentValidation.warnings.map((warning) => (
-                                <div key={warning}>Warning: {warning}</div>
+                                <div key={warning}>{t("settings.agents.warningPrefix", { msg: warning })}</div>
                               ))}
                             </div>
                           )}
@@ -2289,17 +2402,17 @@ export default function SettingsDialog({
 
               {activeTab === "tools" && (
                 <>
-                  <Section title="MCP Servers">
+                  <Section title={t("settings.mcp.title")}>
                     <div className="mb-3 flex items-center justify-between gap-3">
                       <div className="text-[12px] text-[#7a8088]">
-                        stdio servers are started locally and exposed as `mcp__server__tool` tools.
+                        {t("settings.mcp.desc")}
                       </div>
                       <div className="flex shrink-0 gap-2">
                         <button className={secondaryButtonCls} type="button" disabled={mcpBusy} onClick={refreshMcp}>
-                          Refresh
+                          {t("settings.mcp.refresh")}
                         </button>
                         <button className={secondaryButtonCls} type="button" onClick={addMcpServer}>
-                          Add server
+                          {t("settings.mcp.addServer")}
                         </button>
                       </div>
                     </div>
@@ -2320,15 +2433,15 @@ export default function SettingsDialog({
                                 <input
                                   className={`${inputCls} max-w-[220px]`}
                                   value={server.name}
-                                  placeholder="server-name"
+                                  placeholder={t("settings.mcp.serverNamePlaceholder")}
                                   onChange={(e) => updateMcpServer(index, { name: e.target.value })}
                                 />
                                 <span className="rounded-md bg-white px-2 py-1 text-[11px] text-[#5f6368]">
-                                  {mcpStatusLabel(status)}
+                                  {mcpStatusLabel(status, t)}
                                 </span>
                                 {runtime?.tool_count ? (
                                   <span className="rounded-md bg-white px-2 py-1 text-[11px] text-[#5f6368]">
-                                    {runtime.tool_count} tools
+                                    {t("settings.mcp.toolsCount", { n: runtime.tool_count })}
                                   </span>
                                 ) : null}
                                 <label className="ml-auto flex items-center gap-2 text-[12px] text-[#5f6368]">
@@ -2338,7 +2451,7 @@ export default function SettingsDialog({
                                     checked={server.enabled}
                                     onChange={(e) => updateMcpServer(index, { enabled: e.target.checked })}
                                   />
-                                  Enabled
+                                  {t("settings.mcp.enabled")}
                                 </label>
                                 {saved && (
                                   <button
@@ -2347,15 +2460,15 @@ export default function SettingsDialog({
                                     disabled={mcpBusy}
                                     onClick={() => setSavedMcpServerEnabled(server.name, !server.enabled)}
                                   >
-                                    {server.enabled ? "Stop" : "Start"}
+                                    {server.enabled ? t("settings.mcp.stop") : t("settings.mcp.start")}
                                   </button>
                                 )}
                                 <button className={secondaryButtonCls} type="button" onClick={() => removeMcpServer(index)}>
-                                  Remove
+                                  {t("settings.mcp.remove")}
                                 </button>
                               </div>
                               <div className="grid gap-3 sm:grid-cols-[1fr_1fr]">
-                                <Field label="Command">
+                                <Field label={t("settings.mcp.command")}>
                                   <input
                                     className={inputCls}
                                     value={server.command}
@@ -2363,12 +2476,12 @@ export default function SettingsDialog({
                                     onChange={(e) => updateMcpServer(index, { command: e.target.value })}
                                   />
                                 </Field>
-                                <Field label="Transport">
+                                <Field label={t("settings.mcp.transport")}>
                                   <input className={inputCls} value="stdio" disabled />
                                 </Field>
                               </div>
                               <div className="mt-3 grid gap-3 sm:grid-cols-2">
-                                <Field label="Arguments" help="One argument per line. On Windows, use cmd with /c and npx on following lines.">
+                                <Field label={t("settings.mcp.args")} help={t("settings.mcp.argsHelp")}>
                                   <textarea
                                     className="min-h-24 w-full resize-y rounded-md border border-[#d9d9d9] bg-white px-3 py-2 text-[12px] text-[#202124] outline-none transition focus:border-[#7a7f87] focus:ring-1 focus:ring-[#202124]/10"
                                     value={server.args.join("\n")}
@@ -2376,7 +2489,7 @@ export default function SettingsDialog({
                                     onChange={(e) => updateMcpServer(index, { args: splitLines(e.target.value) })}
                                   />
                                 </Field>
-                                <Field label="Environment" help="KEY=value, one per line. Secret-like keys are stored in the system credential manager.">
+                                <Field label={t("settings.mcp.env")} help={t("settings.mcp.envHelp")}>
                                   <textarea
                                     className="min-h-24 w-full resize-y rounded-md border border-[#d9d9d9] bg-white px-3 py-2 text-[12px] text-[#202124] outline-none transition focus:border-[#7a7f87] focus:ring-1 focus:ring-[#202124]/10"
                                     value={formatEnvLines(server)}
@@ -2400,12 +2513,12 @@ export default function SettingsDialog({
                         })
                       ) : (
                         <div className="rounded-lg border border-dashed border-[#d8dde5] bg-[#fbfcfd] p-4 text-[12px] text-[#7a8088]">
-                          No MCP servers configured.
+                          {t("settings.mcp.noServers")}
                         </div>
                       )}
                     </div>
                     <div className="mt-4 rounded-lg border border-[#e2e5ea] bg-[#fbfcfd] p-3">
-                      <div className="mb-2 text-[13px] font-medium text-[#202124]">Discovered tools</div>
+                      <div className="mb-2 text-[13px] font-medium text-[#202124]">{t("settings.mcp.discoveredTools")}</div>
                       <div className="max-h-48 overflow-auto">
                         {mcpState?.tools.length ? (
                           <div className="grid gap-2">
@@ -2424,16 +2537,17 @@ export default function SettingsDialog({
                             ))}
                           </div>
                         ) : (
-                          <div className="text-[12px] text-[#7a8088]">No MCP tools discovered.</div>
+                          <div className="text-[12px] text-[#7a8088]">{t("settings.mcp.noTools")}</div>
                         )}
                       </div>
                       {mcpState?.resources && Object.keys(mcpState.resources).length > 0 && (
                         <div className="mt-3 border-t border-[#e2e5ea] pt-3">
-                          <div className="mb-2 text-[13px] font-medium text-[#202124]">Resources</div>
+                          <div className="mb-2 text-[13px] font-medium text-[#202124]">{t("settings.mcp.resources")}</div>
                           <div className="space-y-1 text-[12px] text-[#6f7782]">
                             {Object.entries(mcpState.resources).map(([serverName, resources]) => (
                               <div key={serverName}>
-                                <span className="font-medium text-[#202124]">{serverName}</span>: {resources.length} resources
+                                <span className="font-medium text-[#202124]">{serverName}</span>:{" "}
+                                {t("settings.mcp.resourcesCount", { n: resources.length })}
                               </div>
                             ))}
                           </div>
@@ -2441,15 +2555,15 @@ export default function SettingsDialog({
                       )}
                     </div>
                   </Section>
-                  <Section title="Computer Use / OCR">
+                  <Section title={t("settings.ocr.title")}>
                     <ToggleRow
                       checked={form.computer_use_enabled}
-                      title="Enable screen and OCR tools"
-                      description="Screen capture and OCR still require explicit confirmation before reading pixels."
+                      title={t("settings.ocr.toggle")}
+                      description={t("settings.ocr.toggleDesc")}
                       onChange={(checked) => set("computer_use_enabled", checked)}
                     />
                     <div className="mt-4 grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto_auto]">
-                      <Field label="OCR model source" help={selectedOcrSource.note}>
+                      <Field label={t("settings.ocr.modelSource")} help={t(selectedOcrSource.noteKey)}>
                         <Select
                           value={form.ocr_model_source}
                           onChange={(v) => set("ocr_model_source", v as OcrModelSource)}
@@ -2462,7 +2576,7 @@ export default function SettingsDialog({
                         onClick={refreshOcrStatus}
                         type="button"
                       >
-                        Refresh
+                        {t("settings.ocr.refresh")}
                       </button>
                       <button
                         className="mt-[22px] inline-flex h-9 items-center justify-center rounded-md bg-[#111827] px-4 text-[12px] font-medium text-white transition hover:bg-[#2b3442] disabled:cursor-not-allowed disabled:bg-[#b8bec8]"
@@ -2470,13 +2584,13 @@ export default function SettingsDialog({
                         onClick={downloadOcrModels}
                         type="button"
                       >
-                        {ocrBusy ? "Downloading" : ocrStatus?.installed ? "Redownload" : "Download models"}
+                        {ocrBusy ? t("settings.ocr.downloading") : ocrStatus?.installed ? t("settings.ocr.redownload") : t("settings.ocr.download")}
                       </button>
                     </div>
                     <div className="mt-3 rounded-lg border border-[#e2e5ea] bg-[#fbfcfd] p-3 text-[12px] leading-5 text-[#6f7782]">
                       <div className="flex flex-wrap items-center justify-between gap-2">
                         <div className="font-medium text-[#202124]">
-                          {ocrStatus?.installed ? "Ready" : "Missing models"}
+                          {ocrStatus?.installed ? t("settings.ocr.ready") : t("settings.ocr.missingModels")}
                           {ocrStatus ? ` · ${formatBytes(ocrStatus.totalBytes)}` : ""}
                         </div>
                         <a
@@ -2488,8 +2602,8 @@ export default function SettingsDialog({
                           {ocrStatus?.sourceLabel || selectedOcrSource.label}
                         </a>
                       </div>
-                      <div className="mt-1 text-[#7a8088]">{ocrStatus?.sourceNote || selectedOcrSource.note}</div>
-                      {ocrStatus?.modelDir && <div className="mt-2 break-all">Path: {ocrStatus.modelDir}</div>}
+                      <div className="mt-1 text-[#7a8088]">{ocrStatus?.sourceNote || t(selectedOcrSource.noteKey)}</div>
+                      {ocrStatus?.modelDir && <div className="mt-2 break-all">{t("settings.ocr.pathPrefix", { path: ocrStatus.modelDir })}</div>}
                       {ocrStatus && (
                         <div className="mt-3 overflow-hidden rounded-md border border-[#e4e7eb] bg-white">
                           {ocrStatus.files.map((file) => (
@@ -2501,7 +2615,7 @@ export default function SettingsDialog({
                                 {file.name}
                               </div>
                               <div className={file.present ? "text-[#177245]" : "text-[#b42318]"}>
-                                {file.present ? "Present" : "Missing"}
+                                {file.present ? t("settings.ocr.present") : t("settings.ocr.missing")}
                               </div>
                               <a
                                 className="text-right text-[#1557b0] hover:underline"
@@ -2509,7 +2623,7 @@ export default function SettingsDialog({
                                 rel="noreferrer"
                                 target="_blank"
                               >
-                                Source
+                                {t("settings.ocr.source")}
                               </a>
                             </div>
                           ))}
@@ -2517,15 +2631,18 @@ export default function SettingsDialog({
                       )}
                       {ocrStatus && !ocrStatus.installed && (
                         <div className="mt-3 rounded-md border border-[#f5d6a4] bg-[#fff8eb] px-3 py-2 text-[#7a4d00]">
-                          Missing: {ocrStatus.missing.join(", ")}. {ocrStatus.manualInstallHint}
+                          {t("settings.ocr.missingHint", { files: ocrStatus.missing.join(", "), hint: ocrStatus.manualInstallHint })}
                         </div>
                       )}
                       {ocrProgress && (
                         <div className="mt-3 space-y-2">
                           <div className="flex flex-wrap items-center justify-between gap-2 text-[#3b4350]">
                             <span>
-                              Overall: {ocrOverallProgressPct ?? 0}% · {ocrProgress.completedFiles}/
-                              {ocrProgress.totalFiles} files
+                              {t("settings.ocr.overall", {
+                                pct: ocrOverallProgressPct ?? 0,
+                                done: ocrProgress.completedFiles,
+                                total: ocrProgress.totalFiles,
+                              })}
                             </span>
                             <span>{formatBytes(ocrProgress.downloadedTotalBytes)}</span>
                           </div>
@@ -2537,7 +2654,12 @@ export default function SettingsDialog({
                           </div>
                           <div className="flex flex-wrap items-center justify-between gap-2 text-[#6f7782]">
                             <span>
-                              File {ocrProgress.index}/{ocrProgress.totalFiles}: {ocrProgress.file} · {ocrProgress.phase}
+                              {t("settings.ocr.fileProgress", {
+                                index: ocrProgress.index,
+                                total: ocrProgress.totalFiles,
+                                file: ocrProgress.file,
+                                phase: ocrProgress.phase,
+                              })}
                             </span>
                             <span>
                               {formatBytes(ocrProgress.downloadedBytes)}
@@ -2558,10 +2680,10 @@ export default function SettingsDialog({
                       {ocrError && <div className="text-[#b42318]">{ocrError}</div>}
                     </div>
                   </Section>
-                  <Section title="Permission Rules" description="Rule-based allow / deny / ask controls for tool calls.">
+                  <Section title={t("settings.perm.title")} description={t("settings.perm.desc")}>
                     <div className="mb-3 flex justify-between gap-3">
                       <div className="text-[12px] leading-5 text-[#7a8088]">
-                        Resolution order: session rules, project rules, user rules, then the tool default.
+                        {t("settings.perm.resolutionOrder")}
                       </div>
                       <button
                         className={secondaryButtonCls}
@@ -2569,13 +2691,13 @@ export default function SettingsDialog({
                         disabled={permissionBusy}
                         onClick={refreshPermissionState}
                       >
-                        Refresh
+                        {t("settings.perm.refresh")}
                       </button>
                     </div>
 
                     <div className="mb-4 rounded-lg border border-[#e2e5ea] bg-[#fbfcfd] p-3">
                       <div className="grid gap-3 md:grid-cols-[1fr_140px_140px]">
-                        <Field label="Tool">
+                        <Field label={t("settings.perm.tool")}>
                           <select
                             className={inputCls}
                             value={permissionDraft.tool}
@@ -2588,7 +2710,7 @@ export default function SettingsDialog({
                             ))}
                           </select>
                         </Field>
-                        <Field label="Effect">
+                        <Field label={t("settings.perm.effect")}>
                           <select
                             className={inputCls}
                             value={permissionDraft.effect}
@@ -2599,12 +2721,12 @@ export default function SettingsDialog({
                               }))
                             }
                           >
-                            <option value="ask">Ask</option>
-                            <option value="allow">Allow</option>
-                            <option value="deny">Deny</option>
+                            <option value="ask">{t("settings.perm.effect.ask")}</option>
+                            <option value="allow">{t("settings.perm.effect.allow")}</option>
+                            <option value="deny">{t("settings.perm.effect.deny")}</option>
                           </select>
                         </Field>
-                        <Field label="Scope">
+                        <Field label={t("settings.perm.scope")}>
                           <select
                             className={inputCls}
                             value={permissionDraft.scope}
@@ -2615,18 +2737,18 @@ export default function SettingsDialog({
                               }))
                             }
                           >
-                            <option value="session">Session</option>
-                            <option value="project">Project</option>
-                            <option value="user">User</option>
+                            <option value="session">{t("settings.perm.scope.session")}</option>
+                            <option value="project">{t("settings.perm.scope.project")}</option>
+                            <option value="user">{t("settings.perm.scope.user")}</option>
                           </select>
                         </Field>
                       </div>
                       <div className="mt-3 grid gap-3 md:grid-cols-[1fr_auto]">
-                        <Field label="Reason">
+                        <Field label={t("settings.perm.reason")}>
                           <input
                             className={inputCls}
                             value={permissionDraft.reason}
-                            placeholder="Why this rule exists"
+                            placeholder={t("settings.perm.reasonPlaceholder")}
                             onChange={(e) => setPermissionDraft((draft) => ({ ...draft, reason: e.target.value }))}
                           />
                         </Field>
@@ -2636,15 +2758,15 @@ export default function SettingsDialog({
                           disabled={permissionBusy || !permissionDraft.tool}
                           onClick={savePermissionRule}
                         >
-                          Save Rule
+                          {t("settings.perm.saveRule")}
                         </button>
                       </div>
                       {selectedPermissionTool && (
                         <div className="mt-3 rounded-md border border-[#e8ebef] bg-white p-3 text-[12px] leading-5 text-[#6f7782]">
                           <div className="font-medium text-[#202124]">
-                            {permissionRiskLabel(selectedPermissionTool.risk)} / default{" "}
-                            {permissionEffectLabel(selectedPermissionTool.default_effect)} /{" "}
-                            {permissionScopeLabel(selectedPermissionTool.default_scope)}
+                            {permissionRiskLabel(selectedPermissionTool.risk, t)} / {t("settings.perm.defaultPrefix")}{" "}
+                            {permissionEffectLabel(selectedPermissionTool.default_effect, t)} /{" "}
+                            {permissionScopeLabel(selectedPermissionTool.default_scope, t)}
                           </div>
                           <div className="mt-1">{selectedPermissionTool.description}</div>
                           <div className="mt-1 text-[#8a9099]">{selectedPermissionTool.default_reason}</div>
@@ -2656,37 +2778,44 @@ export default function SettingsDialog({
                       <div className="mb-4 rounded-lg border border-[#e2e5ea] bg-white p-3">
                         <div className="flex flex-wrap items-start justify-between gap-3">
                           <div>
-                            <div className="text-[13px] font-semibold text-[#202124]">Shell Isolation Policy</div>
+                            <div className="text-[13px] font-semibold text-[#202124]">{t("settings.shell.title")}</div>
                             <div className="mt-1 text-[12px] text-[#7a8088]">
-                              {shellPolicyState.platform} / default {shellPolicyValue(shellPolicyState.default_isolation)} / strict{" "}
-                              {shellPolicyState.strict_timeout_secs}s
+                              {t("settings.shell.summary", {
+                                platform: shellPolicyState.platform,
+                                isolation: shellPolicyValue(shellPolicyState.default_isolation),
+                                timeout: shellPolicyState.strict_timeout_secs,
+                              })}
                             </div>
                           </div>
                           <div className="flex flex-wrap gap-1 text-[11px]">
                             <span className="rounded-md bg-[#eef1f5] px-2 py-1">
-                              process group: {shellPolicyState.containment.process_group ? "on" : "off"}
+                              {t("settings.shell.processGroup", {
+                                state: shellPolicyState.containment.process_group ? t("settings.shell.on") : t("settings.shell.off"),
+                              })}
                             </span>
                             <span className="rounded-md bg-[#eef1f5] px-2 py-1">
-                              tree kill: {shellPolicyState.containment.kill_process_tree_on_timeout ? "on" : "off"}
+                              {t("settings.shell.treeKill", {
+                                state: shellPolicyState.containment.kill_process_tree_on_timeout ? t("settings.shell.on") : t("settings.shell.off"),
+                              })}
                             </span>
                           </div>
                         </div>
 
                         <div className="mt-3 grid gap-3 md:grid-cols-2">
                           <div className="rounded-md border border-[#e8ebef] bg-[#fbfcfd] p-3 text-[12px] leading-5 text-[#6f7782]">
-                            <div className="font-medium text-[#202124]">Platform containment</div>
-                            <div className="mt-1">Filesystem: {shellPolicyState.containment.filesystem_sandbox}</div>
-                            <div>Network: {shellPolicyState.containment.network_sandbox}</div>
+                            <div className="font-medium text-[#202124]">{t("settings.shell.containment")}</div>
+                            <div className="mt-1">{t("settings.shell.filesystem", { value: shellPolicyState.containment.filesystem_sandbox })}</div>
+                            <div>{t("settings.shell.network", { value: shellPolicyState.containment.network_sandbox })}</div>
                             <div className="mt-2 flex flex-wrap gap-1">
                               {shellPolicyState.strict_blocked_risks.map((risk) => (
                                 <span key={risk.id} className="rounded-md bg-[#fff1f1] px-2 py-0.5 text-[#9f1d1d]">
-                                  deny {shellPolicyValue(risk.id)}
+                                  {t("settings.shell.deny", { value: shellPolicyValue(risk.id) })}
                                 </span>
                               ))}
                             </div>
                           </div>
                           <div className="rounded-md border border-[#e8ebef] bg-[#fbfcfd] p-3 text-[12px] leading-5 text-[#6f7782]">
-                            <div className="font-medium text-[#202124]">Environment allowlist</div>
+                            <div className="font-medium text-[#202124]">{t("settings.shell.envAllowlist")}</div>
                             <div className="mt-2 flex flex-wrap gap-1">
                               {shellPolicyState.env_allowlist.map((name) => (
                                 <span key={name} className="rounded-md bg-white px-2 py-0.5 font-mono text-[11px] text-[#344054]">
@@ -2698,14 +2827,14 @@ export default function SettingsDialog({
                         </div>
 
                         <div className="mt-3 rounded-md border border-[#e8ebef] bg-[#fbfcfd] p-3">
-                          <div className="mb-2 text-[12px] font-medium text-[#202124]">Command policy patterns</div>
+                          <div className="mb-2 text-[12px] font-medium text-[#202124]">{t("settings.shell.commandPolicy")}</div>
                           <div className="grid gap-2 md:grid-cols-2">
                             {shellPolicyState.risk_rules.map((rule) => (
                               <div key={`${rule.class.id}:${rule.reason}`} className="rounded-md bg-white p-2 text-[12px] leading-5 text-[#6f7782]">
                                 <div className="flex items-center justify-between gap-2">
                                   <span className="font-medium text-[#202124]">{shellPolicyValue(rule.class.id)}</span>
                                   <span className={rule.blocked_in_strict ? "text-[#9f1d1d]" : "text-[#7a8088]"}>
-                                    {rule.blocked_in_strict ? "strict deny" : rule.class.severity}
+                                    {rule.blocked_in_strict ? t("settings.shell.strictDeny") : rule.class.severity}
                                   </span>
                                 </div>
                                 <div className="mt-1">{rule.reason}</div>
@@ -2728,7 +2857,7 @@ export default function SettingsDialog({
                               <div className="min-w-0 flex-1">
                                 <div className="truncate text-[13px] font-semibold text-[#202124]">{rule.tool}</div>
                                 <div className="mt-1 text-[12px] text-[#7a8088]">
-                                  {permissionEffectLabel(rule.effect)} / {permissionScopeLabel(rule.scope)} /{" "}
+                                  {permissionEffectLabel(rule.effect, t)} / {permissionScopeLabel(rule.scope, t)} /{" "}
                                   {formatTime(rule.updated_at)}
                                 </div>
                                 <div className="mt-1 text-[12px] leading-5 text-[#8a9099]">{rule.reason}</div>
@@ -2739,7 +2868,7 @@ export default function SettingsDialog({
                                 disabled={permissionBusy || rule.scope === "once"}
                                 onClick={() => editPermissionRule(rule.scope, rule.tool, rule.effect, rule.reason)}
                               >
-                                Edit
+                                {t("settings.perm.edit")}
                               </button>
                               <button
                                 className={secondaryButtonCls}
@@ -2747,30 +2876,30 @@ export default function SettingsDialog({
                                 disabled={permissionBusy}
                                 onClick={() => resetPermissionRule(rule.scope, rule.tool)}
                               >
-                                Clear
+                                {t("settings.perm.clear")}
                               </button>
                             </div>
                           </div>
                         ))
                       ) : (
                         <div className="rounded-lg border border-dashed border-[#d8dde5] bg-[#fbfcfd] p-4 text-[12px] text-[#7a8088]">
-                          No remembered permission rules.
+                          {t("settings.perm.noRules")}
                         </div>
                       )}
                     </div>
                     <div className="mt-4 max-h-44 overflow-auto rounded-lg border border-[#e2e5ea] bg-[#fbfcfd] p-3 text-[12px] text-[#6f7782]">
-                      <div className="mb-2 font-semibold text-[#202124]">Recent audit</div>
+                      <div className="mb-2 font-semibold text-[#202124]">{t("settings.perm.recentAudit")}</div>
                       {permissionState?.audit.length ? (
                         permissionState.audit.slice(0, 8).map((entry) => (
                           <div key={`${entry.timestamp}:${entry.tool}:${entry.reason}`} className="border-t border-[#e8ebef] py-2 first:border-t-0">
                             <span className="font-medium text-[#202124]">{entry.tool}</span> /{" "}
-                            {permissionEffectLabel(entry.effect)} / {permissionScopeLabel(entry.scope)} /{" "}
+                            {permissionEffectLabel(entry.effect, t)} / {permissionScopeLabel(entry.scope, t)} /{" "}
                             {formatTime(entry.timestamp)}
                             <div className="text-[#8a9099]">{entry.reason}</div>
                           </div>
                         ))
                       ) : (
-                        <div>No audit entries.</div>
+                        <div>{t("settings.perm.noAudit")}</div>
                       )}
                     </div>
                   </Section>
@@ -2779,23 +2908,23 @@ export default function SettingsDialog({
 
               {activeTab === "voice" && (
                 <>
-                  <Section title="Voice">
+                  <Section title={t("settings.voice.title")}>
                     <ToggleRow
                       checked={form.voice_enabled}
-                      title="Enable voice adapters"
-                      description="The backend interface is reserved. Concrete STT/TTS providers can be wired later."
+                      title={t("settings.voice.toggle")}
+                      description={t("settings.voice.toggleDesc")}
                       onChange={(checked) => set("voice_enabled", checked)}
                     />
                     <div className="mt-4 grid gap-4 sm:grid-cols-2">
-                      <Field label="STT backend">
+                      <Field label={t("settings.voice.stt")} help={t("settings.voice.sttHelp")}>
                         <input
                           className={inputCls}
                           value={form.voice_stt_backend}
-                          placeholder="none / whisper / doubao"
+                          placeholder="none / dashscope / openai"
                           onChange={(e) => set("voice_stt_backend", e.target.value)}
                         />
                       </Field>
-                      <Field label="TTS backend">
+                      <Field label={t("settings.voice.tts")}>
                         <input
                           className={inputCls}
                           value={form.voice_tts_backend}
@@ -2805,7 +2934,7 @@ export default function SettingsDialog({
                       </Field>
                     </div>
                     <div className="mt-4">
-                      <Field label="Voice ID">
+                      <Field label={t("settings.voice.voiceId")}>
                         <input
                           className={inputCls}
                           value={form.voice_id}
@@ -2820,8 +2949,8 @@ export default function SettingsDialog({
 
               {activeTab === "advanced" && (
                 <>
-                  <Section title="Compatibility Limits">
-                    <Field label="Max context characters" help="Legacy character limit retained for older trimming paths.">
+                  <Section title={t("settings.advanced.title")}>
+                    <Field label={t("settings.advanced.maxChars")} help={t("settings.advanced.maxCharsHelp")}>
                       <input
                         className={inputCls}
                         type="number"

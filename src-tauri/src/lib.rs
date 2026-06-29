@@ -1206,6 +1206,31 @@ fn context_memory_source(id: &str, label: &str, path: &Path) -> ContextMemorySou
     }
 }
 
+/// 技能面板状态。可选 `query` 用于按用户输入对技能做匹配/检索打分。
+#[tauri::command]
+fn skill_panel_state(
+    state: State<'_, AppState>,
+    query: Option<String>,
+) -> agent::skills::SkillPanelState {
+    let sandbox = state.sandbox_dir.lock().unwrap().clone();
+    let data_dir = state.data_dir.lock().unwrap().clone();
+    let packs_dir = state.packs_dir.lock().unwrap().clone();
+    let pack_id = state.settings.lock().unwrap().current_pack.clone();
+    let trimmed = query.as_deref().map(str::trim).filter(|s| !s.is_empty());
+    agent::skills::panel_state(&sandbox, &data_dir, &packs_dir, &pack_id, trimmed)
+}
+
+/// 打开全局技能目录(供「在文件夹中显示」按钮使用)。
+#[tauri::command]
+fn open_skills_dir(state: State<'_, AppState>) -> Result<(), String> {
+    let data_dir = state.data_dir.lock().unwrap().clone();
+    let dir = data_dir.join("skills");
+    if !dir.exists() {
+        fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    }
+    tools::execute_open(&dir.to_string_lossy()).map(|_| ())
+}
+
 #[cfg(test)]
 mod context_panel_tests {
     use super::*;
@@ -1703,6 +1728,8 @@ pub fn run() {
             session_stats,
             get_history,
             context_panel_state,
+            skill_panel_state,
+            open_skills_dir,
             new_session,
             select_session,
             delete_session,

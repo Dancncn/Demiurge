@@ -8,10 +8,20 @@ import {
   releaseAttachment,
   type ProcessedAttachment,
 } from "../lib/fileProcessing";
-import { ArrowUpIcon, CloseIcon, FileIcon, MicIcon, PaperclipIcon, StopIcon } from "./Icons";
+import {
+  ArrowUpIcon,
+  CheckIcon,
+  ChevronDownIcon,
+  CloseIcon,
+  FileIcon,
+  MicIcon,
+  PaperclipIcon,
+  StopIcon,
+} from "./Icons";
 import { Select } from "./Select";
 import { ContextMeter } from "./ContextMeter";
 import { findProvider, REASONING_EFFORTS } from "../lib/providers";
+import { useI18n } from "../lib/i18n";
 import type { PermissionMode, ProviderKind, ReasoningEffort } from "../lib/types";
 
 const PERMISSION_MODE_LABELS: Record<PermissionMode, string> = {
@@ -36,6 +46,22 @@ const SLASH_COMMANDS: SlashCommand[] = [
 ];
 
 const MAX_TEXTAREA_HEIGHT = 200;
+
+// 选中麦克风设备的持久化 key（仅前端，不进 Settings/后端）。
+const VOICE_DEVICE_STORAGE_KEY = "demiurge.voiceInputDeviceId";
+
+type MicDevice = { deviceId: string; label: string };
+
+// 浏览器是否具备录音能力（非 Tauri/预览环境或无权限 API 时为 false）。
+function mediaRecordingSupported() {
+  return (
+    typeof navigator !== "undefined" &&
+    !!navigator.mediaDevices &&
+    typeof navigator.mediaDevices.getUserMedia === "function" &&
+    typeof window !== "undefined" &&
+    typeof window.MediaRecorder !== "undefined"
+  );
+}
 
 type Props = {
   input: string;
@@ -78,6 +104,7 @@ export function Composer({
   onStop,
   onInputChange,
 }: Props) {
+  const { t } = useI18n();
   const providerModels = findProvider(provider).models;
   const modelOptions = (model && !providerModels.includes(model) ? [model, ...providerModels] : providerModels).map(
     (m) => ({ value: m, label: m }),
@@ -124,6 +151,196 @@ export function Composer({
       attachmentsRef.current.forEach(releaseAttachment);
     };
   }, []);
+
+  // —— 语音输入 ——
+  const voiceSupported = mediaRecordingSupported();
+  const [recording, setRecording] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [devices, setDevices] = useState<MicDevice[]>([]);
+  const [permissionDenied, setPermissionDenied] = useState(false);
+  const [voiceToast, setVoiceToast] = useState<string | null>(null);
+  const [selectedDeviceId, setSelectedDeviceId] = useState<string>(() => {
+    if (typeof localStorage === "undefined") return "";
+    return localStorage.getItem(VOICE_DEVICE_STORAGE_KEY) ?? "";
+  });
+
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const mediaStreamRef = useRef<MediaStream | null>(null);
+  const chunksRef = useRef<Blob[]>([]);
+  const voiceMenuRef = useRef<HTMLDivElement | null>(null);
+  const voiceToastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const inputRef = useRef(input);
+  useEffect(() => {
+    inputRef.current = input;
+  }, [input]);
+
+  function showVoiceToast(message: string) {
+    setVoiceToast(message);
+    if (voiceToastTimerRef.current) clearTimeout(voiceToastTimerRef.current);
+    voiceToastTimerRef.current = setTimeout(() => setVoiceToast(null), 2600);
+  }
+
+  // 释放当前占用的麦克风流（停止所有 track）。
+  function releaseStream() {
+    mediaStreamRef.current?.getTracks().forEach((track) => track.stop());
+    mediaStreamRef.current = null;
+  }
+
+  // 枚举音频输入设备；label 为空时回退为「麦克风 N」。
+  async function refreshDevices() {
+    if (!voiceSupported || !navigator.mediaDevices.enumerateDevices) return;
+    try {
+      const all = await navigator.mediaDevices.enumerateDevices();
+      const mics = all
+        .filter((d) => d.kind === "audioinput")
+        .map((d, i) => ({ deviceId: d.deviceId, label: d.label || t("composer.voiceMicN", { n: i + 1 }) }));
+      setDevices(mics);
+    } catch {
+      // 枚举失败时保持现有列表，避免清空。
+    }
+  }
+
+  // 设备插拔时刷新列表（仅在浏览器支持时挂载监听）。
+  useEffect(() => {
+    if (!voiceSupported) return;
+    const md = navigator.mediaDevices;
+    const onChange = () => void refreshDevices();
+    md.addEventListener?.("devicechange", onChange);
+    return () => md.removeEventListener?.("devicechange", onChange);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [voiceSupported]);
+
+  // 卸载时停止录音并释放麦克风，清除 toast 计时器。
+  useEffect(() => {
+    return () => {
+      try {
+        mediaRecorderRef.current?.stop();
+      } catch {
+        /* ignore */
+      }
+      releaseStream();
+      if (voiceToastTimerRef.current) clearTimeout(voiceToastTimerRef.current);
+    };
+  }, []);
+
+  // 打开设备菜单：先触发一次授权以拿到 label，再枚举。
+  async function openVoiceMenu() {
+    setMenuOpen(true);
+    if (!voiceSupported) return;
+    try {
+      const probe = await navigator.mediaDevices.getUserMedia({ audio: true });
+      probe.getTracks().forEach((t) => t.stop()); // 立即释放探测流
+      setPermissionDenied(false);
+    } catch {
+      setPermissionDenied(true);
+    }
+    await refreshDevices();
+  }
+
+  function pickDevice(deviceId: string) {
+    setSelectedDeviceId(deviceId);
+    try {
+      localStorage.setItem(VOICE_DEVICE_STORAGE_KEY, deviceId);
+    } catch {
+      /* localStorage 不可用时忽略持久化 */
+    }
+    setMenuOpen(false);
+  }
+
+  // 点击外部 / Esc 关闭设备菜单。
+  useEffect(() => {
+    if (!menuOpen) return;
+    const onDown = (e: MouseEvent) => {
+      if (!voiceMenuRef.current?.contains(e.target as Node)) setMenuOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setMenuOpen(false);
+    };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [menuOpen]);
+
+  // 把录音 Blob 通过后端 STT 转写为文本并追加到输入框。
+  async function transcribe(blob: Blob) {
+    try {
+      const status = await api.voiceStatus();
+      if (!status.ready) {
+        showVoiceToast(status.reason || t("composer.voiceBackendMissing"));
+        return;
+      }
+      showVoiceToast(t("composer.voiceTranscribing"));
+      const audio = Array.from(new Uint8Array(await blob.arrayBuffer()));
+      const text = await api.voiceTranscribe(audio, blob.type || "audio/webm");
+      if (text && text.trim()) appendTranscript(text);
+      else showVoiceToast(t("composer.voiceBackendMissing"));
+    } catch (e) {
+      showVoiceToast(String(e) || t("composer.voiceBackendMissing"));
+    }
+  }
+
+  // 将转写文本追加到当前输入（保留用户已有内容）。供将来转写成功时调用。
+  function appendTranscript(text: string) {
+    const trimmed = text.trim();
+    if (!trimmed) return;
+    const current = inputRef.current;
+    onInputChange(current ? `${current}${current.endsWith(" ") ? "" : " "}${trimmed}` : trimmed);
+  }
+
+  async function startRecording() {
+    if (!voiceSupported) {
+      showVoiceToast(t("composer.voiceUnsupported"));
+      return;
+    }
+    try {
+      const constraints: MediaStreamConstraints = {
+        audio: selectedDeviceId ? { deviceId: { exact: selectedDeviceId } } : true,
+      };
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      mediaStreamRef.current = stream;
+      setPermissionDenied(false);
+      chunksRef.current = [];
+      const recorder = new MediaRecorder(stream);
+      mediaRecorderRef.current = recorder;
+      recorder.ondataavailable = (e) => {
+        if (e.data && e.data.size > 0) chunksRef.current.push(e.data);
+      };
+      recorder.onstop = () => {
+        const blob = new Blob(chunksRef.current, { type: recorder.mimeType || "audio/webm" });
+        chunksRef.current = [];
+        releaseStream();
+        setRecording(false);
+        if (blob.size > 0) void transcribe(blob);
+      };
+      recorder.start();
+      setRecording(true);
+      // 拿到真实授权后刷新设备 label，方便菜单展示。
+      void refreshDevices();
+    } catch {
+      releaseStream();
+      setRecording(false);
+      setPermissionDenied(true);
+      showVoiceToast(t("composer.voiceMicDenied"));
+    }
+  }
+
+  function stopRecording() {
+    const recorder = mediaRecorderRef.current;
+    if (recorder && recorder.state !== "inactive") {
+      recorder.stop(); // onstop 中收集 blob 并释放流
+    } else {
+      releaseStream();
+      setRecording(false);
+    }
+  }
+
+  function toggleRecording() {
+    if (recording) stopRecording();
+    else void startRecording();
+  }
 
   const attachmentReady = attachments.some((attachment) => attachment.status === "ready");
   const readyToSend = (canSend || attachmentReady) && !processingFiles;
@@ -212,7 +429,7 @@ export function Composer({
         {paletteOpen && (
           <div className="cf-menu-in absolute bottom-[calc(100%+8px)] left-0 right-0 z-30 overflow-hidden rounded-lg border border-[#e2e5ea] bg-white shadow-[0_12px_36px_rgba(15,23,42,0.16)]">
             <div className="border-b border-[#eef1f4] px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-[#8a9099]">
-              Commands
+              {t("composer.commands")}
             </div>
             <div className="max-h-64 overflow-y-auto p-1">
               {cmdMatches.map((c, i) => (
@@ -257,7 +474,7 @@ export function Composer({
                     <span className="block max-w-[220px] truncate font-medium">{attachment.name}</span>
                     <span className="block text-[11px] text-[#8a9099]">
                       {attachment.status === "error"
-                        ? "Failed"
+                        ? t("composer.failed")
                         : `${attachmentKindLabel(attachment.kind)} · ${formatAttachmentSize(attachment.size)}`}
                     </span>
                   </span>
@@ -265,7 +482,7 @@ export function Composer({
                     type="button"
                     onClick={() => removeAttachment(attachment.id)}
                     className="grid size-6 shrink-0 place-items-center rounded-md text-[#7a8088] opacity-80 transition hover:bg-[#eef1f5] hover:text-[#202124] group-hover:opacity-100"
-                    aria-label={`Remove ${attachment.name}`}
+                    aria-label={t("composer.removeAttachment", { name: attachment.name })}
                   >
                     <CloseIcon size={14} />
                   </button>
@@ -279,7 +496,7 @@ export function Composer({
             value={input}
             onChange={(event) => changeInput(event.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="Ask anything — type / for commands"
+            placeholder={t("composer.placeholder")}
             style={{ maxHeight: MAX_TEXTAREA_HEIGHT }}
             className="block max-h-[200px] min-h-[28px] w-full resize-none overflow-y-auto bg-transparent px-3 py-2 text-[14px] leading-6 outline-none placeholder:text-[#8a9099]"
           />
@@ -300,21 +517,83 @@ export function Composer({
               type="button"
               onClick={() => fileInputRef.current?.click()}
               disabled={loading || processingFiles}
-              title={processingFiles ? "Reading files…" : "Attach files"}
-              aria-label="Attach files"
+              title={processingFiles ? t("composer.reading") : t("composer.attach")}
+              aria-label={t("composer.attach")}
               className={`${ghostIcon} disabled:cursor-not-allowed disabled:opacity-50`}
             >
               <PaperclipIcon size={16} />
             </button>
-            <button
-              type="button"
-              onClick={onOpenSettings}
-              title="Voice input (configure in Settings)"
-              aria-label="Voice input"
-              className={`${ghostIcon} text-[#9aa1ab]`}
-            >
-              <MicIcon size={16} />
-            </button>
+            {/* 语音输入：录音按钮 + 设备选择箭头 + 向上弹出的设备菜单 */}
+            <div ref={voiceMenuRef} className="relative flex items-center">
+              <button
+                type="button"
+                onClick={toggleRecording}
+                disabled={!voiceSupported}
+                title={
+                  !voiceSupported
+                    ? t("composer.voiceUnsupported")
+                    : recording
+                      ? t("composer.voiceStop")
+                      : t("composer.voiceStart")
+                }
+                aria-label={recording ? t("composer.voiceStop") : t("composer.voiceStart")}
+                className={`${ghostIcon} ${
+                  recording ? "animate-pulse text-[#dc2626] hover:bg-[#fdecec]" : "text-[#9aa1ab]"
+                } disabled:cursor-not-allowed disabled:opacity-50`}
+              >
+                <MicIcon size={16} />
+              </button>
+              <button
+                type="button"
+                onClick={() => (menuOpen ? setMenuOpen(false) : void openVoiceMenu())}
+                title={t("composer.voicePick")}
+                aria-label={t("composer.voicePick")}
+                aria-haspopup="menu"
+                aria-expanded={menuOpen}
+                className="cf-press -ml-1 grid h-7 w-4 shrink-0 place-items-center rounded-md text-[#9aa1ab] hover:bg-[#eef1f5]"
+              >
+                <ChevronDownIcon
+                  size={12}
+                  className={`transition-transform duration-150 ${menuOpen ? "rotate-180" : ""}`}
+                />
+              </button>
+
+              {menuOpen && (
+                <div className="cf-menu-in absolute bottom-[calc(100%+6px)] left-0 z-30 max-h-[280px] w-56 overflow-y-auto rounded-lg border border-[#dfe3e8] bg-white p-1 shadow-[0_12px_36px_rgba(15,23,42,0.16)]">
+                  <div className="px-2.5 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-[#8a9099]">
+                    {t("composer.voiceDevices")}
+                  </div>
+                  {permissionDenied ? (
+                    <div className="px-2.5 py-2 text-[12px] text-[#b42318]">{t("composer.voicePermission")}</div>
+                  ) : devices.length === 0 ? (
+                    <div className="px-2.5 py-2 text-[12px] text-[#8a9099]">{t("composer.voiceNoDevices")}</div>
+                  ) : (
+                    devices.map((d) => {
+                      const active = d.deviceId === selectedDeviceId;
+                      return (
+                        <button
+                          key={d.deviceId || d.label}
+                          type="button"
+                          onClick={() => pickDevice(d.deviceId)}
+                          className={`flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left transition ${
+                            active ? "bg-[#eef1f5] text-[#111827]" : "text-[#3f444c] hover:bg-[#f3f4f7]"
+                          }`}
+                        >
+                          <span className="min-w-0 flex-1 truncate text-[13px] font-medium">{d.label}</span>
+                          {active && <CheckIcon size={15} className="shrink-0 text-[#111827]" />}
+                        </button>
+                      );
+                    })
+                  )}
+                </div>
+              )}
+
+              {voiceToast && !menuOpen && (
+                <div className="cf-menu-in absolute bottom-[calc(100%+6px)] left-0 z-30 w-60 rounded-lg border border-[#dfe3e8] bg-white px-3 py-2 text-[12px] text-[#3f444c] shadow-[0_12px_36px_rgba(15,23,42,0.16)]">
+                  {voiceToast}
+                </div>
+              )}
+            </div>
 
             <span className="mx-1 h-4 w-px bg-[#e5e8ed]" aria-hidden />
 
@@ -336,7 +615,7 @@ export function Composer({
               onChange={onSetModel}
               direction="up"
               align="right"
-              placeholder="Model"
+              placeholder={t("composer.model")}
               options={modelOptions}
               triggerClassName={ghostChip}
             />
@@ -354,7 +633,7 @@ export function Composer({
               onClick={loading ? onStop : undefined}
               disabled={!loading && !readyToSend}
               className="cf-press ml-0.5 grid size-8 shrink-0 place-items-center rounded-full bg-[#111827] text-white hover:scale-105 hover:bg-[#2b3442] disabled:scale-100 disabled:bg-[#c7ccd4] disabled:hover:bg-[#c7ccd4]"
-              aria-label={loading ? "Stop" : "Send"}
+              aria-label={loading ? t("composer.stop") : t("composer.send")}
             >
               {loading ? <StopIcon size={14} /> : <ArrowUpIcon size={18} />}
             </button>
