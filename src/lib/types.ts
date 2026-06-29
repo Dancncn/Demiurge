@@ -706,6 +706,7 @@ export type DisplayItem =
       id: string;
       kind: "assistant";
       text: string;
+      reasoning?: string;
       streaming: boolean;
       error?: boolean;
       errorTitle?: string;

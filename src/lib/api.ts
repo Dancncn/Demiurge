@@ -157,6 +157,7 @@ export const listenUnifiedAgentEvents = (handler: (e: AgentEventEnvelope) => voi
 export interface AgentEventHandlers {
   onAssistantStart: () => void;
   onAssistantDelta: (text: string) => void;
+  onAssistantReasoning?: (text: string) => void;
   onAssistantDone: (text: string) => void;
   onAssistantError: (e: AssistantErrorEvent) => void;
   onAssistantInterrupted: () => void;
@@ -171,6 +172,7 @@ export async function listenAgentEvents(h: AgentEventHandlers): Promise<Unlisten
   const uns: UnlistenFn[] = await Promise.all([
     listen("assistant-start", () => h.onAssistantStart()),
     listen<string>("assistant-delta", (e) => h.onAssistantDelta(e.payload)),
+    listen<string>("assistant-reasoning", (e) => h.onAssistantReasoning?.(e.payload)),
     listen<string>("assistant-done", (e) => h.onAssistantDone(e.payload)),
     listen<AssistantErrorEvent>("assistant-error", (e) => h.onAssistantError(e.payload)),
     listen("assistant-interrupted", () => h.onAssistantInterrupted()),

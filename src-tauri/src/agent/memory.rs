@@ -147,7 +147,13 @@ pub fn add_entry(
     }
     lines.push(format!("- [{clean_kind}] {clean_text}"));
     write_lines(&scope.path, lines)?;
-    Ok(panel_state(data_dir, sandbox_dir, packs_dir, pack_id, session_id))
+    Ok(panel_state(
+        data_dir,
+        sandbox_dir,
+        packs_dir,
+        pack_id,
+        session_id,
+    ))
 }
 
 pub fn update_entry(
@@ -179,7 +185,13 @@ pub fn update_entry(
     }
     lines[entry.line - 1] = format!("- [{clean_kind}] {clean_text}");
     write_lines(&path, lines)?;
-    Ok(panel_state(data_dir, sandbox_dir, packs_dir, pack_id, session_id))
+    Ok(panel_state(
+        data_dir,
+        sandbox_dir,
+        packs_dir,
+        pack_id,
+        session_id,
+    ))
 }
 
 pub fn delete_entry(
@@ -204,7 +216,13 @@ pub fn delete_entry(
     }
     lines.remove(entry.line - 1);
     write_lines(&path, lines)?;
-    Ok(panel_state(data_dir, sandbox_dir, packs_dir, pack_id, session_id))
+    Ok(panel_state(
+        data_dir,
+        sandbox_dir,
+        packs_dir,
+        pack_id,
+        session_id,
+    ))
 }
 
 pub fn apply_dedupe(
@@ -237,7 +255,13 @@ pub fn apply_dedupe(
             .collect::<Vec<_>>();
         write_lines(&scope.path, lines)?;
     }
-    Ok(panel_state(data_dir, sandbox_dir, packs_dir, pack_id, session_id))
+    Ok(panel_state(
+        data_dir,
+        sandbox_dir,
+        packs_dir,
+        pack_id,
+        session_id,
+    ))
 }
 
 pub async fn extract_and_update(
@@ -373,7 +397,12 @@ fn parse_entries(scope: &str, scope_label: &str, raw: &str) -> Vec<MemoryEntry> 
         .collect()
 }
 
-fn parse_entry_line(scope: &str, scope_label: &str, line_no: usize, line: &str) -> Option<MemoryEntry> {
+fn parse_entry_line(
+    scope: &str,
+    scope_label: &str,
+    line_no: usize,
+    line: &str,
+) -> Option<MemoryEntry> {
     let trimmed = line.trim();
     let body = trimmed.strip_prefix("- ")?.trim();
     let (kind, text) = if let Some(rest) = body.strip_prefix('[') {
@@ -430,7 +459,8 @@ fn is_duplicate_key(a: &str, b: &str) -> bool {
 
 fn write_lines(path: &Path, lines: Vec<String>) -> Result<(), String> {
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|e| format!("Failed to create memory directory: {e}"))?;
+        fs::create_dir_all(parent)
+            .map_err(|e| format!("Failed to create memory directory: {e}"))?;
     }
     let mut next = lines.join("\n");
     if !next.is_empty() {
@@ -500,7 +530,8 @@ fn append_entries(sandbox_dir: &Path, entries: &[(String, String)]) -> Result<()
         return Ok(());
     }
 
-    fs::create_dir_all(&memory_dir).map_err(|e| format!("Failed to create memory directory: {e}"))?;
+    fs::create_dir_all(&memory_dir)
+        .map_err(|e| format!("Failed to create memory directory: {e}"))?;
 
     let mut next = existing;
     if next.trim().is_empty() {
@@ -586,18 +617,26 @@ mod tests {
         assert_eq!(entries[0].kind, "project");
         let duplicates = audit_duplicates(&entries);
         assert_eq!(duplicates.len(), 1);
-        assert_eq!(duplicates[0].duplicate_ids, vec!["project:mem-3".to_string()]);
+        assert_eq!(
+            duplicates[0].duplicate_ids,
+            vec!["project:mem-3".to_string()]
+        );
     }
 
     #[test]
     fn updates_and_deletes_memory_entries_on_disk() {
-        let root = std::env::temp_dir().join(format!("demiurge_memory_{}", crate::store::now_millis()));
+        let root =
+            std::env::temp_dir().join(format!("demiurge_memory_{}", crate::store::now_millis()));
         let data = root.join("data");
         let sandbox = root.join("sandbox");
         let packs = root.join("packs");
         let memory_dir = sandbox.join(".demiurge");
         std::fs::create_dir_all(&memory_dir).unwrap();
-        std::fs::write(memory_dir.join("memory.md"), "# Automatic memory\n- [project] Old text\n").unwrap();
+        std::fs::write(
+            memory_dir.join("memory.md"),
+            "# Automatic memory\n- [project] Old text\n",
+        )
+        .unwrap();
 
         let state = update_entry(
             &data,
@@ -610,7 +649,11 @@ mod tests {
             "New text",
         )
         .unwrap();
-        let project = state.scopes.iter().find(|scope| scope.id == "project").unwrap();
+        let project = state
+            .scopes
+            .iter()
+            .find(|scope| scope.id == "project")
+            .unwrap();
         assert_eq!(project.entries[0].kind, "user");
         assert_eq!(project.entries[0].text, "New text");
 
@@ -623,14 +666,21 @@ mod tests {
             "project:mem-2",
         )
         .unwrap();
-        let project = state.scopes.iter().find(|scope| scope.id == "project").unwrap();
+        let project = state
+            .scopes
+            .iter()
+            .find(|scope| scope.id == "project")
+            .unwrap();
         assert!(project.entries.is_empty());
         let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
     fn adds_entries_to_user_session_and_pack_scopes() {
-        let root = std::env::temp_dir().join(format!("demiurge_memory_scopes_{}", crate::store::now_millis()));
+        let root = std::env::temp_dir().join(format!(
+            "demiurge_memory_scopes_{}",
+            crate::store::now_millis()
+        ));
         let data = root.join("data");
         let sandbox = root.join("sandbox");
         let packs = root.join("packs");

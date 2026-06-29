@@ -552,15 +552,27 @@ pub(crate) fn normalize_finish_reason(
     }
 }
 
+/// 流式增量的类型：`Content` 是要展示给用户的正文；`Reasoning` 是推理型模型
+/// （DeepSeek-R1/V4、Kimi、qwen `*-flash` 思考版等）在正文之前输出的思维链
+/// （OpenAI 兼容端点的 `delta.reasoning_content`、Anthropic 的 `thinking_delta`、
+/// Gemini 的 thought part）。两者分开回调，前端可把推理单独渲染成「思考中」气泡，
+/// 避免推理阶段界面长时间无任何反馈。
+#[derive(Clone, Copy, Debug)]
+pub enum StreamDelta<'a> {
+    Content(&'a str),
+    Reasoning(&'a str),
+}
+
 /// 流式调用当前设置选择的 provider。
-/// - `on_delta`：每收到一段正文增量就回调（用于把 token 实时推给前端）。
+/// - `on_delta`：每收到一段增量就回调（`StreamDelta::Content` 为正文，
+///   `StreamDelta::Reasoning` 为思维链），用于把 token 实时推给前端。
 /// - `cancel`：用户中断标志，置位后尽快结束并返回 finish_reason="interrupted"。
 pub async fn stream_completion(
     client: &reqwest::Client,
     cfg: &Settings,
     messages: &[Message],
     tools: &Value,
-    on_delta: impl FnMut(&str),
+    on_delta: impl FnMut(StreamDelta<'_>),
     cancel: &AtomicBool,
 ) -> Result<AssistantTurn, String> {
     let profile = ProviderProfile::for_kind(cfg.provider);
@@ -706,8 +718,8 @@ mod tests {
         let profile = ProviderProfile::for_kind(ProviderKind::OpenAi);
         let budget = profile.effective_token_budget(&settings);
 
-        assert_eq!(budget.max_input_tokens, 128_000);
-        assert_eq!(budget.reserved_output_tokens, 16_384);
+        assert_eq!(budget.max_input_tokens, 250_000);
+        assert_eq!(budget.reserved_output_tokens, 32_000);
         assert!(profile.supports_parallel_tool_call_field());
     }
 

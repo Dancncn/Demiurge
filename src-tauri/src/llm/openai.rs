@@ -9,7 +9,7 @@ use crate::store::Settings;
 
 use super::{
     merge_usage, normalize_finish_reason, require_api_key, AssistantTurn, ProviderAdapterKind,
-    ProviderProfile, ReasoningEffortCapability, StructuredOutputRequest, Usage,
+    ProviderProfile, ReasoningEffortCapability, StreamDelta, StructuredOutputRequest, Usage,
 };
 
 pub async fn stream_completion_with_profile(
@@ -17,7 +17,7 @@ pub async fn stream_completion_with_profile(
     cfg: &Settings,
     messages: &[Message],
     tools: &Value,
-    mut on_delta: impl FnMut(&str),
+    mut on_delta: impl FnMut(StreamDelta<'_>),
     cancel: &AtomicBool,
     profile: ProviderProfile,
 ) -> Result<AssistantTurn, String> {
@@ -177,7 +177,7 @@ impl OpenAiStreamState {
 fn parse_openai_stream_data(
     data: &str,
     state: &mut OpenAiStreamState,
-    on_delta: &mut impl FnMut(&str),
+    on_delta: &mut impl FnMut(StreamDelta<'_>),
 ) {
     let Ok(v) = serde_json::from_str::<Value>(data) else {
         return;
@@ -190,10 +190,17 @@ fn parse_openai_stream_data(
         return;
     };
 
+    // 推理型模型（reasoning_content）会先于正文输出思维链；单独作为 Reasoning 推给前端，
+    // 不混入 state.content，避免污染最终答复，同时消除推理阶段的「界面静默」。
+    if let Some(r) = choice["delta"]["reasoning_content"].as_str() {
+        if !r.is_empty() {
+            on_delta(StreamDelta::Reasoning(r));
+        }
+    }
     if let Some(c) = choice["delta"]["content"].as_str() {
         if !c.is_empty() {
             state.content.push_str(c);
-            on_delta(c);
+            on_delta(StreamDelta::Content(c));
         }
     }
     if let Some(tcs) = choice["delta"]["tool_calls"].as_array() {
@@ -272,7 +279,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(body["max_completion_tokens"], 16_384);
+        assert_eq!(body["max_completion_tokens"], 32_000);
         assert!(body.get("max_tokens").is_none());
         assert_eq!(body["parallel_tool_calls"], true);
     }
@@ -354,6 +361,35 @@ mod tests {
         assert_eq!(turn.usage.unwrap().input_tokens, Some(12));
         assert_eq!(turn.usage.unwrap().output_tokens, Some(3));
         assert_eq!(turn.usage.unwrap().total_tokens, Some(15));
+    }
+
+    #[test]
+    fn openai_stream_routes_reasoning_separately_from_content() {
+        // reasoning_content（DeepSeek-V4/R1、Kimi、qwen *-flash 思考版等推理模型）应作为
+        // Reasoning 单独回调，且不混入最终正文 content。
+        let mut state = OpenAiStreamState::default();
+        let mut content = String::new();
+        let mut reasoning = String::new();
+        parse_openai_stream_data(
+            r#"{"choices":[{"delta":{"reasoning_content":"先想一下"},"finish_reason":null}]}"#,
+            &mut state,
+            &mut |d| match d {
+                StreamDelta::Content(c) => content.push_str(c),
+                StreamDelta::Reasoning(r) => reasoning.push_str(r),
+            },
+        );
+        parse_openai_stream_data(
+            r#"{"choices":[{"delta":{"content":"答案"},"finish_reason":"stop"}]}"#,
+            &mut state,
+            &mut |d| match d {
+                StreamDelta::Content(c) => content.push_str(c),
+                StreamDelta::Reasoning(r) => reasoning.push_str(r),
+            },
+        );
+        assert_eq!(reasoning, "先想一下");
+        assert_eq!(content, "答案");
+        // 思维链不污染最终答复
+        assert_eq!(state.finish().content, "答案");
     }
 
     #[test]

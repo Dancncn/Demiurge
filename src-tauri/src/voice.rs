@@ -28,22 +28,36 @@ fn stt_ready(settings: &Settings) -> (bool, String) {
     if !settings.voice_enabled {
         return (false, "语音未启用。".to_string());
     }
-    match settings.voice_stt_backend.trim().to_ascii_lowercase().as_str() {
+    match settings
+        .voice_stt_backend
+        .trim()
+        .to_ascii_lowercase()
+        .as_str()
+    {
         "dashscope" => {
             if dashscope_api_key(settings).is_some() {
                 (true, "DashScope ASR 已就绪。".to_string())
             } else {
-                (false, "DashScope STT 未找到 API 密钥（请在「媒体」或当前供应商中配置）。".to_string())
+                (
+                    false,
+                    "DashScope STT 未找到 API 密钥（请在「媒体」或当前供应商中配置）。".to_string(),
+                )
             }
         }
         "openai" => {
             if !settings.api_key.trim().is_empty() {
                 (true, "OpenAI 兼容 Whisper 已就绪。".to_string())
             } else {
-                (false, "OpenAI 兼容 STT 需要当前供应商的 API 密钥。".to_string())
+                (
+                    false,
+                    "OpenAI 兼容 STT 需要当前供应商的 API 密钥。".to_string(),
+                )
             }
         }
-        "none" | "" => (false, "未选择 STT 后端（可设为 dashscope 或 openai）。".to_string()),
+        "none" | "" => (
+            false,
+            "未选择 STT 后端（可设为 dashscope 或 openai）。".to_string(),
+        ),
         other => (
             false,
             format!("未知的 STT 后端「{other}」（支持 dashscope / openai）。"),
@@ -116,7 +130,9 @@ pub async fn voice_transcribe(
             transcribe_multipart(&state.http, url, key, "whisper-1", audio, &mime, lang).await
         }
         "none" | "" => Err("未选择 STT 后端（可在设置中设为 dashscope 或 openai）。".to_string()),
-        other => Err(format!("未知的 STT 后端「{other}」（支持 dashscope / openai）。")),
+        other => Err(format!(
+            "未知的 STT 后端「{other}」（支持 dashscope / openai）。"
+        )),
     }
 }
 

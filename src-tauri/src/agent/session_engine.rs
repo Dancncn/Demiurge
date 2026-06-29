@@ -211,6 +211,16 @@ impl<'a> TurnEventEmitter<'a> {
         self.emit_legacy_and_unified("assistant-delta", "assistant_delta", delta.to_string());
     }
 
+    /// 推理型模型在正文之前输出的思维链增量。单独走 `assistant-reasoning` 事件，
+    /// 前端渲染成「思考中」气泡，消除推理阶段的界面静默。
+    pub fn assistant_reasoning(&self, delta: &str) {
+        self.emit_legacy_and_unified(
+            "assistant-reasoning",
+            "assistant_reasoning",
+            delta.to_string(),
+        );
+    }
+
     pub fn assistant_done(&self, text: String) {
         self.emit_legacy_and_unified("assistant-done", "assistant_done", text);
     }
@@ -436,7 +446,16 @@ mod tests {
         assert_eq!(session.messages.len(), 1);
         assert_eq!(session.messages[0].role, "user");
         assert_eq!(session.title, "please inspect the repo");
-        assert!(dir.join("sessions.json").exists());
+        // persist_sessions 现在走后台线程落盘，轮询等待写入完成。
+        let mut persisted = false;
+        for _ in 0..300 {
+            if dir.join("sessions.json").exists() {
+                persisted = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(persisted, "sessions.json 应由后台写盘线程持久化");
 
         let _ = std::fs::remove_dir_all(&dir);
     }

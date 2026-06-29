@@ -333,8 +333,9 @@ pub async fn run_turn_with_options(
             &settings,
             &full,
             &tools_schema,
-            |delta| {
-                delta_events.assistant_delta(delta);
+            |delta| match delta {
+                llm::StreamDelta::Content(text) => delta_events.assistant_delta(text),
+                llm::StreamDelta::Reasoning(text) => delta_events.assistant_reasoning(text),
             },
             &state.cancel,
         )

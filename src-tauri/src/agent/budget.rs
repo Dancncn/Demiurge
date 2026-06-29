@@ -216,7 +216,7 @@ mod tests {
             &serde_json::json!([]),
             &[Message::user("hi")],
         );
-        assert_eq!(budget.max_input_tokens, 128_000);
-        assert_eq!(budget.reserved_output_tokens, 16_384);
+        assert_eq!(budget.max_input_tokens, 272_000);
+        assert_eq!(budget.reserved_output_tokens, 128_000);
     }
 }

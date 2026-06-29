@@ -118,7 +118,10 @@ fn collect_image_urls(value: &Value) -> Vec<GeneratedImage> {
     }
     if let Some(results) = value["output"]["results"].as_array() {
         for result in results {
-            if let Some(url) = result["url"].as_str().or_else(|| result["image_url"].as_str()) {
+            if let Some(url) = result["url"]
+                .as_str()
+                .or_else(|| result["image_url"].as_str())
+            {
                 urls.push(GeneratedImage {
                     url: url.to_string(),
                 });
@@ -138,8 +141,10 @@ async fn dashscope_post(
     settings: &Settings,
     body: Value,
 ) -> Result<Value, String> {
-    let key = dashscope_api_key(settings)
-        .ok_or_else(|| "Media API Key is missing. Configure DashScope in Settings > Providers or Media.".to_string())?;
+    let key = dashscope_api_key(settings).ok_or_else(|| {
+        "Media API Key is missing. Configure DashScope in Settings > Providers or Media."
+            .to_string()
+    })?;
     let url = format!("{}{}", dashscope_base_url(settings), AIGC_GENERATION_PATH);
     let resp = state
         .http
@@ -154,7 +159,8 @@ async fn dashscope_post(
     if !status.is_success() {
         return Err(format!("DashScope returned HTTP {status}: {text}"));
     }
-    serde_json::from_str::<Value>(&text).map_err(|e| format!("DashScope returned invalid JSON: {e}"))
+    serde_json::from_str::<Value>(&text)
+        .map_err(|e| format!("DashScope returned invalid JSON: {e}"))
 }
 
 pub async fn generate_image(
@@ -171,7 +177,11 @@ pub async fn generate_image(
     } else {
         request.model.trim()
     };
-    let model = if model.is_empty() { "qwen-image-2.0" } else { model };
+    let model = if model.is_empty() {
+        "qwen-image-2.0"
+    } else {
+        model
+    };
     let size = if request.size.trim().is_empty() {
         settings.image_size.trim()
     } else {
@@ -189,7 +199,9 @@ pub async fn generate_image(
 
     let mut content = vec![json!({ "text": prompt })];
     if !request.negative_prompt.trim().is_empty() {
-        content.push(json!({ "text": format!("Negative prompt: {}", request.negative_prompt.trim()) }));
+        content.push(
+            json!({ "text": format!("Negative prompt: {}", request.negative_prompt.trim()) }),
+        );
     }
 
     let body = json!({
@@ -230,7 +242,11 @@ pub async fn synthesize_speech(
     } else {
         request.model.trim()
     };
-    let model = if model.is_empty() { "qwen3-tts-flash" } else { model };
+    let model = if model.is_empty() {
+        "qwen3-tts-flash"
+    } else {
+        model
+    };
     let voice = if request.voice.trim().is_empty() {
         settings.tts_voice.trim()
     } else {

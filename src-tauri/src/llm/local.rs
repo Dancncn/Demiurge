@@ -5,7 +5,7 @@ use serde_json::Value;
 use crate::agent::conversation::Message;
 use crate::store::Settings;
 
-use super::{openai, AssistantTurn, ProviderProfile};
+use super::{openai, AssistantTurn, ProviderProfile, StreamDelta};
 
 #[allow(dead_code)]
 pub async fn stream_completion(
@@ -13,7 +13,7 @@ pub async fn stream_completion(
     cfg: &Settings,
     messages: &[Message],
     tools: &Value,
-    on_delta: impl FnMut(&str),
+    on_delta: impl FnMut(StreamDelta<'_>),
     cancel: &AtomicBool,
 ) -> Result<AssistantTurn, String> {
     stream_completion_with_profile(
@@ -33,7 +33,7 @@ pub async fn stream_completion_with_profile(
     cfg: &Settings,
     messages: &[Message],
     tools: &Value,
-    on_delta: impl FnMut(&str),
+    on_delta: impl FnMut(StreamDelta<'_>),
     cancel: &AtomicBool,
     profile: ProviderProfile,
 ) -> Result<AssistantTurn, String> {
