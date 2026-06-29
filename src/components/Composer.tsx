@@ -8,9 +8,15 @@ import {
   releaseAttachment,
   type ProcessedAttachment,
 } from "../lib/fileProcessing";
-import { ArrowUpIcon, CloseIcon, FileIcon, FolderIcon, PaperclipIcon, StopIcon } from "./Icons";
+import { ArrowUpIcon, CloseIcon, FileIcon, MicIcon, PaperclipIcon, StopIcon } from "./Icons";
 import { Select } from "./Select";
-import type { PermissionMode } from "../lib/types";
+import { findProvider, REASONING_EFFORTS } from "../lib/providers";
+import type { PermissionMode, ProviderKind, ReasoningEffort } from "../lib/types";
+
+function formatTokens(n: number): string {
+  if (!n || n <= 0) return "—";
+  return n >= 1000 ? `${Math.round(n / 1000)}K` : String(n);
+}
 
 const PERMISSION_MODE_LABELS: Record<PermissionMode, string> = {
   plan: "Plan",
@@ -39,11 +45,17 @@ type Props = {
   loading: boolean;
   permissionMode: PermissionMode;
   onSetPermissionMode: (mode: PermissionMode) => void;
+  provider: ProviderKind;
+  model: string;
+  reasoningEffort: ReasoningEffort;
+  maxInputTokens: number;
+  onSetModel: (model: string) => void;
+  onSetEffort: (effort: ReasoningEffort) => void;
+  onOpenSettings: () => void;
   textareaRef: RefObject<HTMLTextAreaElement>;
   onSubmit: (attachments: ProcessedAttachment[]) => Promise<boolean> | boolean;
   onStop: () => void;
   onInputChange: (value: string) => void;
-  onOpenSandbox: () => void;
 };
 
 export function Composer({
@@ -52,12 +64,22 @@ export function Composer({
   loading,
   permissionMode,
   onSetPermissionMode,
+  provider,
+  model,
+  reasoningEffort,
+  maxInputTokens,
+  onSetModel,
+  onSetEffort,
+  onOpenSettings,
   textareaRef,
   onSubmit,
   onStop,
   onInputChange,
-  onOpenSandbox,
 }: Props) {
+  const providerModels = findProvider(provider).models;
+  const modelOptions = (model && !providerModels.includes(model) ? [model, ...providerModels] : providerModels).map(
+    (m) => ({ value: m, label: m }),
+  );
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const attachmentsRef = useRef<ProcessedAttachment[]>([]);
   const [attachments, setAttachments] = useState<ProcessedAttachment[]>([]);
@@ -241,8 +263,8 @@ export function Composer({
             className="min-h-11 max-h-40 w-full resize-none bg-transparent px-3 py-2.5 text-[14px] leading-6 outline-none placeholder:text-[#8a9099]"
           />
 
-          <div className="flex items-center justify-between gap-2 px-2 pb-1">
-            <div className="flex items-center gap-2">
+          <div className="flex items-center justify-between gap-2 px-1.5 pb-1">
+            <div className="flex min-w-0 items-center gap-1.5">
               <input
                 ref={fileInputRef}
                 type="file"
@@ -255,20 +277,20 @@ export function Composer({
                 type="button"
                 onClick={() => fileInputRef.current?.click()}
                 disabled={loading || processingFiles}
-                className="flex h-8 items-center gap-1.5 rounded-md border border-[#e5e8ed] bg-white px-3 text-[12px] font-medium text-[#4f5661] transition hover:bg-[#fafbfc] active:bg-[#f3f4f7] disabled:cursor-not-allowed disabled:opacity-60"
+                title={processingFiles ? "Reading files…" : "Attach files"}
                 aria-label="Attach files"
+                className="grid size-8 shrink-0 place-items-center rounded-md border border-[#e5e8ed] bg-white text-[#4f5661] transition hover:bg-[#fafbfc] active:bg-[#f3f4f7] disabled:cursor-not-allowed disabled:opacity-60"
               >
                 <PaperclipIcon size={16} />
-                {processingFiles ? "Reading" : "Attach"}
               </button>
               <button
                 type="button"
-                onClick={onOpenSandbox}
-                className="flex h-8 items-center gap-1.5 rounded-md border border-[#e5e8ed] bg-white px-3 text-[12px] font-medium text-[#4f5661] transition hover:bg-[#fafbfc] active:bg-[#f3f4f7]"
-                aria-label="打开沙盒目录"
+                onClick={onOpenSettings}
+                title="Voice input (configure in Settings)"
+                aria-label="Voice input"
+                className="grid size-8 shrink-0 place-items-center rounded-md border border-[#e5e8ed] bg-white text-[#9aa1ab] transition hover:bg-[#fafbfc] hover:text-[#4f5661]"
               >
-                <FolderIcon size={17} />
-                沙盒
+                <MicIcon size={16} />
               </button>
               <Select
                 value={permissionMode}
@@ -288,15 +310,42 @@ export function Composer({
               />
             </div>
 
-            <button
-              type={loading ? "button" : "submit"}
-              onClick={loading ? onStop : undefined}
-              disabled={!loading && !readyToSend}
-              className="grid h-8 w-8 shrink-0 place-items-center rounded-md bg-[#111827] text-white transition hover:bg-[#2b3442] disabled:bg-[#c7ccd4] disabled:hover:bg-[#c7ccd4]"
-              aria-label={loading ? "停止生成" : "发送"}
-            >
-              {loading ? <StopIcon size={15} /> : <ArrowUpIcon size={19} />}
-            </button>
+            <div className="flex min-w-0 items-center gap-1.5">
+              <Select
+                value={model}
+                onChange={onSetModel}
+                direction="up"
+                align="right"
+                placeholder="Model"
+                options={modelOptions}
+                triggerClassName="flex h-8 max-w-[150px] items-center gap-1 rounded-md border border-[#e5e8ed] bg-white px-2.5 text-[12px] font-medium text-[#4f5661] outline-none transition hover:bg-[#fafbfc]"
+              />
+              <Select
+                value={reasoningEffort}
+                onChange={(v) => onSetEffort(v as ReasoningEffort)}
+                direction="up"
+                align="right"
+                options={REASONING_EFFORTS.map((e) => ({ value: e.value, label: e.label, hint: e.hint }))}
+                triggerClassName="flex h-8 items-center gap-1 rounded-md border border-[#e5e8ed] bg-white px-2.5 text-[12px] font-medium text-[#4f5661] outline-none transition hover:bg-[#fafbfc]"
+              />
+              <button
+                type="button"
+                onClick={onOpenSettings}
+                title="Context budget (max input tokens) — open Settings"
+                className="hidden h-8 items-center gap-1 rounded-md border border-[#e5e8ed] bg-white px-2.5 text-[12px] font-medium text-[#7a8088] transition hover:bg-[#fafbfc] md:flex"
+              >
+                {formatTokens(maxInputTokens)} ctx
+              </button>
+              <button
+                type={loading ? "button" : "submit"}
+                onClick={loading ? onStop : undefined}
+                disabled={!loading && !readyToSend}
+                className="grid h-8 w-8 shrink-0 place-items-center rounded-md bg-[#111827] text-white transition hover:bg-[#2b3442] disabled:bg-[#c7ccd4] disabled:hover:bg-[#c7ccd4]"
+                aria-label={loading ? "停止生成" : "发送"}
+              >
+                {loading ? <StopIcon size={15} /> : <ArrowUpIcon size={19} />}
+              </button>
+            </div>
           </div>
         </div>
         <p className="mx-auto mt-2 max-w-3xl px-1 text-center text-[11px] text-[#8a9099]">

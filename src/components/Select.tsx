@@ -9,7 +9,7 @@ export interface SelectOption {
 }
 
 /**
- * Cherry-studio style dropdown: button trigger + animated popover list.
+ * Animated dropdown: button trigger + popover list.
  * Click-outside / Escape to close, selected item checked. Use instead of native <select>.
  */
 export function Select({

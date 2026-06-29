@@ -109,7 +109,7 @@ textarea {
 }
 .cf-pop-down { transform-origin: top left; }
 
-/* Cherry-studio 风下拉/弹层入场：fade + zoom + slide-from-top */
+/* 下拉/弹层入场动画：fade + zoom + slide-from-top */
 @keyframes cf-menu-in {
   from { opacity: 0; transform: translateY(-4px) scale(0.97); }
   to { opacity: 1; transform: none; }

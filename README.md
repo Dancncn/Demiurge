@@ -232,6 +232,10 @@ npm run tauri build
 - [Workflow JSON DSL](docs/workflow-json-dsl.md)
 - [MVP 设计背景](docs/demiurge-mvp-design.md)
 
+## Credits
+
+- Provider logos are from [@lobehub/icons](https://github.com/lobehub/lobe-icons) (MIT). Brand logos remain the trademarks of their respective owners and are used only to identify the provider.
+
 ## License
 
 Demiurge is released under the [MIT License](LICENSE). Character assets, voice assets, artwork, and persona packs based on specific works are user-managed local content and are not distributed with this repository.
