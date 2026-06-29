@@ -213,6 +213,17 @@ export function DownloadIcon(props: IconProps) {
   );
 }
 
+export function MicIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <rect x="9" y="2" width="6" height="11" rx="3" />
+      <path d="M5 10v1a7 7 0 0 0 14 0v-1" />
+      <path d="M12 19v3" />
+      <path d="M8 22h8" />
+    </Icon>
+  );
+}
+
 export function VolumeIcon(props: IconProps) {
   return (
     <Icon strokeWidth={1.8} {...props}>

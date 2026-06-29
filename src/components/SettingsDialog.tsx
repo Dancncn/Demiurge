@@ -26,6 +26,7 @@ import type {
 } from "../lib/types";
 import { CheckIcon, CloseIcon, DownloadIcon } from "./Icons";
 import { Select } from "./Select";
+import { PROVIDER_OPTIONS, PROVIDER_ICON_SET } from "../lib/providers";
 
 interface Props {
   open: boolean;
@@ -40,138 +41,6 @@ interface Props {
 
 type SettingsTab = "provider" | "media" | "web" | "files" | "context" | "tools" | "voice" | "advanced";
 
-type ProviderOption = {
-  value: ProviderKind;
-  label: string;
-  short: string;
-  baseUrl: string;
-  model: string;
-  help: string;
-  /** Suggested models for quick selection; users can still type any model name. */
-  models: string[];
-};
-
-const providerOptions: ProviderOption[] = [
-  {
-    value: "deepseek",
-    label: "DeepSeek",
-    short: "DS",
-    baseUrl: "https://api.deepseek.com/v1",
-    model: "deepseek-chat",
-    help: "DeepSeek official OpenAI-compatible endpoint.",
-    models: ["deepseek-chat", "deepseek-reasoner"],
-  },
-  {
-    value: "dashscope",
-    label: "阿里云百炼 (DashScope)",
-    short: "BL",
-    baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
-    model: "qwen-plus",
-    help: "Aliyun Bailian / DashScope OpenAI-compatible endpoint. Media uses native DashScope APIs below.",
-    models: ["qwen-max", "qwen-plus", "qwen-turbo", "qwen-long", "deepseek-v3", "deepseek-r1"],
-  },
-  {
-    value: "openai",
-    label: "ChatGPT / OpenAI",
-    short: "AI",
-    baseUrl: "https://api.openai.com/v1",
-    model: "gpt-4o",
-    help: "OpenAI chat completions endpoint.",
-    models: ["gpt-4o", "gpt-4o-mini", "gpt-4.1", "gpt-4.1-mini", "o3", "o4-mini"],
-  },
-  {
-    value: "openrouter",
-    label: "OpenRouter",
-    short: "OR",
-    baseUrl: "https://openrouter.ai/api/v1",
-    model: "openai/gpt-4o",
-    help: "OpenRouter model gateway. Models use the vendor/model form.",
-    models: [
-      "openai/gpt-4o",
-      "anthropic/claude-3.7-sonnet",
-      "google/gemini-2.0-flash-001",
-      "deepseek/deepseek-chat",
-      "meta-llama/llama-3.3-70b-instruct",
-    ],
-  },
-  {
-    value: "anthropic",
-    label: "Anthropic",
-    short: "AN",
-    baseUrl: "https://api.anthropic.com/v1",
-    model: "claude-sonnet-4-5",
-    help: "Claude API. The key is stored in the system credential manager.",
-    models: ["claude-sonnet-4-5", "claude-opus-4-1", "claude-3-7-sonnet-latest", "claude-3-5-haiku-latest"],
-  },
-  {
-    value: "gemini",
-    label: "Google Gemini",
-    short: "GE",
-    baseUrl: "https://generativelanguage.googleapis.com/v1beta",
-    model: "gemini-2.5-pro",
-    help: "Google AI Studio compatible Gemini endpoint.",
-    models: ["gemini-2.5-pro", "gemini-2.0-flash", "gemini-2.0-flash-thinking-exp", "gemini-1.5-pro"],
-  },
-  {
-    value: "glm",
-    label: "智谱 GLM",
-    short: "GL",
-    baseUrl: "https://open.bigmodel.cn/api/paas/v4",
-    model: "glm-4-plus",
-    help: "Zhipu AI OpenAI-compatible endpoint.",
-    models: ["glm-4-plus", "glm-4-air", "glm-4-flash", "glm-4-long"],
-  },
-  {
-    value: "minimax",
-    label: "MiniMax",
-    short: "MM",
-    baseUrl: "https://api.minimax.chat/v1",
-    model: "MiniMax-Text-01",
-    help: "MiniMax OpenAI-compatible endpoint.",
-    models: ["MiniMax-Text-01", "abab6.5s-chat"],
-  },
-  {
-    value: "custom",
-    label: "Custom Provider",
-    short: "CU",
-    baseUrl: "",
-    model: "",
-    help: "Any OpenAI-compatible endpoint.",
-    models: [],
-  },
-  {
-    value: "open_ai_compatible",
-    label: "OpenAI Compatible",
-    short: "OA",
-    baseUrl: "https://api.deepseek.com/v1",
-    model: "deepseek-chat",
-    help: "Generic OpenAI-compatible profile for self-hosted gateways.",
-    models: ["deepseek-chat", "gpt-4o", "qwen-plus"],
-  },
-  {
-    value: "local",
-    label: "Local (Ollama / LM Studio)",
-    short: "LO",
-    baseUrl: "http://localhost:11434/v1",
-    model: "llama3.1",
-    help: "Ollama, LM Studio, vLLM or any local OpenAI-compatible service.",
-    models: ["llama3.1", "qwen2.5", "deepseek-r1", "phi4", "gemma2"],
-  },
-];
-
-/** Provider keys that ship a logo under public/providers/<key>.svg. */
-const PROVIDER_ICON_SET = new Set<ProviderKind>([
-  "deepseek",
-  "dashscope",
-  "openai",
-  "openrouter",
-  "anthropic",
-  "gemini",
-  "glm",
-  "minimax",
-  "open_ai_compatible",
-  "local",
-]);
 
 const webSearchProviders: { value: WebSearchProvider; label: string; help: string }[] = [
   { value: "auto", label: "Auto", help: "Try Bing first, then fall back to DuckDuckGo." },
@@ -793,7 +662,7 @@ export default function SettingsDialog({
   }, [open]);
 
   const selectedProvider = useMemo(
-    () => providerOptions.find((p) => p.value === form.provider) ?? providerOptions[0],
+    () => PROVIDER_OPTIONS.find((p) => p.value === form.provider) ?? PROVIDER_OPTIONS[0],
     [form.provider],
   );
   const effortSupported = modelSupportsReasoningEffort(form.provider, form.model);
@@ -1375,7 +1244,7 @@ export default function SettingsDialog({
                           className="h-8 w-full rounded-md border border-[#d9d9d9] bg-white px-2.5 text-[12px] text-[#202124] outline-none transition placeholder:text-[#9aa1ab] focus:border-[#7a7f87] focus:ring-1 focus:ring-[#202124]/10"
                         />
                         <div className="space-y-1 rounded-lg border border-[#e2e5ea] bg-[#f8f9fb] p-1.5">
-                          {providerOptions
+                          {PROVIDER_OPTIONS
                             .filter((provider) =>
                               `${provider.label} ${provider.value} ${provider.short}`
                                 .toLowerCase()

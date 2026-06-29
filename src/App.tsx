@@ -14,6 +14,7 @@ import type {
   PermissionMode,
   PermissionScope,
   PlanState,
+  ReasoningEffort,
   SessionEnginePanelState,
   SessionMeta,
   Settings,
@@ -633,6 +634,28 @@ export default function App() {
   }
 
 
+  async function handleSetModel(model: string) {
+    if (!settings) return;
+    const next = { ...settings, model };
+    setSettings(next);
+    try {
+      await api.saveSettings(next);
+    } catch (e) {
+      console.error("Failed to save model", e);
+    }
+  }
+
+  async function handleSetEffort(reasoning_effort: ReasoningEffort) {
+    if (!settings) return;
+    const next = { ...settings, reasoning_effort };
+    setSettings(next);
+    try {
+      await api.saveSettings(next);
+    } catch (e) {
+      console.error("Failed to save reasoning effort", e);
+    }
+  }
+
   async function handleSetPermissionMode(mode: PermissionMode) {
     try {
       const next = await api.setPermissionMode(mode);
@@ -856,6 +879,13 @@ export default function App() {
                 loading={appBusy}
                 permissionMode={settings?.permission_mode ?? "default"}
                 onSetPermissionMode={(m) => void handleSetPermissionMode(m)}
+                provider={settings?.provider ?? "deepseek"}
+                model={settings?.model ?? ""}
+                reasoningEffort={settings?.reasoning_effort ?? "auto"}
+                maxInputTokens={settings?.max_input_tokens ?? 0}
+                onSetModel={(m) => void handleSetModel(m)}
+                onSetEffort={(e) => void handleSetEffort(e)}
+                onOpenSettings={() => setActiveView("settings")}
                 textareaRef={textareaRef}
                 onSubmit={(attachments) => handleSend(undefined, attachments)}
                 onStop={() => {
@@ -863,7 +893,6 @@ export default function App() {
                   setConfirmReq(null);
                 }}
                 onInputChange={setInput}
-                onOpenSandbox={() => void api.openSandbox()}
               />
             </>
           ) : activeView === "media" ? (
