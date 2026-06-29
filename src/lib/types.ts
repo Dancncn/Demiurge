@@ -464,6 +464,24 @@ export interface SessionList {
   sessions: SessionMeta[];
 }
 
+export interface DayCell {
+  date: string;
+  count: number;
+  level: number;
+}
+export interface StatsPanel {
+  sessions: number;
+  messages: number;
+  est_tokens: number;
+  active_days: number;
+  current_streak: number;
+  longest_streak: number;
+  peak_hour: number | null;
+  model: string;
+  heatmap_days: number;
+  heatmap: DayCell[];
+}
+
 export type TurnStatus = "running" | "cancelling" | "completed" | "interrupted" | "failed";
 export type TurnEntrypoint = "send" | "send_with_agents";
 

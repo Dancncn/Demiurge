@@ -990,6 +990,15 @@ fn list_sessions(state: State<'_, AppState>) -> SessionList {
     session_list(&state.sessions.lock().unwrap())
 }
 
+/// 仪表盘统计：会话/消息/估算 token/活跃天数/连续天数/高峰时段 + 活跃热力图。
+/// `offset` 为客户端时区偏移（分钟，JS Date.getTimezoneOffset()）。
+#[tauri::command]
+fn session_stats(state: State<'_, AppState>, offset: i64) -> store::StatsPanel {
+    let model = state.settings.lock().unwrap().model.clone();
+    let store_guard = state.sessions.lock().unwrap();
+    store::compute_stats(&store_guard, offset, model)
+}
+
 /// 当前活动会话的消息历史。
 #[tauri::command]
 fn get_history(state: State<'_, AppState>) -> Vec<Message> {
@@ -1691,6 +1700,7 @@ pub fn run() {
             memory_delete_entry,
             memory_dedupe_apply,
             list_sessions,
+            session_stats,
             get_history,
             context_panel_state,
             new_session,
