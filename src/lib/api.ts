@@ -135,6 +135,8 @@ export const listenPlanUpdated = (handler: (e: PlanState) => void) =>
   listen<PlanState>("plan-updated", (e) => handler(e.payload));
 export const listenPermissionModeUpdated = (handler: (e: PermissionMode) => void) =>
   listen<PermissionMode>("permission-mode-updated", (e) => handler(e.payload));
+export const listenSettingsUpdated = (handler: (e: Settings) => void) =>
+  listen<Settings>("settings-updated", (e) => handler(e.payload));
 export const listenMcpUpdated = (handler: (e: McpPanelState) => void) =>
   listen<McpPanelState>("mcp-updated", (e) => handler(e.payload));
 export const listenSessionEngineUpdated = (handler: (e: SessionEnginePanelState) => void) =>

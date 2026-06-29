@@ -183,6 +183,12 @@ pub fn build_gemini_body_with_structured_output(
     if profile.supports_non_empty_tools(tools) {
         body["tools"] = tools.clone();
     }
+    if let Some(budget) = profile.gemini_thinking_budget_tokens(cfg) {
+        body["generationConfig"]["thinkingConfig"] = json!({
+            "includeThoughts": true,
+            "thinkingBudget": budget
+        });
+    }
     if let Some(request) = profile.structured_output_request(structured_output) {
         body["generationConfig"]["responseMimeType"] = json!("application/json");
         body["generationConfig"]["responseSchema"] = request.schema.clone();
@@ -231,6 +237,9 @@ fn parse_gemini_stream_data(
     };
     if let Some(parts) = candidate["content"]["parts"].as_array() {
         for part in parts {
+            if part["thought"].as_bool().unwrap_or(false) {
+                continue;
+            }
             if let Some(text) = part["text"].as_str() {
                 if !text.is_empty() {
                     state.content.push_str(text);
@@ -276,12 +285,12 @@ fn parse_gemini_usage(v: &Value) -> Option<Usage> {
 mod tests {
     use super::*;
     use crate::agent::conversation::Message;
-    use crate::store::{ProviderKind, Settings};
+    use crate::store::{ProviderKind, ReasoningEffort, Settings};
 
     fn cfg() -> Settings {
         Settings {
             provider: ProviderKind::Gemini,
-            model: "gemini-test".to_string(),
+            model: "gemini-2.5-pro".to_string(),
             ..Settings::default()
         }
     }
@@ -339,6 +348,29 @@ mod tests {
     }
 
     #[test]
+    fn gemini_body_includes_thinking_budget_for_effort() {
+        let mut cfg = cfg();
+        cfg.reasoning_effort = ReasoningEffort::High;
+        cfg.reserved_output_tokens = 12_000;
+        let body = build_gemini_body(
+            &cfg,
+            &[Message::user("hi")],
+            &json!([]),
+            ProviderProfile::gemini(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            body["generationConfig"]["thinkingConfig"]["thinkingBudget"],
+            8_192
+        );
+        assert_eq!(
+            body["generationConfig"]["thinkingConfig"]["includeThoughts"],
+            true
+        );
+    }
+
+    #[test]
     fn gemini_stream_parses_text_and_function_call() {
         let mut state = GeminiStreamState::default();
         let mut deltas = String::new();
@@ -352,6 +384,20 @@ mod tests {
         assert_eq!(turn.finish_reason, "tool_calls");
         assert_eq!(turn.tool_calls[0].function.name, "read_file");
         assert_eq!(turn.tool_calls[0].function.arguments, "{\"path\":\"a\"}");
+    }
+
+    #[test]
+    fn gemini_stream_omits_thought_parts_from_visible_text() {
+        let mut state = GeminiStreamState::default();
+        let mut deltas = String::new();
+        parse_gemini_stream_data(
+            r#"{"candidates":[{"content":{"parts":[{"text":"hidden","thought":true},{"text":"visible"}]},"finishReason":"STOP"}]}"#,
+            &mut state,
+            &mut |s| deltas.push_str(s),
+        );
+        let turn = state.finish();
+        assert_eq!(deltas, "visible");
+        assert_eq!(turn.content, "visible");
     }
 
     #[test]

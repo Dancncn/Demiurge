@@ -96,6 +96,10 @@ fn default_mcp_servers() -> Vec<crate::mcp::McpServerConfig> {
     Vec::new()
 }
 
+fn default_reasoning_effort() -> ReasoningEffort {
+    ReasoningEffort::Auto
+}
+
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum PermissionMode {
@@ -128,6 +132,69 @@ pub enum ProviderKind {
     Custom,
 }
 
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ReasoningEffort {
+    Auto,
+    Low,
+    Medium,
+    High,
+    Xhigh,
+    Max,
+}
+
+impl ReasoningEffort {
+    pub const LEVELS: [ReasoningEffort; 5] = [
+        ReasoningEffort::Low,
+        ReasoningEffort::Medium,
+        ReasoningEffort::High,
+        ReasoningEffort::Xhigh,
+        ReasoningEffort::Max,
+    ];
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "auto" | "unset" | "default" => Some(ReasoningEffort::Auto),
+            "low" => Some(ReasoningEffort::Low),
+            "medium" | "med" => Some(ReasoningEffort::Medium),
+            "high" => Some(ReasoningEffort::High),
+            "xhigh" | "extra_high" | "extra-high" => Some(ReasoningEffort::Xhigh),
+            "max" => Some(ReasoningEffort::Max),
+            _ => None,
+        }
+    }
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            ReasoningEffort::Auto => "auto",
+            ReasoningEffort::Low => "low",
+            ReasoningEffort::Medium => "medium",
+            ReasoningEffort::High => "high",
+            ReasoningEffort::Xhigh => "xhigh",
+            ReasoningEffort::Max => "max",
+        }
+    }
+
+    pub const fn description(self) -> &'static str {
+        match self {
+            ReasoningEffort::Auto => "Use the provider or model default.",
+            ReasoningEffort::Low => "Quick, straightforward reasoning with minimal overhead.",
+            ReasoningEffort::Medium => {
+                "Balanced reasoning for standard implementation and testing."
+            }
+            ReasoningEffort::High => {
+                "Comprehensive reasoning for complex implementation and verification."
+            }
+            ReasoningEffort::Xhigh => "Extended reasoning beyond high, short of max.",
+            ReasoningEffort::Max => "Maximum reasoning depth where the provider supports it.",
+        }
+    }
+
+    pub const fn is_auto(self) -> bool {
+        matches!(self, ReasoningEffort::Auto)
+    }
+}
+
 /// 运行时设置。`api_key` 只保留在内存和前端表单里，落盘时会被清空；
 /// 实际密钥由 `credentials` 模块写入系统凭据管理器。
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -146,6 +213,8 @@ pub struct Settings {
     pub max_input_tokens: usize,
     #[serde(default = "default_reserved_output_tokens")]
     pub reserved_output_tokens: usize,
+    #[serde(default = "default_reasoning_effort")]
+    pub reasoning_effort: ReasoningEffort,
     #[serde(default = "default_auto_memory_enabled")]
     pub auto_memory_enabled: bool,
     #[serde(default = "default_voice_enabled")]
@@ -209,6 +278,7 @@ impl Default for Settings {
             max_context_chars: DEFAULT_MAX_CONTEXT_CHARS,
             max_input_tokens: DEFAULT_MAX_INPUT_TOKENS,
             reserved_output_tokens: DEFAULT_RESERVED_OUTPUT_TOKENS,
+            reasoning_effort: default_reasoning_effort(),
             auto_memory_enabled: DEFAULT_AUTO_MEMORY_ENABLED,
             voice_enabled: DEFAULT_VOICE_ENABLED,
             voice_stt_backend: default_voice_stt_backend(),
@@ -418,6 +488,18 @@ mod tests {
         assert_eq!(settings.image_model, "qwen-image-2.0");
         assert_eq!(settings.tts_model, "qwen3-tts-flash");
         assert!(settings.mcp_servers.is_empty());
+        assert_eq!(settings.reasoning_effort, ReasoningEffort::Auto);
+    }
+
+    #[test]
+    fn reasoning_effort_parses_command_values() {
+        assert_eq!(ReasoningEffort::parse("low"), Some(ReasoningEffort::Low));
+        assert_eq!(
+            ReasoningEffort::parse("extra-high"),
+            Some(ReasoningEffort::Xhigh)
+        );
+        assert_eq!(ReasoningEffort::parse("unset"), Some(ReasoningEffort::Auto));
+        assert_eq!(ReasoningEffort::parse("unknown"), None);
     }
 
     #[test]

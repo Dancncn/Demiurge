@@ -370,6 +370,7 @@ export default function App() {
 
     let unPlan: UnlistenFn | undefined;
     let unMode: UnlistenFn | undefined;
+    let unSettings: UnlistenFn | undefined;
     let unSessionEngine: UnlistenFn | undefined;
     api.listenPlanUpdated(setPlanState).then((u) => {
       if (disposed) u();
@@ -380,6 +381,10 @@ export default function App() {
     }).then((u) => {
       if (disposed) u();
       else unMode = u;
+    });
+    api.listenSettingsUpdated(setSettings).then((u) => {
+      if (disposed) u();
+      else unSettings = u;
     });
     api.listenSessionEngineUpdated((next) => {
       setSessionEngine(next);
@@ -394,6 +399,7 @@ export default function App() {
       un?.();
       unPlan?.();
       unMode?.();
+      unSettings?.();
       unSessionEngine?.();
     };
   }, []);

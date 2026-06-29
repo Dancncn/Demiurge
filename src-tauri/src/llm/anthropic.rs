@@ -47,10 +47,14 @@ pub async fn stream_completion_with_profile(
     let url = format!("{}/messages", cfg.base_url.trim_end_matches('/'));
     let body = build_anthropic_body(cfg, messages, tools, profile)?;
 
-    let resp = client
+    let mut req = client
         .post(&url)
         .header("x-api-key", key)
-        .header("anthropic-version", "2023-06-01")
+        .header("anthropic-version", "2023-06-01");
+    if profile.anthropic_output_config_effort(cfg).is_some() {
+        req = req.header("anthropic-beta", "effort-2025-11-24");
+    }
+    let resp = req
         .json(&body)
         .send()
         .await
@@ -172,6 +176,9 @@ pub fn build_anthropic_body_with_structured_output(
     }
     if profile.supports_non_empty_tools(tools) {
         body["tools"] = tools.clone();
+    }
+    if let Some(effort) = profile.anthropic_output_config_effort(cfg) {
+        body["output_config"] = json!({ "effort": effort });
     }
     if let Some(request) = profile.structured_output_request(structured_output) {
         let mut output_tools = tools.as_array().cloned().unwrap_or_default();
@@ -332,12 +339,12 @@ fn parse_anthropic_usage(v: &Value) -> Option<Usage> {
 mod tests {
     use super::*;
     use crate::agent::conversation::Message;
-    use crate::store::{ProviderKind, Settings};
+    use crate::store::{ProviderKind, ReasoningEffort, Settings};
 
     fn cfg() -> Settings {
         Settings {
             provider: ProviderKind::Anthropic,
-            model: "claude-test".to_string(),
+            model: "claude-sonnet-4-6".to_string(),
             ..Settings::default()
         }
     }
@@ -384,6 +391,21 @@ mod tests {
         )
         .unwrap();
         assert!(body.get("tools").is_none());
+    }
+
+    #[test]
+    fn anthropic_body_includes_effort_output_config() {
+        let mut cfg = cfg();
+        cfg.reasoning_effort = ReasoningEffort::Xhigh;
+        let body = build_anthropic_body(
+            &cfg,
+            &[Message::user("hi")],
+            &json!([]),
+            ProviderProfile::anthropic(),
+        )
+        .unwrap();
+
+        assert_eq!(body["output_config"]["effort"], "xhigh");
     }
 
     #[test]

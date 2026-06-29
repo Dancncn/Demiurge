@@ -109,6 +109,8 @@ npm run tauri build
 /goal <objective> [+500k]      设置持续目标和可选 token budget
 /goal status                   查看目标状态
 /goal pause|resume|continue    控制目标续跑
+/effort [low|medium|high|xhigh|max|auto]
+                                Switch reasoning effort for supported provider/model pairs
 /ultracode <task>              开启多 Agent 编排提示
 /workflows                     查看 workflow runs
 /workflow resume <run_id>      从 journal 恢复 workflow 上下文

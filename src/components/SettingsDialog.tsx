@@ -17,6 +17,7 @@ import type {
   PermissionPanelState,
   PermissionScope,
   ProviderKind,
+  ReasoningEffort,
   Settings,
   ShellPolicyState,
   WebDavBackupFile,
@@ -162,6 +163,15 @@ const ocrSources: { value: OcrModelSource; label: string; note: string; url: str
   },
 ];
 
+const reasoningEfforts: { value: ReasoningEffort; label: string; help: string }[] = [
+  { value: "auto", label: "Auto", help: "Provider default" },
+  { value: "low", label: "Low", help: "Fastest" },
+  { value: "medium", label: "Medium", help: "Balanced" },
+  { value: "high", label: "High", help: "Deep" },
+  { value: "xhigh", label: "XHigh", help: "Extended" },
+  { value: "max", label: "Max", help: "Maximum" },
+];
+
 const inputCls =
   "h-9 w-full rounded-md border border-[#d9d9d9] bg-white px-3 text-[13px] text-[#202124] outline-none transition focus:border-[#7a7f87] focus:ring-2 focus:ring-[#202124]/5";
 const labelCls = "mb-1.5 block text-[12px] font-medium text-[#5f6368]";
@@ -187,6 +197,42 @@ function formatConnectionTestResult(result: ConnectionTestResult) {
 
 function normalizeWebSearchProvider(value: string): WebSearchProvider {
   return webSearchProviders.some((p) => p.value === value) ? (value as WebSearchProvider) : "auto";
+}
+
+function normalizeReasoningEffort(value: string): ReasoningEffort {
+  return reasoningEfforts.some((effort) => effort.value === value) ? (value as ReasoningEffort) : "auto";
+}
+
+function modelSupportsReasoningEffort(provider: ProviderKind, model: string) {
+  const normalized = model.trim().toLowerCase().replace(/^openai\//, "");
+  if (provider === "openai") {
+    return (
+      normalized.startsWith("o1") ||
+      normalized.startsWith("o3") ||
+      normalized.startsWith("o4") ||
+      normalized.startsWith("gpt-5") ||
+      normalized.includes("codex")
+    );
+  }
+  if (provider === "anthropic") {
+    return (
+      normalized.includes("opus-4-7") ||
+      normalized.includes("opus-4.7") ||
+      normalized.includes("opus-4-6") ||
+      normalized.includes("opus-4.6") ||
+      normalized.includes("sonnet-4-6") ||
+      normalized.includes("sonnet-4.6") ||
+      normalized.includes("deepseek-v4-pro")
+    );
+  }
+  if (provider === "gemini") {
+    return (
+      normalized.includes("gemini-2.5") ||
+      normalized.includes("gemini-3") ||
+      normalized.includes("thinking")
+    );
+  }
+  return false;
 }
 
 function normalizeMediaProvider(value: string) {
@@ -690,6 +736,7 @@ export default function SettingsDialog({
     () => providerOptions.find((p) => p.value === form.provider) ?? providerOptions[0],
     [form.provider],
   );
+  const effortSupported = modelSupportsReasoningEffort(form.provider, form.model);
   const selectedWebSearchProvider = useMemo(
     () => webSearchProviders.find((p) => p.value === form.web_search_provider) ?? webSearchProviders[0],
     [form.web_search_provider],
@@ -1156,6 +1203,7 @@ export default function SettingsDialog({
       max_context_chars: Math.max(2000, form.max_context_chars || 0),
       max_input_tokens: maxInput,
       reserved_output_tokens: reserved,
+      reasoning_effort: normalizeReasoningEffort(form.reasoning_effort),
       voice_stt_backend: form.voice_stt_backend.trim() || "none",
       voice_tts_backend: form.voice_tts_backend.trim() || "none",
       voice_id: form.voice_id.trim(),
@@ -1329,6 +1377,40 @@ export default function SettingsDialog({
                               placeholder={selectedProvider.model}
                               onChange={(e) => set("model", e.target.value)}
                             />
+                          </Field>
+                          <Field
+                            label="Reasoning effort"
+                            help={
+                              effortSupported
+                                ? "Also available as /effort low|medium|high|xhigh|max|auto."
+                                : "Stored for later, but this provider profile does not send effort fields."
+                            }
+                          >
+                            <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                              {reasoningEfforts.map((effort) => {
+                                const selected = normalizeReasoningEffort(form.reasoning_effort) === effort.value;
+                                return (
+                                  <button
+                                    key={effort.value}
+                                    type="button"
+                                    onClick={() => set("reasoning_effort", effort.value)}
+                                    className={`min-h-12 rounded-md border px-3 py-2 text-left transition ${
+                                      selected
+                                        ? "border-[#111827] bg-[#f8f9fb] text-[#111827]"
+                                        : "border-[#e2e5ea] bg-white text-[#4f5661] hover:bg-[#f8f9fb]"
+                                    }`}
+                                  >
+                                    <span className="flex items-center gap-2 text-[12px] font-semibold">
+                                      {effort.label}
+                                      {selected && <CheckIcon size={13} className="ml-auto shrink-0" />}
+                                    </span>
+                                    <span className="mt-0.5 block truncate text-[11px] text-[#8a9099]">
+                                      {effort.help}
+                                    </span>
+                                  </button>
+                                );
+                              })}
+                            </div>
                           </Field>
                           <Field label="Persona Pack">
                             <select
