@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import type { SessionMeta } from "../lib/types";
 import { ComposeIcon, FolderIcon, ImageIcon, PanelLeftIcon, SettingsIcon, TrashIcon } from "./Icons";
 
-export type AppView = "chat" | "media";
+export type AppView = "chat" | "media" | "settings";
 
 type Props = {
   open: boolean;
@@ -80,7 +80,7 @@ export function Sidebar({
   }
 
   const navButton =
-    "flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-[13px] transition";
+    "flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-[13px] transition";
 
   return (
     <>
@@ -156,7 +156,7 @@ export function Sidebar({
             return (
               <div
                 key={s.id}
-                className={`group relative mb-1 rounded-md ${
+                className={`group relative mb-1 rounded-lg ${
                   activeView === "chat" && s.id === activeId ? "bg-white shadow-sm" : "hover:bg-[#dfe4ea]"
                 }`}
               >
@@ -235,7 +235,9 @@ export function Sidebar({
         <div className="border-t border-[#dfe3e8] pt-2">
           <button
             onClick={onOpenSettings}
-            className={`flex w-full items-center gap-2 rounded-md py-2 text-left text-[13px] transition hover:bg-[#dfe4ea] ${open ? "px-2" : "justify-center px-0"}`}
+            className={`flex w-full items-center gap-2 rounded-md py-2 text-left text-[13px] transition ${
+              activeView === "settings" ? "bg-white shadow-sm" : "hover:bg-[#dfe4ea]"
+            } ${open ? "px-2" : "justify-center px-0"}`}
             aria-label="Settings"
           >
             {open ? (
