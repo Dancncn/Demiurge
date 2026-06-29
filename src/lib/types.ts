@@ -30,6 +30,7 @@ export type ProviderKind =
   | "open_ai_compatible"
   | "local";
 export type PermissionMode = "plan" | "default" | "auto" | "bypass";
+export type ReasoningEffort = "auto" | "low" | "medium" | "high" | "xhigh" | "max";
 export type WebSearchProvider = "auto" | "bing" | "duckduckgo" | "tavily" | "brave" | "exa";
 
 export interface ConnectionTestResult {
@@ -49,6 +50,7 @@ export interface Settings {
   max_context_chars: number;
   max_input_tokens: number;
   reserved_output_tokens: number;
+  reasoning_effort: ReasoningEffort;
   auto_memory_enabled: boolean;
   voice_enabled: boolean;
   voice_stt_backend: string;

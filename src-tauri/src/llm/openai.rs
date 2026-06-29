@@ -9,7 +9,7 @@ use crate::store::Settings;
 
 use super::{
     merge_usage, normalize_finish_reason, require_api_key, AssistantTurn, ProviderAdapterKind,
-    ProviderProfile, StructuredOutputRequest, Usage,
+    ProviderProfile, ReasoningEffortCapability, StructuredOutputRequest, Usage,
 };
 
 pub async fn stream_completion_with_profile(
@@ -93,8 +93,19 @@ pub fn build_openai_body_with_structured_output(
         "model": cfg.model,
         "messages": messages,
         "stream": profile.supports_streaming,
-        "max_tokens": profile.effective_reserved_output_tokens(cfg),
     });
+    let max_output_tokens = profile.effective_reserved_output_tokens(cfg);
+    if matches!(
+        profile.reasoning_effort,
+        ReasoningEffortCapability::OpenAiChatCompletions
+    ) {
+        body["max_completion_tokens"] = json!(max_output_tokens);
+    } else {
+        body["max_tokens"] = json!(max_output_tokens);
+    }
+    if let Some(effort) = profile.openai_chat_reasoning_effort(cfg) {
+        body["reasoning_effort"] = json!(effort);
+    }
     if profile.supports_non_empty_tools(tools) {
         body["tools"] = tools.clone();
         body["tool_choice"] = json!("auto");
@@ -224,7 +235,7 @@ fn parse_openai_usage(v: &Value) -> Option<Usage> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::store::{ProviderKind, Settings};
+    use crate::store::{ProviderKind, ReasoningEffort, Settings};
 
     fn settings(provider: ProviderKind, api_key: &str) -> Settings {
         Settings {
@@ -261,7 +272,8 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(body["max_tokens"], 16_384);
+        assert_eq!(body["max_completion_tokens"], 16_384);
+        assert!(body.get("max_tokens").is_none());
         assert_eq!(body["parallel_tool_calls"], true);
     }
 
@@ -278,7 +290,56 @@ mod tests {
         .unwrap();
 
         assert_eq!(body["max_tokens"], 32_000);
+        assert!(body.get("max_completion_tokens").is_none());
         assert!(body.get("parallel_tool_calls").is_none());
+    }
+
+    #[test]
+    fn official_openai_body_includes_xhigh_reasoning_effort_when_supported() {
+        let mut cfg = settings(ProviderKind::OpenAi, "sk-test");
+        cfg.model = "gpt-5.2".to_string();
+        cfg.reasoning_effort = ReasoningEffort::Max;
+        let body = build_openai_body(
+            &cfg,
+            &[Message::user("hi")],
+            &json!([]),
+            ProviderProfile::for_kind(ProviderKind::OpenAi),
+        )
+        .unwrap();
+
+        assert_eq!(body["reasoning_effort"], "xhigh");
+    }
+
+    #[test]
+    fn official_openai_body_downgrades_xhigh_when_model_lacks_support() {
+        let mut cfg = settings(ProviderKind::OpenAi, "sk-test");
+        cfg.model = "o3".to_string();
+        cfg.reasoning_effort = ReasoningEffort::Max;
+        let body = build_openai_body(
+            &cfg,
+            &[Message::user("hi")],
+            &json!([]),
+            ProviderProfile::for_kind(ProviderKind::OpenAi),
+        )
+        .unwrap();
+
+        assert_eq!(body["reasoning_effort"], "high");
+    }
+
+    #[test]
+    fn official_openai_body_omits_reasoning_effort_for_non_reasoning_models() {
+        let mut cfg = settings(ProviderKind::OpenAi, "sk-test");
+        cfg.model = "gpt-4o".to_string();
+        cfg.reasoning_effort = ReasoningEffort::High;
+        let body = build_openai_body(
+            &cfg,
+            &[Message::user("hi")],
+            &json!([]),
+            ProviderProfile::for_kind(ProviderKind::OpenAi),
+        )
+        .unwrap();
+
+        assert!(body.get("reasoning_effort").is_none());
     }
 
     #[test]
