@@ -16,6 +16,7 @@ import type {
   PermissionEffect,
   PermissionPanelState,
   PermissionScope,
+  AppTheme,
   ProviderKind,
   ReasoningEffort,
   Settings,
@@ -40,7 +41,17 @@ interface Props {
   onAgentPanelChange: (state: AgentPanelState) => void;
 }
 
-type SettingsTab = "general" | "provider" | "media" | "web" | "files" | "context" | "tools" | "voice" | "advanced";
+type SettingsTab =
+  | "general"
+  | "provider"
+  | "persona"
+  | "media"
+  | "web"
+  | "files"
+  | "context"
+  | "tools"
+  | "voice"
+  | "advanced";
 
 
 const webSearchProviders: { value: WebSearchProvider; label: string; helpKey: string }[] = [
@@ -74,6 +85,12 @@ const reasoningEfforts: { value: ReasoningEffort; label: string; helpKey: string
   { value: "high", label: "High", helpKey: "settings.effort.high" },
   { value: "xhigh", label: "XHigh", helpKey: "settings.effort.xhigh" },
   { value: "max", label: "Max", helpKey: "settings.effort.max" },
+];
+
+const themeOptions: { value: AppTheme; labelKey: string; helpKey: string }[] = [
+  { value: "system", labelKey: "settings.general.theme.system", helpKey: "settings.general.theme.systemHelp" },
+  { value: "light", labelKey: "settings.general.theme.light", helpKey: "settings.general.theme.lightHelp" },
+  { value: "dark", labelKey: "settings.general.theme.dark", helpKey: "settings.general.theme.darkHelp" },
 ];
 
 const inputCls =
@@ -112,6 +129,10 @@ function normalizeWebSearchProvider(value: string): WebSearchProvider {
 
 function normalizeReasoningEffort(value: string): ReasoningEffort {
   return reasoningEfforts.some((effort) => effort.value === value) ? (value as ReasoningEffort) : "auto";
+}
+
+function normalizeTheme(value: string): AppTheme {
+  return themeOptions.some((theme) => theme.value === value) ? (value as AppTheme) : "system";
 }
 
 function modelSupportsReasoningEffort(provider: ProviderKind, model: string) {
@@ -538,7 +559,7 @@ export default function SettingsDialog({
   const [agentValidation, setAgentValidation] = useState<AgentValidationResult | null>(null);
   const [agentBusy, setAgentBusy] = useState(false);
   const [agentStatus, setAgentStatus] = useState("");
-  const [activeTab, setActiveTab] = useState<SettingsTab>("provider");
+  const [activeTab, setActiveTab] = useState<SettingsTab>("general");
   const [providerQuery, setProviderQuery] = useState("");
   const [providerTestBusy, setProviderTestBusy] = useState(false);
   const [providerTestStatus, setProviderTestStatus] = useState("");
@@ -1293,6 +1314,11 @@ export default function SettingsDialog({
   const navItems: { id: SettingsTab; label: string; detail: string }[] = [
     { id: "general", label: t("settings.general"), detail: form.language === "zh" ? "简体中文" : "English" },
     { id: "provider", label: t("settings.nav.providers"), detail: selectedProvider.label },
+    {
+      id: "persona",
+      label: t("settings.nav.persona"),
+      detail: packs.find((pack) => pack.id === form.current_pack)?.name ?? form.current_pack,
+    },
     { id: "media", label: t("settings.nav.media"), detail: form.image_model || t("settings.nav.detail.media") },
     { id: "web", label: t("settings.nav.web"), detail: selectedWebSearchProvider.label },
     {
@@ -1327,6 +1353,8 @@ export default function SettingsDialog({
       max_context_chars: Math.max(2000, form.max_context_chars || 0),
       max_input_tokens: maxInput,
       reserved_output_tokens: reserved,
+      theme: normalizeTheme(form.theme),
+      launch_on_startup: form.launch_on_startup,
       reasoning_effort: normalizeReasoningEffort(form.reasoning_effort),
       voice_stt_backend: form.voice_stt_backend.trim() || "none",
       voice_tts_backend: form.voice_tts_backend.trim() || "none",
@@ -1450,6 +1478,41 @@ export default function SettingsDialog({
                         );
                       })}
                     </div>
+                  </Section>
+                  <Section title={t("settings.general.themeTitle")} description={t("settings.general.themeDesc")}>
+                    <div className="grid gap-2 sm:grid-cols-3">
+                      {themeOptions.map((theme) => {
+                        const selected = normalizeTheme(form.theme) === theme.value;
+                        return (
+                          <button
+                            key={theme.value}
+                            type="button"
+                            onClick={() => set("theme", theme.value)}
+                            className={`cf-press min-h-16 rounded-lg border px-3 py-3 text-left transition ${
+                              selected
+                                ? "border-[#111827] bg-[#f8f9fb] text-[#111827]"
+                                : "border-[#e2e5ea] bg-white text-[#4f5661] hover:bg-[#f8f9fb]"
+                            }`}
+                          >
+                            <span className="flex items-center gap-2 text-[13px] font-semibold">
+                              {t(theme.labelKey)}
+                              {selected && <CheckIcon size={14} className="ml-auto shrink-0" />}
+                            </span>
+                            <span className="mt-1 block text-[12px] leading-5 text-[#7a8088]">
+                              {t(theme.helpKey)}
+                            </span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </Section>
+                  <Section title={t("settings.general.startupTitle")} description={t("settings.general.startupDesc")}>
+                    <ToggleRow
+                      checked={form.launch_on_startup}
+                      title={t("settings.general.launchOnStartup")}
+                      description={t("settings.general.launchOnStartupDesc")}
+                      onChange={(checked) => set("launch_on_startup", checked)}
+                    />
                   </Section>
                 </>
               )}
@@ -1602,6 +1665,8 @@ export default function SettingsDialog({
                               })}
                             </div>
                           </Field>
+                          {false && (
+                            <>
                           <Field label={t("settings.provider.pack")}>
                             <Select
                               value={form.current_pack}
@@ -1795,6 +1860,8 @@ export default function SettingsDialog({
                               </div>
                             )}
                           </div>
+                            </>
+                          )}
                           <div className="flex flex-wrap gap-2">
                             <button
                               type="button"
@@ -1822,6 +1889,209 @@ export default function SettingsDialog({
                           )}
                         </div>
                       </div>
+                    </div>
+                  </Section>
+                </>
+              )}
+
+              {activeTab === "persona" && (
+                <>
+                  <Section title={t("settings.persona.packTitle")} description={t("settings.persona.packDesc")}>
+                    <div className="grid gap-4">
+                      <Field label={t("settings.persona.currentPack")}>
+                        <Select
+                          value={form.current_pack}
+                          onChange={(v) => set("current_pack", v)}
+                          placeholder={t("settings.persona.packPlaceholder")}
+                          options={packs.map((p) => ({ value: p.id, label: p.name, hint: p.id }))}
+                        />
+                      </Field>
+                      <div
+                        className="rounded-lg border border-dashed border-[#cfd5dd] bg-[#fbfcfd] p-3"
+                        onDragOver={(event) => {
+                          event.preventDefault();
+                          event.dataTransfer.dropEffect = "copy";
+                        }}
+                        onDrop={handlePackDrop}
+                      >
+                        <input
+                          ref={packImportInputRef}
+                          className="hidden"
+                          type="file"
+                          accept=".zip,application/zip,application/x-zip-compressed"
+                          onChange={(event) => void importPackZip(event.target.files?.[0])}
+                        />
+                        <div className="flex flex-wrap items-center gap-3">
+                          <div className="grid size-10 shrink-0 place-items-center rounded-lg border border-[#dfe3e8] bg-white text-[#59616d]">
+                            <DownloadIcon size={18} />
+                          </div>
+                          <div className="min-w-[180px] flex-1">
+                            <div className="text-[13px] font-medium text-[#202124]">
+                              {t("settings.persona.importPack")}
+                            </div>
+                            <div className="mt-0.5 text-[12px] leading-5 text-[#7a8088]">
+                              {t("settings.persona.importPackDesc")}
+                            </div>
+                          </div>
+                          <button
+                            type="button"
+                            className={secondaryButtonCls}
+                            disabled={packImportBusy}
+                            onClick={() => packImportInputRef.current?.click()}
+                          >
+                            {packImportBusy ? t("settings.persona.importing") : t("settings.persona.chooseZip")}
+                          </button>
+                        </div>
+                        {packImportStatus && (
+                          <div
+                            className={`mt-3 rounded-md border px-3 py-2 text-[12px] leading-5 ${
+                              packImportFailed
+                                ? "border-[#f3c3c3] bg-[#fff7f7] text-[#b42318]"
+                                : "border-[#dce6d8] bg-[#f8fbf6] text-[#3f6212]"
+                            }`}
+                          >
+                            {packImportStatus}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </Section>
+
+                  <Section title={t("settings.persona.manifestTitle")} description={t("settings.persona.manifestDesc")}>
+                    <div className="rounded-lg border border-[#e2e5ea] bg-white p-3">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <button
+                          type="button"
+                          className={secondaryButtonCls}
+                          disabled={packManifestBusy || !form.current_pack}
+                          onClick={() => void saveCurrentPackManifest()}
+                        >
+                          {t("settings.persona.saveManifest")}
+                        </button>
+                        <button
+                          type="button"
+                          className={secondaryButtonCls}
+                          disabled={!packManifestJson.trim()}
+                          onClick={exportCurrentPackManifest}
+                        >
+                          {t("settings.persona.exportManifest")}
+                        </button>
+                        <button
+                          type="button"
+                          className={secondaryButtonCls}
+                          disabled={!packManifestJson.trim()}
+                          onClick={addLoreDirectoryTemplate}
+                        >
+                          {t("settings.persona.addLoreTemplate")}
+                        </button>
+                      </div>
+
+                      <div className="mt-3 rounded-md border border-[#e2e5ea] bg-[#fbfcfd] p-3">
+                        <div className="mb-2 flex flex-wrap items-center justify-between gap-3">
+                          <div>
+                            <div className="text-[12px] font-medium text-[#202124]">Lorebook RAG</div>
+                            <div className="mt-0.5 text-[12px] leading-5 text-[#7a8088]">
+                              {t("settings.persona.lorebookDesc")}
+                            </div>
+                          </div>
+                        </div>
+                        <div className="space-y-2">
+                          {loreEntries.length ? (
+                            loreEntries.map((entry, index) => (
+                              <div
+                                key={`${entry.path}-${index}`}
+                                className="rounded-md border border-[#e5e7eb] bg-white px-3 py-2 text-[12px] leading-5 text-[#5f6368]"
+                              >
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <span className="font-mono text-[#202124]">{entry.path}</span>
+                                  {entry.recursive && (
+                                    <span className="rounded bg-[#eef2ff] px-1.5 py-0.5 text-[#3730a3]">recursive</span>
+                                  )}
+                                  {entry.extensions?.length ? (
+                                    <span className="rounded bg-[#ecfdf3] px-1.5 py-0.5 text-[#166534]">
+                                      {entry.extensions.join(", ")}
+                                    </span>
+                                  ) : (
+                                    <span className="rounded bg-[#f5f5f5] px-1.5 py-0.5 text-[#6b7280]">
+                                      md, markdown, txt
+                                    </span>
+                                  )}
+                                  {typeof entry.priority === "number" && (
+                                    <span className="rounded bg-[#fff7ed] px-1.5 py-0.5 text-[#9a3412]">
+                                      priority {entry.priority}
+                                    </span>
+                                  )}
+                                </div>
+                                {(entry.title || entry.tags?.length) && (
+                                  <div className="mt-1 text-[#7a8088]">
+                                    {[entry.title, entry.tags?.length ? `tags: ${entry.tags.join(", ")}` : ""]
+                                      .filter(Boolean)
+                                      .join(" / ")}
+                                  </div>
+                                )}
+                              </div>
+                            ))
+                          ) : (
+                            <div className="rounded-md border border-dashed border-[#d9d9d9] bg-white px-3 py-2 text-[12px] leading-5 text-[#7a8088]">
+                              {t("settings.persona.noLorebook")}
+                            </div>
+                          )}
+                        </div>
+                        <div className="mt-3 flex flex-col gap-2 sm:flex-row">
+                          <input
+                            className={inputCls}
+                            value={lorePreviewQuery}
+                            onChange={(event) => {
+                              setLorePreviewQuery(event.target.value);
+                              setLorePreviewText("");
+                              setLorePreviewFailed(false);
+                            }}
+                            placeholder={t("settings.persona.previewPlaceholder")}
+                          />
+                          <button
+                            type="button"
+                            className={secondaryButtonCls}
+                            disabled={lorePreviewBusy || !form.current_pack || !lorePreviewQuery.trim()}
+                            onClick={() => void previewCurrentPackLorebook()}
+                          >
+                            {lorePreviewBusy ? t("settings.persona.previewing") : t("settings.persona.preview")}
+                          </button>
+                        </div>
+                        {lorePreviewText && (
+                          <pre
+                            className={`mt-3 max-h-48 overflow-auto whitespace-pre-wrap rounded-md border px-3 py-2 text-[12px] leading-5 ${
+                              lorePreviewFailed
+                                ? "border-[#f3c3c3] bg-[#fff7f7] text-[#b42318]"
+                                : "border-[#d9d9d9] bg-white text-[#3f4650]"
+                            }`}
+                          >
+                            {lorePreviewText}
+                          </pre>
+                        )}
+                      </div>
+
+                      <textarea
+                        className="mt-3 min-h-[260px] w-full resize-y rounded-md border border-[#d9d9d9] bg-[#fbfcfd] px-3 py-2 font-mono text-[12px] leading-5 text-[#202124] outline-none transition focus:border-[#7a7f87] focus:ring-1 focus:ring-[#202124]/10"
+                        spellCheck={false}
+                        value={packManifestJson}
+                        onChange={(event) => {
+                          setPackManifestJson(event.target.value);
+                          setPackManifestStatus("");
+                          setPackManifestFailed(false);
+                        }}
+                        placeholder={packManifestBusy ? t("settings.persona.loadingManifest") : "manifest.json"}
+                      />
+                      {packManifestStatus && (
+                        <div
+                          className={`mt-3 rounded-md border px-3 py-2 text-[12px] leading-5 ${
+                            packManifestFailed
+                              ? "border-[#f3c3c3] bg-[#fff7f7] text-[#b42318]"
+                              : "border-[#dce6d8] bg-[#f8fbf6] text-[#3f6212]"
+                          }`}
+                        >
+                          {packManifestStatus}
+                        </div>
+                      )}
                     </div>
                   </Section>
                 </>

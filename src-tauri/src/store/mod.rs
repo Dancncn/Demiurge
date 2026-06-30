@@ -52,6 +52,10 @@ fn default_language() -> String {
     "zh".to_string()
 }
 
+fn default_theme() -> String {
+    "system".to_string()
+}
+
 fn default_auto_memory_enabled() -> bool {
     DEFAULT_AUTO_MEMORY_ENABLED
 }
@@ -243,6 +247,10 @@ pub struct Settings {
     /// 界面语言：zh（默认）/ en。
     #[serde(default = "default_language")]
     pub language: String,
+    #[serde(default = "default_theme")]
+    pub theme: String,
+    #[serde(default)]
+    pub launch_on_startup: bool,
     #[serde(default = "default_reasoning_effort")]
     pub reasoning_effort: ReasoningEffort,
     #[serde(default = "default_auto_memory_enabled")]
@@ -310,6 +318,8 @@ impl Default for Settings {
             reserved_output_tokens: DEFAULT_RESERVED_OUTPUT_TOKENS,
             context_budget_auto: true,
             language: default_language(),
+            theme: default_theme(),
+            launch_on_startup: false,
             reasoning_effort: default_reasoning_effort(),
             auto_memory_enabled: DEFAULT_AUTO_MEMORY_ENABLED,
             voice_enabled: DEFAULT_VOICE_ENABLED,
@@ -521,6 +531,8 @@ mod tests {
         assert_eq!(settings.tts_model, "qwen3-tts-flash");
         assert!(settings.mcp_servers.is_empty());
         assert_eq!(settings.reasoning_effort, ReasoningEffort::Auto);
+        assert_eq!(settings.theme, "system");
+        assert!(!settings.launch_on_startup);
     }
 
     #[test]

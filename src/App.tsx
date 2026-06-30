@@ -48,6 +48,8 @@ const PREVIEW_SETTINGS: Settings = {
   reserved_output_tokens: 4000,
   context_budget_auto: true,
   language: "zh",
+  theme: "system",
+  launch_on_startup: false,
   auto_memory_enabled: true,
   voice_enabled: false,
   voice_stt_backend: "",
@@ -217,6 +219,16 @@ export default function App() {
     if (selectedAgentNames.length === 1) return selectedAgentNames[0];
     return t("header.agentsCount", { n: selectedAgentNames.length });
   }, [selectedAgentNames, t]);
+
+  useEffect(() => {
+    const theme = settings?.theme ?? "system";
+    const systemDark =
+      typeof window !== "undefined" && window.matchMedia?.("(prefers-color-scheme: dark)").matches === true;
+    const resolved = theme === "system" ? (systemDark ? "dark" : "light") : theme;
+    document.documentElement.dataset.theme = theme;
+    document.documentElement.dataset.resolvedTheme = resolved;
+    document.documentElement.style.colorScheme = resolved;
+  }, [settings?.theme]);
 
   useEffect(() => {
     if (!("__TAURI_INTERNALS__" in window)) return;
