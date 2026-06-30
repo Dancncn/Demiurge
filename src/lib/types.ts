@@ -409,11 +409,87 @@ export interface GoalPanelState {
 }
 
 export interface PackManifest {
+  schema_version?: string;
   id: string;
   name: string;
+  description?: string;
   persona: string;
   avatar?: string;
   avatarDataUrl?: string;
+  character?: CharacterCard;
+  runtime?: CharacterRuntime;
+  lorebook?: LoreEntry[];
+}
+
+export interface CharacterCard {
+  identity?: string;
+  background?: string;
+  personality?: string[];
+  speech_style?: SpeechStyle;
+  habits?: string[];
+  relationship?: RelationshipStyle;
+  opening_messages?: string[];
+  example_dialogues?: ExampleDialogue[];
+  ooc_rules?: string[];
+}
+
+export interface SpeechStyle {
+  tone?: string[];
+  first_person?: string;
+  address_user_as?: string;
+  catchphrases?: string[];
+  taboo_phrases?: string[];
+  sentence_patterns?: string[];
+}
+
+export interface RelationshipStyle {
+  default?: string;
+  progression?: string;
+}
+
+export interface ExampleDialogue {
+  user: string;
+  assistant: string;
+}
+
+export interface LoreEntry {
+  path: string;
+  title?: string;
+  tags?: string[];
+  priority?: number;
+  recursive?: boolean;
+  extensions?: string[];
+}
+
+export interface CharacterRuntime {
+  skills?: SkillBindingPolicy;
+  memory?: MemoryPolicy;
+  voice?: VoicePreference;
+  permissions?: Record<string, string>;
+}
+
+export interface SkillBindingPolicy {
+  recommended?: string[];
+  disabled?: string[];
+  auto_activate?: AutoSkillBinding[];
+}
+
+export interface AutoSkillBinding {
+  skill: string;
+  when?: string[];
+}
+
+export interface MemoryPolicy {
+  namespace?: string;
+  write_policy?: string;
+  preferred_facts?: string[];
+  must_remember?: string[];
+  avoid_remembering?: string[];
+}
+
+export interface VoicePreference {
+  tts_profile?: string;
+  speed?: number;
 }
 
 export type AgentKind = "template" | "team";

@@ -140,6 +140,12 @@ fn build_ordered_sections(
             skills_section(root, data_dir, packs_dir, &settings.current_pack, user_text),
         ),
         section(
+            "lorebook",
+            "Retrieved Lorebook",
+            78,
+            lorebook_section(data_dir, packs_dir, &settings.current_pack, user_text),
+        ),
+        section(
             "project_instructions",
             "Project Instructions",
             80,
@@ -298,6 +304,15 @@ fn skills_section(
     user_text: Option<&str>,
 ) -> String {
     super::skills::context_for_turn(root, data_dir, packs_dir, pack_id, user_text).text
+}
+
+fn lorebook_section(
+    data_dir: &Path,
+    packs_dir: &Path,
+    pack_id: &str,
+    user_text: Option<&str>,
+) -> String {
+    crate::pack::lorebook_context(packs_dir, data_dir, pack_id, user_text)
 }
 
 fn project_section(root: &Path) -> String {

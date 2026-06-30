@@ -809,6 +809,38 @@ fn import_pack_zip(
 }
 
 #[tauri::command]
+fn read_pack_manifest_json(state: State<'_, AppState>, id: String) -> Result<String, String> {
+    let dir = state.packs_dir.lock().unwrap().clone();
+    pack::read_manifest_json(&dir, &id)
+}
+
+#[tauri::command]
+fn save_pack_manifest_json(
+    state: State<'_, AppState>,
+    id: String,
+    raw_json: String,
+) -> Result<pack::PackManifest, String> {
+    let dir = state.packs_dir.lock().unwrap().clone();
+    pack::save_manifest_json(&dir, &id, &raw_json)
+}
+
+#[tauri::command]
+fn preview_pack_lorebook(
+    state: State<'_, AppState>,
+    id: String,
+    query: String,
+) -> Result<String, String> {
+    let packs_dir = state.packs_dir.lock().unwrap().clone();
+    let data_dir = state.data_dir.lock().unwrap().clone();
+    Ok(pack::lorebook_context(
+        &packs_dir,
+        &data_dir,
+        &id,
+        Some(&query),
+    ))
+}
+
+#[tauri::command]
 fn agent_panel_state(state: State<'_, AppState>) -> agent::custom::AgentPanelState {
     agent::custom::panel_state(state.inner())
 }
@@ -1727,6 +1759,9 @@ pub fn run() {
             mcp_set_server_enabled,
             list_packs,
             import_pack_zip,
+            read_pack_manifest_json,
+            save_pack_manifest_json,
+            preview_pack_lorebook,
             agent_panel_state,
             agent_template_json,
             agent_validate_json,

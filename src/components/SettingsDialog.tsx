@@ -564,6 +564,14 @@ export default function SettingsDialog({
   const [packImportBusy, setPackImportBusy] = useState(false);
   const [packImportStatus, setPackImportStatus] = useState("");
   const [packImportFailed, setPackImportFailed] = useState(false);
+  const [packManifestJson, setPackManifestJson] = useState("");
+  const [packManifestBusy, setPackManifestBusy] = useState(false);
+  const [packManifestStatus, setPackManifestStatus] = useState("");
+  const [packManifestFailed, setPackManifestFailed] = useState(false);
+  const [lorePreviewQuery, setLorePreviewQuery] = useState("");
+  const [lorePreviewText, setLorePreviewText] = useState("");
+  const [lorePreviewBusy, setLorePreviewBusy] = useState(false);
+  const [lorePreviewFailed, setLorePreviewFailed] = useState(false);
   const agentImportInputRef = useRef<HTMLInputElement>(null);
   const packImportInputRef = useRef<HTMLInputElement>(null);
 
@@ -578,9 +586,40 @@ export default function SettingsDialog({
       setMcpError("");
       setPackImportStatus("");
       setPackImportFailed(false);
+      setPackManifestStatus("");
+      setPackManifestFailed(false);
+      setLorePreviewQuery("");
+      setLorePreviewText("");
+      setLorePreviewFailed(false);
       setMemoryDrafts({});
     }
   }, [open, settings, agentPanel]);
+
+  useEffect(() => {
+    if (!open || !form.current_pack) return;
+    let cancelled = false;
+    setPackManifestBusy(true);
+    setPackManifestStatus("");
+    setPackManifestFailed(false);
+    api
+      .readPackManifestJson(form.current_pack)
+      .then((json) => {
+        if (!cancelled) setPackManifestJson(json);
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setPackManifestJson("");
+          setPackManifestFailed(true);
+          setPackManifestStatus(String(err));
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setPackManifestBusy(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, form.current_pack]);
 
   useEffect(() => {
     if (!open) return;
@@ -691,6 +730,15 @@ export default function SettingsDialog({
     () => permissionState?.tools.find((tool) => tool.tool === permissionDraft.tool) ?? null,
     [permissionDraft.tool, permissionState?.tools],
   );
+  const packManifestDraft = useMemo(() => {
+    if (!packManifestJson.trim()) return null;
+    try {
+      return JSON.parse(packManifestJson) as PackManifest;
+    } catch {
+      return null;
+    }
+  }, [packManifestJson]);
+  const loreEntries = packManifestDraft?.lorebook ?? [];
 
   if (!open) return null;
 
@@ -745,6 +793,86 @@ export default function SettingsDialog({
     } finally {
       setPackImportBusy(false);
       if (packImportInputRef.current) packImportInputRef.current.value = "";
+    }
+  }
+
+  async function saveCurrentPackManifest() {
+    if (!form.current_pack) return;
+    setPackManifestBusy(true);
+    setPackManifestStatus("");
+    setPackManifestFailed(false);
+    try {
+      const saved = await api.savePackManifestJson(form.current_pack, packManifestJson);
+      const nextPacks = await api.listPacks();
+      onPacksChange(nextPacks);
+      setPackManifestJson(await api.readPackManifestJson(saved.id));
+      setPackManifestStatus(`角色卡已保存：${saved.name}`);
+    } catch (err) {
+      setPackManifestFailed(true);
+      setPackManifestStatus(String(err));
+    } finally {
+      setPackManifestBusy(false);
+    }
+  }
+
+  function exportCurrentPackManifest() {
+    if (!form.current_pack || !packManifestJson.trim()) return;
+    const blob = new Blob([packManifestJson.endsWith("\n") ? packManifestJson : `${packManifestJson}\n`], {
+      type: "application/json;charset=utf-8",
+    });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `${form.current_pack}-manifest.json`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+  }
+
+  function addLoreDirectoryTemplate() {
+    if (!packManifestJson.trim()) return;
+    let manifest: PackManifest;
+    try {
+      manifest = JSON.parse(packManifestJson) as PackManifest;
+    } catch {
+      setPackManifestFailed(true);
+      setPackManifestStatus("manifest JSON 暂时无法解析，修正后再添加 lore 目录。");
+      return;
+    }
+    const lorebook = Array.isArray(manifest.lorebook) ? [...manifest.lorebook] : [];
+    if (lorebook.some((entry) => entry.path === "lore")) {
+      setPackManifestFailed(false);
+      setPackManifestStatus("当前 manifest 已包含 lore 目录。");
+      return;
+    }
+    lorebook.push({
+      path: "lore",
+      title: "角色扩展设定",
+      tags: ["lore", "plot"],
+      recursive: true,
+      extensions: ["md", "txt"],
+      priority: 0.5,
+    });
+    setPackManifestJson(JSON.stringify({ ...manifest, lorebook }, null, 2));
+    setPackManifestFailed(false);
+    setPackManifestStatus("已添加 lore 目录模板，保存后生效。");
+  }
+
+  async function previewCurrentPackLorebook() {
+    const query = lorePreviewQuery.trim();
+    if (!form.current_pack || !query) return;
+    setLorePreviewBusy(true);
+    setLorePreviewFailed(false);
+    setLorePreviewText("");
+    try {
+      const text = await api.previewPackLorebook(form.current_pack, query);
+      setLorePreviewText(text.trim() || "没有召回相关 lore 片段。");
+    } catch (err) {
+      setLorePreviewFailed(true);
+      setLorePreviewText(String(err));
+    } finally {
+      setLorePreviewBusy(false);
     }
   }
 
@@ -1489,6 +1617,145 @@ export default function SettingsDialog({
                                 }`}
                               >
                                 {packImportStatus}
+                              </div>
+                            )}
+                          </div>
+                          <div className="rounded-lg border border-[#e2e5ea] bg-white p-3">
+                            <div className="flex flex-wrap items-center gap-3">
+                              <div className="min-w-[180px] flex-1">
+                                <div className="text-[13px] font-medium text-[#202124]">角色卡 manifest</div>
+                                <div className="mt-0.5 text-[12px] leading-5 text-[#7a8088]">
+                                  编辑当前角色卡的 persona、skills、memory、voice、permissions 与 lorebook 配置；请确认导入素材与角色设定已获得授权。
+                                </div>
+                              </div>
+                              <button
+                                type="button"
+                                className={secondaryButtonCls}
+                                disabled={packManifestBusy || !form.current_pack}
+                                onClick={() => void saveCurrentPackManifest()}
+                              >
+                                保存
+                              </button>
+                              <button
+                                type="button"
+                                className={secondaryButtonCls}
+                                disabled={!packManifestJson.trim()}
+                                onClick={exportCurrentPackManifest}
+                              >
+                                导出
+                              </button>
+                            </div>
+                            <div className="mt-3 rounded-md border border-[#e2e5ea] bg-[#fbfcfd] p-3">
+                              <div className="flex flex-wrap items-center gap-3">
+                                <div className="min-w-[180px] flex-1">
+                                  <div className="text-[12px] font-medium text-[#202124]">Lorebook RAG</div>
+                                  <div className="mt-0.5 text-[12px] leading-5 text-[#7a8088]">
+                                    把剧情、世界观和设定文本放进角色包 lore 目录；保存 manifest 后，会按当前输入检索相关片段注入上下文。
+                                  </div>
+                                </div>
+                                <button
+                                  type="button"
+                                  className={secondaryButtonCls}
+                                  disabled={!packManifestJson.trim()}
+                                  onClick={addLoreDirectoryTemplate}
+                                >
+                                  添加目录模板
+                                </button>
+                              </div>
+                              <div className="mt-3 space-y-2">
+                                {loreEntries.length ? (
+                                  loreEntries.map((entry, index) => (
+                                    <div
+                                      key={`${entry.path}-${index}`}
+                                      className="rounded-md border border-[#e5e7eb] bg-white px-3 py-2 text-[12px] leading-5 text-[#5f6368]"
+                                    >
+                                      <div className="flex flex-wrap items-center gap-2">
+                                        <span className="font-mono text-[#202124]">{entry.path}</span>
+                                        {entry.recursive && (
+                                          <span className="rounded bg-[#eef2ff] px-1.5 py-0.5 text-[#3730a3]">recursive</span>
+                                        )}
+                                        {entry.extensions?.length ? (
+                                          <span className="rounded bg-[#ecfdf3] px-1.5 py-0.5 text-[#166534]">
+                                            {entry.extensions.join(", ")}
+                                          </span>
+                                        ) : (
+                                          <span className="rounded bg-[#f5f5f5] px-1.5 py-0.5 text-[#6b7280]">
+                                            md, markdown, txt
+                                          </span>
+                                        )}
+                                        {typeof entry.priority === "number" && (
+                                          <span className="rounded bg-[#fff7ed] px-1.5 py-0.5 text-[#9a3412]">
+                                            priority {entry.priority}
+                                          </span>
+                                        )}
+                                      </div>
+                                      {(entry.title || entry.tags?.length) && (
+                                        <div className="mt-1 text-[#7a8088]">
+                                          {[entry.title, entry.tags?.length ? `tags: ${entry.tags.join(", ")}` : ""]
+                                            .filter(Boolean)
+                                            .join(" / ")}
+                                        </div>
+                                      )}
+                                    </div>
+                                  ))
+                                ) : (
+                                  <div className="rounded-md border border-dashed border-[#d9d9d9] bg-white px-3 py-2 text-[12px] leading-5 text-[#7a8088]">
+                                    当前 manifest 还没有 lorebook 条目。
+                                  </div>
+                                )}
+                              </div>
+                              <div className="mt-3 flex flex-col gap-2 sm:flex-row">
+                                <input
+                                  className={inputCls}
+                                  value={lorePreviewQuery}
+                                  onChange={(event) => {
+                                    setLorePreviewQuery(event.target.value);
+                                    setLorePreviewText("");
+                                    setLorePreviewFailed(false);
+                                  }}
+                                  placeholder="输入一个剧情问题，预览召回片段"
+                                />
+                                <button
+                                  type="button"
+                                  className={secondaryButtonCls}
+                                  disabled={lorePreviewBusy || !form.current_pack || !lorePreviewQuery.trim()}
+                                  onClick={() => void previewCurrentPackLorebook()}
+                                >
+                                  {lorePreviewBusy ? "检索中" : "预览召回"}
+                                </button>
+                              </div>
+                              {lorePreviewText && (
+                                <pre
+                                  className={`mt-3 max-h-48 overflow-auto whitespace-pre-wrap rounded-md border px-3 py-2 text-[12px] leading-5 ${
+                                    lorePreviewFailed
+                                      ? "border-[#f3c3c3] bg-[#fff7f7] text-[#b42318]"
+                                      : "border-[#d9d9d9] bg-white text-[#3f4650]"
+                                  }`}
+                                >
+                                  {lorePreviewText}
+                                </pre>
+                              )}
+                            </div>
+                            <textarea
+                              className="mt-3 min-h-[220px] w-full resize-y rounded-md border border-[#d9d9d9] bg-[#fbfcfd] px-3 py-2 font-mono text-[12px] leading-5 text-[#202124] outline-none transition focus:border-[#7a7f87] focus:ring-1 focus:ring-[#202124]/10"
+                              spellCheck={false}
+                              value={packManifestJson}
+                              onChange={(event) => {
+                                setPackManifestJson(event.target.value);
+                                setPackManifestStatus("");
+                                setPackManifestFailed(false);
+                              }}
+                              placeholder={packManifestBusy ? "加载角色卡 manifest..." : "manifest.json"}
+                            />
+                            {packManifestStatus && (
+                              <div
+                                className={`mt-3 rounded-md border px-3 py-2 text-[12px] leading-5 ${
+                                  packManifestFailed
+                                    ? "border-[#f3c3c3] bg-[#fff7f7] text-[#b42318]"
+                                    : "border-[#dce6d8] bg-[#f8fbf6] text-[#3f6212]"
+                                }`}
+                              >
+                                {packManifestStatus}
                               </div>
                             )}
                           </div>

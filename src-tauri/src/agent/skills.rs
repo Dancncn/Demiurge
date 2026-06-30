@@ -116,7 +116,8 @@ pub fn context_for_turn(
     user_text: Option<&str>,
 ) -> SkillContext {
     let catalog = discover(sandbox, data_dir, packs_dir, pack_id);
-    let selected = select(&catalog.skills, user_text);
+    let policy = crate::pack::skill_policy(packs_dir, pack_id);
+    let selected = select_with_policy(&catalog.skills, user_text, &policy);
     let text = render_context(&selected, &catalog.diagnostics);
     SkillContext { text }
 }
@@ -129,7 +130,8 @@ pub fn panel_state(
     query: Option<&str>,
 ) -> SkillPanelState {
     let catalog = discover(sandbox, data_dir, packs_dir, pack_id);
-    let selected = select(&catalog.skills, query);
+    let policy = crate::pack::skill_policy(packs_dir, pack_id);
+    let selected = select_with_policy(&catalog.skills, query, &policy);
     let selected_ids = selected
         .iter()
         .map(|(skill, score)| (skill.id.as_str(), *score))
@@ -376,15 +378,19 @@ fn split_csv_like(value: &str) -> Vec<String> {
         .collect()
 }
 
-fn select<'a>(
+fn select_with_policy<'a>(
     skills: &'a [SkillDefinition],
     user_text: Option<&str>,
+    policy: &crate::pack::PackSkillPolicy,
 ) -> Vec<(&'a SkillDefinition, i32)> {
     let query = user_text.unwrap_or_default();
     let mut scored = skills
         .iter()
+        .filter(|skill| !matches_skill_list(skill, &policy.disabled))
         .filter_map(|skill| {
-            let score = match_score(skill, query);
+            let score = match_score(skill, query)
+                + recommended_score(skill, policy)
+                + auto_activate_score(skill, query, policy);
             (skill.always_include || score > 0).then_some((skill, score))
         })
         .collect::<Vec<_>>();
@@ -398,6 +404,51 @@ fn select<'a>(
     });
     scored.truncate(MAX_SELECTED_SKILLS);
     scored
+}
+
+fn recommended_score(skill: &SkillDefinition, policy: &crate::pack::PackSkillPolicy) -> i32 {
+    if matches_skill_list(skill, &policy.recommended) {
+        6
+    } else {
+        0
+    }
+}
+
+fn auto_activate_score(
+    skill: &SkillDefinition,
+    user_text: &str,
+    policy: &crate::pack::PackSkillPolicy,
+) -> i32 {
+    let query = normalize(user_text);
+    policy
+        .auto_activate
+        .iter()
+        .filter(|binding| matches_skill_name(skill, &binding.skill))
+        .filter(|binding| {
+            binding.when.is_empty()
+                || binding.when.iter().any(|trigger| {
+                    let trigger = normalize(trigger);
+                    trigger == "*"
+                        || trigger == "always"
+                        || (!trigger.is_empty() && query.contains(&trigger))
+                })
+        })
+        .count() as i32
+        * 12
+}
+
+fn matches_skill_list(skill: &SkillDefinition, values: &[String]) -> bool {
+    values.iter().any(|value| matches_skill_name(skill, value))
+}
+
+fn matches_skill_name(skill: &SkillDefinition, value: &str) -> bool {
+    let normalized = normalize(value);
+    let sanitized = sanitize_id(value);
+    (!normalized.is_empty() || !sanitized.is_empty())
+        && (normalized == normalize(&skill.id)
+            || normalized == normalize(&skill.name)
+            || sanitized == sanitize_id(&skill.name)
+            || sanitized == sanitize_id(&skill.id))
 }
 
 fn match_score(skill: &SkillDefinition, user_text: &str) -> i32 {
@@ -733,6 +784,54 @@ Use evidence before conclusions.
             .skills
             .iter()
             .any(|skill| skill.scope == SkillScope::Global && skill.selected));
+
+        let _ = fs::remove_dir_all(&sandbox);
+        let _ = fs::remove_dir_all(&data);
+        let _ = fs::remove_dir_all(&packs);
+    }
+
+    #[test]
+    fn role_card_skill_policy_recommends_and_disables_skills() {
+        let sandbox = temp_root("sandbox_policy");
+        let data = temp_root("data_policy");
+        let packs = temp_root("packs_policy");
+        let pack_root = packs.join("default");
+        let tone = pack_root.join("skills").join("tone");
+        let blocked = pack_root.join("skills").join("blocked");
+        fs::create_dir_all(&tone).unwrap();
+        fs::create_dir_all(&blocked).unwrap();
+        fs::write(
+            pack_root.join("manifest.json"),
+            r#"{
+  "schema_version": "2.0",
+  "id": "default",
+  "name": "Default",
+  "persona": "persona.md",
+  "runtime": {
+    "skills": {
+      "recommended": ["Pack Tone Guard"],
+      "disabled": ["Blocked Skill"],
+      "auto_activate": [{ "skill": "Pack Tone Guard", "when": ["陪伴"] }]
+    }
+  }
+}"#,
+        )
+        .unwrap();
+        fs::write(pack_root.join("persona.md"), "persona").unwrap();
+        fs::write(
+            tone.join("SKILL.md"),
+            "---\nname: Pack Tone Guard\n---\nKeep tone stable.",
+        )
+        .unwrap();
+        fs::write(
+            blocked.join("SKILL.md"),
+            "---\nname: Blocked Skill\nalways_include: true\n---\nShould not appear.",
+        )
+        .unwrap();
+
+        let context = context_for_turn(&sandbox, &data, &packs, "default", Some("需要陪伴一下"));
+        assert!(context.text.contains("Pack Tone Guard"));
+        assert!(!context.text.contains("Blocked Skill"));
 
         let _ = fs::remove_dir_all(&sandbox);
         let _ = fs::remove_dir_all(&data);
