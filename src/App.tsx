@@ -18,13 +18,14 @@ import type {
   SessionEnginePanelState,
   SessionMeta,
   Settings,
+  AppTheme,
 } from "./lib/types";
 import { MessageList } from "./components/MessageList";
 import { Sidebar, type AppView } from "./components/Sidebar";
 import { Composer } from "./components/Composer";
 import GoalBar, { type GoalAction } from "./components/GoalBar";
 import ConfirmDialog from "./components/ConfirmDialog";
-import SettingsDialog from "./components/SettingsDialog";
+import SettingsDialog, { type SettingsTab } from "./components/SettingsDialog";
 import MediaStudio from "./components/MediaStudio";
 import SkillsPanel from "./components/SkillsPanel";
 import { CheckIcon, ChevronDownIcon, PanelLeftIcon } from "./components/Icons";
@@ -173,6 +174,8 @@ export default function App() {
   const [sessions, setSessions] = useState<SessionMeta[]>([]);
   const [activeId, setActiveId] = useState("");
   const [activeView, setActiveView] = useState<AppView>("chat");
+  const [settingsInitialTab, setSettingsInitialTab] = useState<SettingsTab>("general");
+  const [previewTheme, setPreviewTheme] = useState<AppTheme | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [packMenuOpen, setPackMenuOpen] = useState(false);
   const [agentMenuOpen, setAgentMenuOpen] = useState(false);
@@ -221,14 +224,25 @@ export default function App() {
   }, [selectedAgentNames, t]);
 
   useEffect(() => {
-    const theme = settings?.theme ?? "system";
-    const systemDark =
-      typeof window !== "undefined" && window.matchMedia?.("(prefers-color-scheme: dark)").matches === true;
-    const resolved = theme === "system" ? (systemDark ? "dark" : "light") : theme;
-    document.documentElement.dataset.theme = theme;
-    document.documentElement.dataset.resolvedTheme = resolved;
-    document.documentElement.style.colorScheme = resolved;
-  }, [settings?.theme]);
+    const theme = previewTheme ?? settings?.theme ?? "system";
+    const media =
+      typeof window !== "undefined" && typeof window.matchMedia === "function"
+        ? window.matchMedia("(prefers-color-scheme: dark)")
+        : null;
+
+    function applyTheme() {
+      const resolved = theme === "system" ? (media?.matches ? "dark" : "light") : theme;
+      document.documentElement.dataset.theme = theme;
+      document.documentElement.dataset.resolvedTheme = resolved;
+      document.documentElement.style.colorScheme = resolved;
+    }
+
+    applyTheme();
+    if (theme !== "system" || !media) return;
+
+    media.addEventListener("change", applyTheme);
+    return () => media.removeEventListener("change", applyTheme);
+  }, [previewTheme, settings?.theme]);
 
   useEffect(() => {
     if (!("__TAURI_INTERNALS__" in window)) return;
@@ -674,9 +688,15 @@ export default function App() {
     try {
       await api.saveSettings(s);
       setSettings(s);
+      setPreviewTheme(null);
     } catch (e) {
       console.error("Failed to save settings", e);
     }
+  }
+
+  function handleCloseSettings() {
+    setPreviewTheme(null);
+    setActiveView("chat");
   }
 
   async function handleSelectPack(id: string) {
@@ -755,6 +775,11 @@ export default function App() {
     );
   }
 
+  function openSettings(tab: SettingsTab = "general") {
+    setSettingsInitialTab(tab);
+    setActiveView("settings");
+  }
+
   const last = items[items.length - 1];
   const tailStreaming = last?.kind === "assistant" && last.streaming;
   const tailToolRunning = last?.kind === "tool" && last.status === "running";
@@ -778,7 +803,7 @@ export default function App() {
         onRenameSession={handleRenameSession}
         onDeleteSession={handleDeleteSession}
         onOpenSandbox={() => void api.openSandbox()}
-        onOpenSettings={() => setActiveView("settings")}
+        onOpenSettings={() => openSettings("general")}
       />
 
       <section className="flex min-h-0 min-w-0 flex-1 flex-col p-2 pl-0">
@@ -948,7 +973,7 @@ export default function App() {
                 maxInputTokens={settings?.max_input_tokens ?? 0}
                 onSetModel={(m) => void handleSetModel(m)}
                 onSetEffort={(e) => void handleSetEffort(e)}
-                onOpenSettings={() => setActiveView("settings")}
+                onOpenSettings={() => openSettings("context")}
                 textareaRef={textareaRef}
                 onSubmit={(attachments) => handleSend(undefined, attachments)}
                 onStop={() => {
@@ -959,7 +984,7 @@ export default function App() {
               />
             </>
           ) : activeView === "media" ? (
-            <MediaStudio settings={settings} onOpenSettings={() => setActiveView("settings")} />
+            <MediaStudio settings={settings} onOpenSettings={() => openSettings("media")} />
           ) : activeView === "skills" ? (
             <SkillsPanel />
           ) : settings ? (
@@ -968,8 +993,10 @@ export default function App() {
               settings={settings}
               packs={packs}
               agentPanel={agentPanel}
-              onClose={() => setActiveView("chat")}
+              initialTab={settingsInitialTab}
+              onClose={handleCloseSettings}
               onSave={handleSaveSettings}
+              onPreviewTheme={setPreviewTheme}
               onPacksChange={setPacks}
               onAgentPanelChange={setAgentPanel}
             />

@@ -35,13 +35,15 @@ interface Props {
   settings: Settings;
   packs: PackManifest[];
   agentPanel: AgentPanelState;
+  initialTab?: SettingsTab;
   onClose: () => void;
   onSave: (s: Settings) => void;
+  onPreviewTheme?: (theme: AppTheme) => void;
   onPacksChange: (packs: PackManifest[]) => void;
   onAgentPanelChange: (state: AgentPanelState) => void;
 }
 
-type SettingsTab =
+export type SettingsTab =
   | "general"
   | "provider"
   | "persona"
@@ -545,8 +547,10 @@ export default function SettingsDialog({
   settings,
   packs,
   agentPanel,
+  initialTab = "general",
   onClose,
   onSave,
+  onPreviewTheme,
   onPacksChange,
   onAgentPanelChange,
 }: Props) {
@@ -559,7 +563,7 @@ export default function SettingsDialog({
   const [agentValidation, setAgentValidation] = useState<AgentValidationResult | null>(null);
   const [agentBusy, setAgentBusy] = useState(false);
   const [agentStatus, setAgentStatus] = useState("");
-  const [activeTab, setActiveTab] = useState<SettingsTab>("general");
+  const [activeTab, setActiveTab] = useState<SettingsTab>(initialTab);
   const [providerQuery, setProviderQuery] = useState("");
   const [providerTestBusy, setProviderTestBusy] = useState(false);
   const [providerTestStatus, setProviderTestStatus] = useState("");
@@ -607,6 +611,7 @@ export default function SettingsDialog({
     if (open) {
       setForm(settings);
       setAgentState(agentPanel);
+      setActiveTab(initialTab);
       setProviderTestStatus("");
       setWebSearchTestStatus("");
       setWebdavStatus("");
@@ -621,7 +626,7 @@ export default function SettingsDialog({
       setLorePreviewFailed(false);
       setMemoryDrafts({});
     }
-  }, [open, settings, agentPanel]);
+  }, [open, settings, agentPanel, initialTab]);
 
   useEffect(() => {
     if (!open || !form.current_pack) return;
@@ -1487,7 +1492,10 @@ export default function SettingsDialog({
                           <button
                             key={theme.value}
                             type="button"
-                            onClick={() => set("theme", theme.value)}
+                            onClick={() => {
+                              set("theme", theme.value);
+                              onPreviewTheme?.(theme.value);
+                            }}
                             className={`cf-press min-h-16 rounded-lg border px-3 py-3 text-left transition ${
                               selected
                                 ? "border-[#111827] bg-[#f8f9fb] text-[#111827]"
