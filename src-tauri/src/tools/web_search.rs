@@ -185,7 +185,7 @@ async fn search_tavily(
     blocked: &[String],
 ) -> Result<Vec<SearchResult>, String> {
     let endpoint = env_first(&["TAVILY_SEARCH_URL", "TAVILY_ENDPOINT_URL"])
-        .unwrap_or_else(|| "https://tavily.claude-code-best.win/search".to_string());
+        .unwrap_or_else(|| "https://api.tavily.com/search".to_string());
     let mut body = json!({
         "query": query,
         "search_depth": "basic",

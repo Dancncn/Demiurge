@@ -543,7 +543,7 @@ export interface AgentValidationResult {
   suggested_file_name: string;
 }
 
-export type SkillScope = "global" | "project" | "repository" | "pack" | "claude" | "legacy";
+export type SkillScope = "global" | "project" | "repository" | "pack" | "compat" | "legacy";
 
 export interface SkillSummary {
   id: string;

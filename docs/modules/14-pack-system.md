@@ -211,7 +211,7 @@ extract_archive(prefix → temp)                           pack/mod.rs:141 / 289
 
 - **persona**：`load_pack().persona_text` → `pack_persona` 分区（见 §3.2）。
 - **pack memory**：`memory::scope_files` 把 `packs_dir.join(pack_id).join("memory.md")` 作为 `id="pack"` 作用域（`src-tauri/src/agent/memory.rs:339`）。`prompt::memory_section` 通过 `scoped_memory_paths`（`memory.rs:299`）读取 user/project/session/pack 四层记忆，pack 层即角色包自带的 `memory.md`。Settings 的记忆面板也能对 pack scope 做增删改查与去重（命令在 `lib.rs:925` 一带）。
-- **pack skills**：`skills::discover` 把 `packs_dir.join(pack_id).join("skills")` 作为 `SkillScope::Pack`（`src-tauri/src/agent/skills.rs:189`），与 global / project / repository / `.claude` 兼容目录并列发现（`skills.rs:185`）。`prompt::skills_section` 经 `skills::context_for_turn`（`skills.rs:111`）按当前用户输入选择性注入。
+- **pack skills**：`skills::discover` 把 `packs_dir.join(pack_id).join("skills")` 作为 `SkillScope::Pack`（`src-tauri/src/agent/skills.rs:189`），与 global / project / repository / compat 目录并列发现（`skills.rs:185`）。`prompt::skills_section` 经 `skills::context_for_turn`（`skills.rs:111`）按当前用户输入选择性注入。
 
 **衔接含义**：一个第三方角色包 zip 完全可以同时携带 `persona.md`、`memory.md` 和 `skills/<name>/SKILL.md`。导入后，只要把 `current_pack` 切到该 id，这三类内容会自动随角色一起进入 prompt——角色包因此不只是「换人设」，而是「换一整套人设 + 预置记忆 + 专属技能」。需要注意：`import_zip` 的解压只做相对路径与体积/数量校验，并不强制要求或特殊处理 `memory.md`/`skills/`，它们就是普通文件，被原样落地后由 memory/skills 模块在 prompt 装配时各自发现。
 

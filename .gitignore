@@ -27,4 +27,5 @@ packs/*
 .vscode/
 .idea/
 .DS_Store
-/.claude
+/.agent-worktrees
+/.demiurge/compat

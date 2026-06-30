@@ -111,7 +111,7 @@ run()
 ├─ permissions.json / user_permissions.json / permission_audit.jsonl
 ├─ skills/                      // 全局技能目录（open_skills_dir 按需建）
 ├─ sandbox/                     // 工具沙箱根（open_sandbox 打开）
-│   └─ .demiurge/, .claude/ ... // 兼容目录（见 ⑤）
+│   └─ .demiurge/ ...            // 项目本地配置与兼容目录
 └─ packs/                       // 人格包，ensure_default 保证至少有 default
 ```
 
@@ -275,7 +275,7 @@ context_panel_state:
 - **路径穿越防护**：WebDAV `validate_backup_file_name`（`lib.rs:1460`）拒绝含 `/` `\` `..` 的名字；`webdav_collection_url` 强制协议前缀。
 - **工具权限确认**：`pending_confirms` + `respond_confirm` + `interrupt` 三者构成确认回路，确认弹窗以 oneshot 异步等待用户裁决，中断时强制 `deny_once`（见 3.3）。
 - **并发保护**：`busy: AtomicBool` 防止并发 turn（`goal_resume`/`goal_continue` 用 `busy.swap(true)` 抢占，`lib.rs:854`、`:875`）；`cancel: AtomicBool` 是全局中断闸。
-- **对外部 CLI 同名约定的兼容**：代码中存在 `.claude/skills`（`agent/skills.rs:190`）等兼容目录，以及 `CLAUDE_CODE_EFFORT_LEVEL` / `CLAUDE_CODE_ALWAYS_ENABLE_EFFORT` 环境变量（`llm/mod.rs:439`、`:455`）。这些是**对外部 CLI 同名约定的兼容读取**——本项目主用 `DEMIURGE_*` 前缀，同时识别外部 CLI 同名变量/目录以便复用既有配置，并非任何特定产品的衍生品。
+- **项目本地兼容目录**：兼容能力统一收敛到 `.demiurge/compat/`，环境变量统一使用 `DEMIURGE_*` 前缀，降低跨工具约定带来的命名噪声。
 
 ---
 

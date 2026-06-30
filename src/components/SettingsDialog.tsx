@@ -94,6 +94,13 @@ function formatBytes(n: number) {
   return `${value.toFixed(idx === 0 ? 0 : 1)} ${units[idx]}`;
 }
 
+function formatTokenWindow(n: number) {
+  if (!Number.isFinite(n) || n <= 0) return "";
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(n % 1_000_000 === 0 ? 0 : 1)}M`;
+  if (n >= 1_000) return `${Math.round(n / 1_000)}K`;
+  return String(n);
+}
+
 function formatConnectionTestResult(result: ConnectionTestResult) {
   const latency = Number.isFinite(result.latency_ms) ? ` (${result.latency_ms} ms)` : "";
   return `${result.detail}${latency}\n${result.target}`;
@@ -713,6 +720,25 @@ export default function SettingsDialog({
     () => PROVIDER_OPTIONS.find((p) => p.value === form.provider) ?? PROVIDER_OPTIONS[0],
     [form.provider],
   );
+  const modelWindow = modelContextWindow(form.provider, form.model);
+  const modelOptions = useMemo(() => {
+    const current = form.model.trim();
+    const models = selectedProvider.models;
+    const options = current && !models.includes(current) ? [current, ...models] : models;
+    return options.map((model) => {
+      const window = modelContextWindow(form.provider, model);
+      const currentCustom = current === model && !models.includes(model);
+      return {
+        value: model,
+        label: model,
+        hint: currentCustom
+          ? t("settings.provider.currentCustomModel")
+          : window
+            ? t("settings.provider.contextWindow", { tokens: formatTokenWindow(window) })
+            : undefined,
+      };
+    });
+  }, [form.model, form.provider, selectedProvider.models, t]);
   const effortSupported = modelSupportsReasoningEffort(form.provider, form.model);
   const selectedWebSearchProvider = useMemo(
     () => webSearchProviders.find((p) => p.value === form.web_search_provider) ?? webSearchProviders[0],
@@ -1504,33 +1530,43 @@ export default function SettingsDialog({
                             />
                           </Field>
                           <Field label={t("settings.provider.model")} help={t("settings.provider.modelHelp")}>
-                            <input
-                              className={inputCls}
-                              value={form.model}
-                              placeholder={selectedProvider.model}
-                              onChange={(e) => set("model", e.target.value)}
-                            />
-                            {selectedProvider.models.length > 0 && (
-                              <div className="mt-2 flex flex-wrap gap-1.5">
-                                {selectedProvider.models.map((m) => {
-                                  const active = form.model === m;
-                                  return (
-                                    <button
-                                      key={m}
-                                      type="button"
-                                      onClick={() => set("model", m)}
-                                      className={`cf-press rounded-full border px-2.5 py-1 text-[11px] font-medium ${
-                                        active
-                                          ? "border-[#111827] bg-[#111827] text-white"
-                                          : "border-[#dfe3e8] bg-white text-[#4f5661] hover:border-[#c7ccd4] hover:bg-[#f5f6f8]"
-                                      }`}
-                                    >
-                                      {m}
-                                    </button>
-                                  );
-                                })}
+                            <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(220px,0.9fr)]">
+                              <div>
+                                <div className="mb-1.5 text-[11px] font-medium uppercase text-[#8a9099]">
+                                  {t("settings.provider.modelPreset")}
+                                </div>
+                                <Select
+                                  value={form.model}
+                                  onChange={(value) => set("model", value)}
+                                  options={modelOptions}
+                                  disabled={!modelOptions.length}
+                                  placeholder={t("settings.provider.noModelPresets")}
+                                />
                               </div>
-                            )}
+                              <div>
+                                <div className="mb-1.5 text-[11px] font-medium uppercase text-[#8a9099]">
+                                  {t("settings.provider.customModel")}
+                                </div>
+                                <input
+                                  className={inputCls}
+                                  value={form.model}
+                                  placeholder={selectedProvider.model || "model-id"}
+                                  onChange={(e) => set("model", e.target.value)}
+                                />
+                              </div>
+                            </div>
+                            <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-[#7a8088]">
+                              <span className="rounded-md bg-[#f3f4f7] px-2 py-1">
+                                {modelWindow
+                                  ? t("settings.provider.contextWindow", { tokens: formatTokenWindow(modelWindow) })
+                                  : t("settings.provider.unknownContextWindow")}
+                              </span>
+                              {form.context_budget_auto && modelWindow && (
+                                <span className="rounded-md bg-[#eef6ff] px-2 py-1 text-[#2559a8]">
+                                  {t("settings.provider.autoBudgetFollowsModel")}
+                                </span>
+                              )}
+                            </div>
                           </Field>
                           <Field
                             label={t("settings.provider.effort")}

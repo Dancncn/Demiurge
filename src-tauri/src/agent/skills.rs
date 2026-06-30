@@ -35,7 +35,7 @@ pub enum SkillScope {
     Project,
     Repository,
     Pack,
-    Claude,
+    Compat,
     Legacy,
 }
 
@@ -46,7 +46,7 @@ impl SkillScope {
             SkillScope::Project => "project",
             SkillScope::Repository => "repository",
             SkillScope::Pack => "pack",
-            SkillScope::Claude => "claude",
+            SkillScope::Compat => "compat",
             SkillScope::Legacy => "legacy",
         }
     }
@@ -196,7 +196,10 @@ pub fn discover(sandbox: &Path, data_dir: &Path, packs_dir: &Path, pack_id: &str
         ),
         (SkillScope::Repository, sandbox.join("skills")),
         (SkillScope::Pack, packs_dir.join(pack_id).join("skills")),
-        (SkillScope::Claude, sandbox.join(".claude").join("skills")),
+        (
+            SkillScope::Compat,
+            sandbox.join(".demiurge").join("compat").join("skills"),
+        ),
     ] {
         discover_skill_dir(&mut catalog, scope, &base);
     }
@@ -204,7 +207,7 @@ pub fn discover(sandbox: &Path, data_dir: &Path, packs_dir: &Path, pack_id: &str
     for (label, rel) in [
         ("Project skills", ".demiurge/skills.md"),
         ("Repository skills", "skills/README.md"),
-        ("Claude skills", ".claude/skills.md"),
+        ("Compat skills", ".demiurge/compat/skills.md"),
     ] {
         let path = sandbox.join(rel);
         if let Some(raw) = read_limited_text(&path, MAX_SKILL_FILE_BYTES) {
@@ -595,7 +598,7 @@ fn format_panel(panel: &SkillPanelState, query: Option<&str>) -> String {
         "Skills:\n".to_string()
     };
     if panel.skills.is_empty() {
-        out.push_str("- No skills found. Add SKILL.md files under app data `skills/`, sandbox `.demiurge/skills/`, repository `skills/`, current pack `skills/`, or `.claude/skills/`.\n");
+        out.push_str("- No skills found. Add SKILL.md files under app data `skills/`, sandbox `.demiurge/skills/`, repository `skills/`, current pack `skills/`, or `.demiurge/compat/skills/`.\n");
     } else {
         for skill in panel.skills.iter().take(40) {
             let selected = if skill.selected { " selected" } else { "" };

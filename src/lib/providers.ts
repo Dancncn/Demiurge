@@ -61,7 +61,7 @@ export const PROVIDER_OPTIONS: ProviderOption[] = [
     short: "AN",
     baseUrl: "https://api.anthropic.com/v1",
     model: "claude-sonnet-4-6",
-    help: "Claude API. The key is stored in the system credential manager.",
+    help: "Anthropic API. The key is stored in the system credential manager.",
     models: ["claude-opus-4-8", "claude-sonnet-4-6", "claude-haiku-4-5", "claude-fable-5", "claude-opus-4-7"],
   },
   {

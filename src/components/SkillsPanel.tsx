@@ -9,7 +9,7 @@ const SCOPE_STYLES: Record<SkillScope, string> = {
   project: "bg-[#ecfdf5] text-[#047857] border-[#cdeee0]",
   repository: "bg-[#fef3f2] text-[#b42318] border-[#fcdcd7]",
   pack: "bg-[#fffaeb] text-[#b54708] border-[#fdedc6]",
-  claude: "bg-[#f4f3ff] text-[#5b4ad1] border-[#e6e2fb]",
+  compat: "bg-[#f4f3ff] text-[#5b4ad1] border-[#e6e2fb]",
   legacy: "bg-[#f2f4f7] text-[#475467] border-[#e4e7ec]",
 };
 

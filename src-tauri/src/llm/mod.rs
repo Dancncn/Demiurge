@@ -436,9 +436,8 @@ fn env_reasoning_effort_override() -> Option<ReasoningEffort> {
     }
     #[cfg(not(test))]
     {
-        ["DEMIURGE_EFFORT_LEVEL", "CLAUDE_CODE_EFFORT_LEVEL"]
-            .into_iter()
-            .find_map(|name| std::env::var(name).ok())
+        std::env::var("DEMIURGE_EFFORT_LEVEL")
+            .ok()
             .and_then(|value| ReasoningEffort::parse(&value))
     }
 }
@@ -450,18 +449,14 @@ fn env_always_enable_effort() -> bool {
     }
     #[cfg(not(test))]
     {
-        [
-            "DEMIURGE_ALWAYS_ENABLE_EFFORT",
-            "CLAUDE_CODE_ALWAYS_ENABLE_EFFORT",
-        ]
-        .into_iter()
-        .find_map(|name| std::env::var(name).ok())
-        .is_some_and(|value| {
-            matches!(
-                value.trim().to_ascii_lowercase().as_str(),
-                "1" | "true" | "yes" | "on"
-            )
-        })
+        std::env::var("DEMIURGE_ALWAYS_ENABLE_EFFORT")
+            .ok()
+            .is_some_and(|value| {
+                matches!(
+                    value.trim().to_ascii_lowercase().as_str(),
+                    "1" | "true" | "yes" | "on"
+                )
+            })
     }
 }
 

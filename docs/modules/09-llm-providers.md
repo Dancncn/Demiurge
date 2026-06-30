@@ -181,7 +181,7 @@ settings.reasoning_effort (Auto/Low/Medium/High/Xhigh/Max)
 - Anthropic（`anthropic_model_supports_reasoning_effort`，mod.rs:501）：包含 `opus-4-7`/`opus-4.7`/`opus-4-6`/`opus-4.6`/`sonnet-4-6`/`sonnet-4.6`/`deepseek-v4-pro`。
 - Gemini（`gemini_model_supports_thinking_budget`，mod.rs:511）：包含 `gemini-2.5`/`gemini-3`/`thinking`。
 
-**环境变量旁路**（中立记录）：`env_always_enable_effort`（mod.rs:446）读取 `DEMIURGE_ALWAYS_ENABLE_EFFORT` 或对外部 CLI 同名约定兼容的 `CLAUDE_CODE_ALWAYS_ENABLE_EFFORT`，命中真值时跳过模型名匹配直接放行（用于尚未进入匹配清单的新模型）。`env_reasoning_effort_override`（mod.rs:432）读取 `DEMIURGE_EFFORT_LEVEL` / `CLAUDE_CODE_EFFORT_LEVEL` 覆盖 `settings.reasoning_effort`。这两组同名 `CLAUDE_CODE_*` 变量是对外部 CLI 同名约定的兼容，并非品牌绑定。两个函数在 `#[cfg(test)]` 下都硬返回 `None`/`false`，保证测试不受宿主环境污染。
+**环境变量旁路**（中立记录）：`env_always_enable_effort`（mod.rs:446）读取 `DEMIURGE_ALWAYS_ENABLE_EFFORT`，命中真值时跳过模型名匹配直接放行（用于尚未进入匹配清单的新模型）。`env_reasoning_effort_override`（mod.rs:432）读取 `DEMIURGE_EFFORT_LEVEL` 覆盖 `settings.reasoning_effort`。两个函数在 `#[cfg(test)]` 下都硬返回 `None`/`false`，保证测试不受宿主环境污染。
 
 **各 provider 的字段映射**（同一逻辑等级，落到不同请求字段）：
 

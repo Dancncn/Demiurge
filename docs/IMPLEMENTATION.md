@@ -215,17 +215,17 @@ Settings 面板提供三类连接测试：
 
 请求构造保持分层：runner/subagent/budget/connection tests 只读取 profile helper 或 adapter kind，不复制 provider-specific match；provider-specific JSON 仍留在 `llm/openai.rs`、`llm/anthropic.rs`、`llm/gemini.rs`。`openai.rs` 负责 `max_tokens`、`parallel_tool_calls`、`response_format`；`anthropic.rs` 负责 `max_tokens`、tool/tool_choice 形态；`gemini.rs` 负责 `generationConfig.maxOutputTokens`、`responseMimeType`、`responseSchema`。streaming parser 统一通过 `merge_usage()` 合并 provider usage，并通过 `normalize_finish_reason()` 把 OpenAI/Anthropic/Gemini 的 stop、tool_calls、length、content_filter、interrupted 等结束原因归一化给 runner。
 
-Reasoning effort follows the same profile-gated path. `settings.reasoning_effort` stores `auto|low|medium|high|xhigh|max`; `/effort` and the Settings Provider panel write the same field. `ProviderProfile` resolves `DEMIURGE_EFFORT_LEVEL` or the Claude Code-compatible `CLAUDE_CODE_EFFORT_LEVEL` override first, then settings, and only supported provider/model pairs emit request fields: OpenAI official chat completions use `reasoning_effort` plus `max_completion_tokens` for reasoning/Codex models, mapping `xhigh|max` to `xhigh` only for xhigh-capable GPT-5.x/Codex models and otherwise falling back to `high`; Anthropic uses `output_config.effort` with `anthropic-beta: effort-2025-11-24` for CCB-supported Claude model names; and Gemini uses `generationConfig.thinkingConfig.thinkingBudget` for thinking-capable Gemini models. Generic OpenAI-compatible providers remain explicit unsupported to avoid sending non-portable fields to DeepSeek/DashScope/local gateways; `DEMIURGE_ALWAYS_ENABLE_EFFORT` or `CLAUDE_CODE_ALWAYS_ENABLE_EFFORT` can force model gating when testing a new model.
+Reasoning effort follows the same profile-gated path. `settings.reasoning_effort` stores `auto|low|medium|high|xhigh|max`; `/effort` and the Settings Provider panel write the same field. `ProviderProfile` resolves `DEMIURGE_EFFORT_LEVEL` first, then settings, and only supported provider/model pairs emit request fields: OpenAI official chat completions use `reasoning_effort` plus `max_completion_tokens` for reasoning/Codex models, mapping `xhigh|max` to `xhigh` only for xhigh-capable GPT-5.x/Codex models and otherwise falling back to `high`; Anthropic uses `output_config.effort` with `anthropic-beta: effort-2025-11-24` for supported model names; and Gemini uses `generationConfig.thinkingConfig.thinkingBudget` for thinking-capable Gemini models. Generic OpenAI-compatible providers remain explicit unsupported to avoid sending non-portable fields to DeepSeek/DashScope/local gateways; `DEMIURGE_ALWAYS_ENABLE_EFFORT` can force model gating when testing a new model.
 
 ## Skills
 
-Skills 是 Markdown 目录能力，不依赖额外运行时。发现顺序覆盖 global、project、repository、pack 和 Claude 兼容目录：
+Skills 是 Markdown 目录能力，不依赖额外运行时。发现顺序覆盖 global、project、repository、pack 和兼容目录：
 
 - `app_data_dir/skills/*/SKILL.md`
 - `sandbox/.demiurge/skills/*/SKILL.md`
 - `sandbox/skills/*/SKILL.md`
 - `packs/<pack_id>/skills/*/SKILL.md`
-- `sandbox/.claude/skills/*/SKILL.md`
+- `sandbox/.demiurge/compat/skills/*/SKILL.md`
 
 `SKILL.md` 支持 YAML frontmatter：`name`、`description`、`triggers`/`keywords`、`tools`/`declared_tool_needs`、`required_permissions`、`references`、`always_include`。`prompt::build_for_input` 会根据当前 user text 自动选择 always_include 和匹配分最高的 skills，把 skill body、declared tool needs、required permissions 和安全相对 references 注入 system prompt；references 只能读取 skill 目录内的安全相对路径。`/skills` 和 `/skill` 返回当前可发现 skills、scope、匹配分与选中状态，供用户检查推荐结果。
 

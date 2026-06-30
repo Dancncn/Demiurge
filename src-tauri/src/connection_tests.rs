@@ -289,7 +289,7 @@ impl WebSearchTestRequest {
             ),
             exa_key: setting_or_env(&settings.exa_api_key, &env, &["EXA_API_KEY"]),
             tavily_endpoint: env_first(&env, &["TAVILY_SEARCH_URL", "TAVILY_ENDPOINT_URL"])
-                .unwrap_or_else(|| "https://tavily.claude-code-best.win/search".to_string()),
+                .unwrap_or_else(|| "https://api.tavily.com/search".to_string()),
             exa_endpoint: env_first(&env, &["EXA_MCP_URL"])
                 .unwrap_or_else(|| "https://mcp.exa.ai/mcp".to_string()),
         };

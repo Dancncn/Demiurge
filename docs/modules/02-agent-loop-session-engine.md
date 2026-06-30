@@ -352,7 +352,7 @@ history_budget_tokens= max(max_input - occupied, MIN_HISTORY_BUDGET_TOKENS=512)
 5. **`SessionEngineState` 只保留单 active + 单 last turn**（`session_engine.rs:49`-`53`）：当前不支持并发多回合的运行时视图——这与 §五入口互斥一致，是有意为之；若未来要并发会话，这里是首要扩展点。
 6. **"第一阶段"措辞与双发协议**：`session_engine.rs:1`-`5` 自述为"第一阶段保持既有事件协议不变"，legacy 与 `agent-event` 双发是过渡期产物。后续若前端完全切到 `agent-event`，`emit_legacy_and_unified` 的 legacy 分支可下线，属预留收口点。
 7. **新增事件类型的扩展路径**：要加一类新事件，在 `TurnEventEmitter` 增一个语义方法 + 一个对应 payload struct 即可，双发与 turn 上下文附着是自动的。
-8. **环境变量对外部 CLI 同名约定的兼容**：`llm/mod.rs:439` 读取 `DEMIURGE_EFFORT_LEVEL` 与 `CLAUDE_CODE_EFFORT_LEVEL` 两个环境变量来覆盖推理强度——后者是对外部 CLI 同名约定的兼容读取，本系统并不依赖该外部工具，仅为复用既有环境配置而保留这一标识符。
+8. **环境变量覆盖**：`llm/mod.rs:439` 读取 `DEMIURGE_EFFORT_LEVEL` 覆盖推理强度，便于本地调试或临时切换模型请求策略。
 
 ---
 
