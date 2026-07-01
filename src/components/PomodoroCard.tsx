@@ -1,7 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import * as api from "../lib/api";
-import type { PomodoroMode, PomodoroPanelState } from "../lib/types";
+import type {
+  GoalPanelState,
+  PomodoroMode,
+  PomodoroPanelState,
+  PomodoroTaskBinding,
+  PomodoroTaskKind,
+  WorkflowRunProgress,
+} from "../lib/types";
 import { PauseIcon, PlayIcon, RotateCwIcon, TargetIcon } from "./Icons";
 
 const modeLabels: Record<PomodoroMode, string> = {
@@ -31,10 +38,20 @@ function notify(title: string, body: string) {
   }
 }
 
-export default function PomodoroCard() {
+type Props = {
+  activeSessionId: string;
+  activeSessionTitle?: string;
+  goal: GoalPanelState | null;
+};
+
+export default function PomodoroCard({ activeSessionId, activeSessionTitle, goal }: Props) {
   const [state, setState] = useState<PomodoroPanelState | null>(null);
   const [mode, setMode] = useState<PomodoroMode>("focus");
   const [customMinutes, setCustomMinutes] = useState(25);
+  const [taskKind, setTaskKind] = useState<PomodoroTaskKind>("manual");
+  const [manualTitle, setManualTitle] = useState("");
+  const [workflowRuns, setWorkflowRuns] = useState<WorkflowRunProgress[]>([]);
+  const [workflowRunId, setWorkflowRunId] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
@@ -48,6 +65,10 @@ export default function PomodoroCard() {
 
   useEffect(() => {
     void refresh();
+    void api.workflowPanelState().then((panel) => {
+      setWorkflowRuns(panel.runs);
+      setWorkflowRunId((current) => current || panel.runs[0]?.run_id || "");
+    });
     const timer = window.setInterval(() => void refresh(), 1000);
     let unlistenUpdated: UnlistenFn | undefined;
     let unlistenCompleted: UnlistenFn | undefined;
@@ -78,6 +99,36 @@ export default function PomodoroCard() {
     return Math.min(100, Math.max(0, ((duration - remaining) / duration) * 100));
   }, [duration, remaining]);
 
+  const selectedWorkflow = workflowRuns.find((run) => run.run_id === workflowRunId) ?? workflowRuns[0] ?? null;
+
+  function taskBinding(): PomodoroTaskBinding {
+    if (taskKind === "session") {
+      return {
+        kind: "session",
+        title: activeSessionTitle || "Current chat",
+        session_id: activeSessionId || null,
+      };
+    }
+    if (taskKind === "goal") {
+      return {
+        kind: "goal",
+        title: goal?.objective || "Current goal",
+        goal_objective: goal?.objective || null,
+      };
+    }
+    if (taskKind === "workflow") {
+      return {
+        kind: "workflow",
+        title: selectedWorkflow ? `${selectedWorkflow.name} · ${selectedWorkflow.status}` : "Workflow",
+        workflow_run_id: selectedWorkflow?.run_id || null,
+      };
+    }
+    return {
+      kind: "manual",
+      title: manualTitle.trim() || "Focus session",
+    };
+  }
+
   async function runAction(action: () => Promise<PomodoroPanelState>) {
     if (busy) return;
     setBusy(true);
@@ -96,6 +147,7 @@ export default function PomodoroCard() {
       api.pomodoroStart({
         mode,
         duration_minutes: mode === "custom" ? customMinutes : undefined,
+        task: taskBinding(),
       }),
     );
 
@@ -146,6 +198,41 @@ export default function PomodoroCard() {
                 onChange={(e) => setCustomMinutes(Math.min(240, Math.max(1, Number(e.target.value) || 1)))}
                 className="h-8 w-20 rounded-md border border-[#d9dfe7] bg-white px-2 text-[12px] outline-none"
               />
+            )}
+            <select
+              value={taskKind}
+              onChange={(e) => setTaskKind(e.target.value as PomodoroTaskKind)}
+              className="h-8 rounded-md border border-[#d9dfe7] bg-white px-2 text-[12px] outline-none"
+            >
+              <option value="manual">手动任务</option>
+              <option value="session">当前会话</option>
+              <option value="goal" disabled={!goal}>
+                当前 Goal
+              </option>
+              <option value="workflow" disabled={!workflowRuns.length}>
+                Workflow
+              </option>
+            </select>
+            {taskKind === "manual" && (
+              <input
+                value={manualTitle}
+                onChange={(e) => setManualTitle(e.target.value)}
+                placeholder="任务标题"
+                className="h-8 w-36 rounded-md border border-[#d9dfe7] bg-white px-2 text-[12px] outline-none"
+              />
+            )}
+            {taskKind === "workflow" && (
+              <select
+                value={workflowRunId}
+                onChange={(e) => setWorkflowRunId(e.target.value)}
+                className="h-8 max-w-44 rounded-md border border-[#d9dfe7] bg-white px-2 text-[12px] outline-none"
+              >
+                {workflowRuns.map((run) => (
+                  <option key={run.run_id} value={run.run_id}>
+                    {run.name} · {run.status}
+                  </option>
+                ))}
+              </select>
             )}
             <button
               type="button"

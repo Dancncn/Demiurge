@@ -968,7 +968,7 @@ export default function App() {
 
               <GoalBar goal={goalPanel} busy={appBusy} progress={goalProgress} onAction={handleGoalAction} />
               <CompanionCard settings={settings} onOpenSettings={() => openSettings("companion")} />
-              <PomodoroCard />
+              <PomodoroCard activeSessionId={activeId} activeSessionTitle={activeSession?.title} goal={goalPanel} />
 
               <MessageList
                 items={items}

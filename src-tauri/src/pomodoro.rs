@@ -603,4 +603,19 @@ mod tests {
         assert!(recap_prompt("focus").unwrap().contains("复盘"));
         assert!(encouragement("focus", 2).unwrap().contains("连续完成 3 轮"));
     }
+
+    #[test]
+    fn task_binding_title_is_trimmed_and_capped() {
+        let long = format!("  {}  ", "x".repeat(140));
+        let task = PomodoroTaskBinding {
+            kind: "goal".to_string(),
+            title: long,
+            session_id: None,
+            goal_objective: Some("ship it".to_string()),
+            workflow_run_id: None,
+        };
+        let title = normalized_task_title(&task).unwrap();
+        assert_eq!(title.len(), 120);
+        assert!(title.chars().all(|ch| ch == 'x'));
+    }
 }
