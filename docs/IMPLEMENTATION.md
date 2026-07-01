@@ -56,6 +56,7 @@ Demiurge/
 │  │  ├─ Composer.tsx
 │  │  ├─ ConfirmDialog.tsx
 │  │  ├─ Markdown.tsx
+│  │  ├─ MarkdownRenderer.tsx
 │  │  ├─ MessageList.tsx
 │  │  ├─ SettingsDialog.tsx
 │  │  ├─ Sidebar.tsx
@@ -142,12 +143,13 @@ Demiurge/
 | `src/App.tsx` | 主状态编排，订阅后端事件，维护消息流、设置、会话、Agent 选择、Plan Mode 控制、backend-driven busy/cancel 状态和 workflow panel |
 | `src/lib/api.ts` | Tauri invoke/event 的 typed wrapper，包含 `session_engine_state`、`session-engine-updated` 和统一 `agent-event` |
 | `src/lib/types.ts` | 前后端共享 TypeScript 类型 |
-| `src/lib/fileProcessing.ts` | 附件读取与提示词拼接辅助 |
+| `src/lib/fileProcessing.ts` | 附件读取与提示词拼接辅助；PDF.js 与 JSZip 仅在处理对应附件时按需导入 |
 | `components/Sidebar.tsx` | 会话列表、会话重命名/删除、角色包选择、基础入口 |
 | `components/Composer.tsx` | 输入框、中断/发送状态 |
 | `components/MessageList.tsx` | 用户消息、助手消息、工具卡片渲染 |
 | `components/PomodoroCard.tsx` | 聊天页番茄钟控制面板，支持任务绑定、暂停/继续/跳过、中断原因、桌面通知和节奏摘要 |
-| `components/Markdown.tsx` | GFM、代码块、KaTeX 渲染 |
+| `components/Markdown.tsx` | 轻量 Markdown 入口，通过 `React.lazy` 延迟加载完整渲染器 |
+| `components/MarkdownRenderer.tsx` | GFM、代码块、highlight.js、KaTeX 与 Mermaid 渲染；KaTeX/highlight 样式随渲染器加载 |
 | `components/ToolCard.tsx` | tool-start/tool-end 展示，包含 MCP tool/resource 进度摘要 |
 | `components/ConfirmDialog.tsx` | 敏感工具确认，支持 once/session/project scope |
 | `components/SettingsDialog.tsx` | provider、Persona Pack zip 导入、Web Search、MCP server、OCR 模型源/下载进度/缺模型引导、语音、WebDAV、权限、Companion/Weather、分层记忆维护和 Context 可视化设置，以及 Provider/Web Search/WebDAV 连接测试 |
@@ -449,6 +451,8 @@ npm run tauri dev
 ```bash
 npm run build
 ```
+
+前端体积治理集中在 `vite.config.ts` 和重模块入口：`manualChunks` 将 Mermaid diagram chunks、Mermaid parser、Cytoscape/D3/graph layout、Markdown/KaTeX/highlight、PDF.js 和 JSZip 分离；`components/Markdown.tsx` 只保留轻量 Suspense 入口，完整渲染器在消息区域需要时加载；PDF/ZIP 解析也在处理对应附件时动态导入。Mermaid 上游 parser 当前是单个约 691 KB 的异步 vendor chunk，因此 Vite warning limit 设为 700 KB；主入口、Markdown、PDF、highlight 和图布局等常规 chunks 均低于 500 KB，前端构建不再出现大 chunk 警告。
 
 Rust 测试：
 

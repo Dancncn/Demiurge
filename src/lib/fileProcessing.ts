@@ -1,6 +1,3 @@
-import JSZip from "jszip";
-import pdfWorkerUrl from "pdfjs-dist/build/pdf.worker.mjs?url";
-
 export type AttachmentKind = "text" | "image" | "pdf" | "document" | "spreadsheet" | "presentation" | "unsupported";
 
 export type AttachmentStatus = "ready" | "error";
@@ -32,6 +29,28 @@ type PdfJsModule = {
     }>;
   };
 };
+
+type PdfWorkerUrlModule = { default: string };
+type ZipTextFile = { async: (kind: "text") => Promise<string> };
+type ZipArchive = {
+  files: Record<string, unknown>;
+  file: (path: string) => ZipTextFile | null;
+};
+type ZipLibrary = {
+  loadAsync: (data: ArrayBuffer) => Promise<ZipArchive>;
+};
+
+let zipPromise: Promise<ZipLibrary> | null = null;
+
+function loadZip() {
+  if (!zipPromise) {
+    zipPromise = import("jszip").then((module) => {
+      const maybeDefault = (module as unknown as { default?: ZipLibrary }).default;
+      return maybeDefault ?? (module as unknown as ZipLibrary);
+    });
+  }
+  return zipPromise;
+}
 
 const MAX_FILE_CHARS = 28_000;
 const MAX_PDF_PAGES = 80;
@@ -252,8 +271,11 @@ function clip(content: string) {
 }
 
 async function extractPdfText(file: File) {
-  const pdfjs = (await import("pdfjs-dist/build/pdf.mjs")) as unknown as PdfJsModule;
-  pdfjs.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
+  const [pdfjs, worker] = (await Promise.all([
+    import("pdfjs-dist/build/pdf.mjs"),
+    import("pdfjs-dist/build/pdf.worker.mjs?url"),
+  ])) as unknown as [PdfJsModule, PdfWorkerUrlModule];
+  pdfjs.GlobalWorkerOptions.workerSrc = worker.default;
   const pdf = await pdfjs.getDocument({ data: new Uint8Array(await file.arrayBuffer()) }).promise;
   const pageCount = Math.min(pdf.numPages, MAX_PDF_PAGES);
   const pages: string[] = [];
@@ -270,6 +292,7 @@ async function extractPdfText(file: File) {
 }
 
 async function extractDocxText(file: File) {
+  const JSZip = await loadZip();
   const zip = await JSZip.loadAsync(await file.arrayBuffer());
   const xml = await zip.file("word/document.xml")?.async("text");
   if (!xml) throw new Error("DOCX document.xml not found.");
@@ -277,6 +300,7 @@ async function extractDocxText(file: File) {
 }
 
 async function extractPptxText(file: File) {
+  const JSZip = await loadZip();
   const zip = await JSZip.loadAsync(await file.arrayBuffer());
   const slidePaths = Object.keys(zip.files)
     .filter((name) => /^ppt\/slides\/slide\d+\.xml$/i.test(name))
@@ -293,6 +317,7 @@ async function extractPptxText(file: File) {
 }
 
 async function extractXlsxText(file: File) {
+  const JSZip = await loadZip();
   const zip = await JSZip.loadAsync(await file.arrayBuffer());
   const shared = await readSharedStrings(zip);
   const sheetPaths = Object.keys(zip.files)
@@ -309,7 +334,7 @@ async function extractXlsxText(file: File) {
   return sheets.join("\n\n");
 }
 
-async function readSharedStrings(zip: JSZip) {
+async function readSharedStrings(zip: ZipArchive) {
   const xml = await zip.file("xl/sharedStrings.xml")?.async("text");
   return xml ? textRunsFromXml(xml) : [];
 }
