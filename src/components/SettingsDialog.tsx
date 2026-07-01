@@ -3970,7 +3970,7 @@ export default function SettingsDialog({
                         <input
                           className={inputCls}
                           value={form.voice_tts_backend}
-                          placeholder="none / GPT-SoVITS / CosyVoice"
+                          placeholder="none / dashscope"
                           onChange={(e) => set("voice_tts_backend", e.target.value)}
                         />
                       </Field>

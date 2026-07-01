@@ -1,5 +1,9 @@
 //! 子 Agent：给主 Agent 提供只读、多视角的探索/审查 worker。
-use std::sync::atomic::Ordering;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -35,6 +39,7 @@ pub struct SubagentRequest {
     pub max_total_tokens: Option<usize>,
     pub output_format: SubagentOutputFormat,
     pub reviewer_count: usize,
+    pub cancel: Option<Arc<AtomicBool>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -321,10 +326,20 @@ impl SubagentContextMode {
     }
 }
 
+fn request_cancelled(state: &crate::AppState, cancel: Option<&AtomicBool>) -> bool {
+    state.cancel.load(Ordering::Relaxed)
+        || cancel
+            .map(|flag| flag.load(Ordering::Relaxed))
+            .unwrap_or(false)
+}
+
 pub async fn run(state: &crate::AppState, req: SubagentRequest) -> Result<String, String> {
     if req.prompt.trim().is_empty() {
         return Err("子 Agent prompt 不能为空".to_string());
     }
+
+    let request_cancel = req.cancel.clone();
+    let request_cancel = request_cancel.as_deref();
 
     let reviewer_count = req.reviewer_count.clamp(1, 5);
     if reviewer_count > 1 {
@@ -472,7 +487,7 @@ pub async fn run(state: &crate::AppState, req: SubagentRequest) -> Result<String
     };
 
     for _ in 0..MAX_SUBAGENT_STEPS {
-        if state.cancel.load(Ordering::Relaxed) {
+        if request_cancelled(state, request_cancel) {
             return Ok("[子 Agent 已被用户中断]".to_string());
         }
 
@@ -483,13 +498,14 @@ pub async fn run(state: &crate::AppState, req: SubagentRequest) -> Result<String
             return Ok("[子 Agent 已达到 token 硬预算，停止继续调用模型]".to_string());
         }
 
-        let turn = llm::stream_completion(
+        let turn = stream_completion_with_cancel(
             &state.http,
             &settings,
             &msgs,
             &tool_schema,
             |_| {},
             &state.cancel,
+            request_cancel,
         )
         .await?;
 
@@ -559,6 +575,52 @@ pub async fn run(state: &crate::AppState, req: SubagentRequest) -> Result<String
     Ok("子 Agent 达到内部工具轮次上限，未形成最终回答。".to_string())
 }
 
+async fn stream_completion_with_cancel(
+    client: &reqwest::Client,
+    settings: &store::Settings,
+    messages: &[Message],
+    tools: &Value,
+    on_delta: impl FnMut(llm::StreamDelta<'_>),
+    global_cancel: &AtomicBool,
+    request_cancel: Option<&AtomicBool>,
+) -> Result<llm::AssistantTurn, String> {
+    let Some(request_cancel) = request_cancel else {
+        return llm::stream_completion(client, settings, messages, tools, on_delta, global_cancel)
+            .await;
+    };
+
+    let combined_cancel = AtomicBool::new(
+        global_cancel.load(Ordering::Relaxed) || request_cancel.load(Ordering::Relaxed),
+    );
+    tokio::select! {
+        result = llm::stream_completion(client, settings, messages, tools, on_delta, &combined_cancel) => result,
+        _ = relay_cancel(global_cancel, request_cancel, &combined_cancel) => Ok(interrupted_turn()),
+    }
+}
+
+async fn relay_cancel(
+    global_cancel: &AtomicBool,
+    request_cancel: &AtomicBool,
+    combined_cancel: &AtomicBool,
+) {
+    loop {
+        if global_cancel.load(Ordering::Relaxed) || request_cancel.load(Ordering::Relaxed) {
+            combined_cancel.store(true, Ordering::Relaxed);
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+fn interrupted_turn() -> llm::AssistantTurn {
+    llm::AssistantTurn {
+        content: String::new(),
+        tool_calls: Vec::new(),
+        finish_reason: "interrupted".to_string(),
+        usage: None,
+    }
+}
+
 async fn run_reviewer_panel(
     state: &crate::AppState,
     req: SubagentRequest,
@@ -579,9 +641,11 @@ async fn run_reviewer_panel(
         "simplicity",
     ];
     let mut outputs = Vec::new();
+    let request_cancel = req.cancel.clone();
+    let request_cancel = request_cancel.as_deref();
 
     for idx in 0..reviewer_count {
-        if state.cancel.load(Ordering::Relaxed) {
+        if request_cancelled(state, request_cancel) {
             outputs.push(format!("## Reviewer {}\n[子 Agent 已被用户中断]", idx + 1));
             break;
         }

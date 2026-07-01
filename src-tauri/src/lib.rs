@@ -9,6 +9,7 @@ mod media;
 mod ocr;
 mod pack;
 mod permission;
+mod startup;
 mod store;
 mod tools;
 mod voice;
@@ -595,6 +596,10 @@ fn save_settings(
     state: State<'_, AppState>,
     settings: Settings,
 ) -> Result<(), String> {
+    let current_launch_on_startup = state.settings.lock().unwrap().launch_on_startup;
+    if settings.launch_on_startup != current_launch_on_startup {
+        startup::apply_launch_on_startup(settings.launch_on_startup)?;
+    }
     credentials::save_api_key(&settings.api_key)?;
     credentials::save_web_search_api_keys(&settings)?;
     credentials::save_webdav_password(&settings.webdav_password)?;
@@ -1492,6 +1497,9 @@ fn open_sandbox(state: State<'_, AppState>) -> Result<(), String> {
 
 #[tauri::command]
 fn ocr_image_bytes(state: State<'_, AppState>, bytes: Vec<u8>) -> Result<String, String> {
+    if !state.settings.lock().unwrap().computer_use_enabled {
+        return Err("Computer Use / OCR is not enabled.".to_string());
+    }
     let img = image::load_from_memory(&bytes)
         .map_err(|e| format!("读取图片失败：{e}"))?
         .to_rgba8();
@@ -2048,6 +2056,9 @@ pub fn run() {
             let mut settings = store::load_settings(&dir);
             if let Err(e) = credentials::hydrate_or_migrate_settings(&dir, &mut settings) {
                 eprintln!("Demiurge credential warning: {e}");
+            }
+            if let Err(e) = startup::apply_launch_on_startup(settings.launch_on_startup) {
+                eprintln!("Demiurge startup integration warning: {e}");
             }
             let sessions = store::load_sessions(&dir);
 

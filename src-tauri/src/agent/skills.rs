@@ -544,7 +544,7 @@ fn render_context(selected: &[(&SkillDefinition, i32)], diagnostics: &[String]) 
         }
         if !skill.required_permissions.is_empty() {
             part.push_str(&format!(
-                "Required permissions: {}\n",
+                "Declared permission needs (advisory; tool calls remain gated by runtime permission rules): {}\n",
                 skill.required_permissions.join(", ")
             ));
         }
@@ -626,7 +626,7 @@ fn format_panel(panel: &SkillPanelState, query: Option<&str>) -> String {
             }
             if !skill.required_permissions.is_empty() {
                 out.push_str(&format!(
-                    "  permissions: {}\n",
+                    "  permission needs: {}\n",
                     skill.required_permissions.join(", ")
                 ));
             }

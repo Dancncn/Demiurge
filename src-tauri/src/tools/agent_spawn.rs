@@ -30,6 +30,7 @@ pub async fn run(state: &crate::AppState, args: Value) -> Result<String, String>
             max_total_tokens: args.max_total_tokens,
             output_format,
             reviewer_count,
+            cancel: None,
         },
     )
     .await

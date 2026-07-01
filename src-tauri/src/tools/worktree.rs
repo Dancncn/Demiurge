@@ -55,7 +55,7 @@ pub fn preview(args: Value) -> Result<String, String> {
     ))
 }
 
-fn sanitize_label(label: &str) -> String {
+pub(crate) fn sanitize_label(label: &str) -> String {
     label
         .trim()
         .chars()
