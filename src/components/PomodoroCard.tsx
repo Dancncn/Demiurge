@@ -182,9 +182,19 @@ export default function PomodoroCard() {
           </div>
         )}
       </div>
-      {(timer?.feedback.start_message || error) && (
-        <div className={`mt-2 text-[11px] ${error ? "text-[#b42318]" : "text-[#6f7782]"}`}>
-          {error || timer?.feedback.start_message}
+      {(timer?.feedback.start_message || timer?.feedback.recap_prompt || error) && (
+        <div className={`mt-2 grid gap-1 text-[11px] ${error ? "text-[#b42318]" : "text-[#6f7782]"}`}>
+          <div>{error || timer?.feedback.recap_prompt || timer?.feedback.start_message}</div>
+          {timer?.feedback.encouragement && <div className="text-[#3f4652]">{timer.feedback.encouragement}</div>}
+          {timer?.feedback.plan_steps?.length ? (
+            <div className="flex flex-wrap gap-1.5">
+              {timer.feedback.plan_steps.map((step, index) => (
+                <span key={`${index}-${step}`} className="rounded-md bg-[#f6f7f9] px-2 py-1 text-[#59616d]">
+                  {index + 1}. {step}
+                </span>
+              ))}
+            </div>
+          ) : null}
         </div>
       )}
     </section>

@@ -104,8 +104,14 @@ impl Default for PomodoroTaskBinding {
 pub struct PomodoroFeedback {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub start_message: Option<String>,
+    #[serde(default)]
+    pub plan_steps: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub completion_message: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recap_prompt: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub encouragement: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -187,6 +193,7 @@ pub fn start(
     let run_id = format!("p_{}", now);
     let task = request.task.unwrap_or_default();
     let title = normalized_task_title(&task).unwrap_or_else(|| default_task_title(&mode));
+    let feedback_title = title.clone();
     cancel_runtime_timer(state);
     store.timer = PomodoroTimer {
         status: "running".to_string(),
@@ -201,8 +208,11 @@ pub fn start(
         focus_streak: store.timer.focus_streak,
         task: PomodoroTaskBinding { title, ..task },
         feedback: PomodoroFeedback {
-            start_message: Some(start_message(&mode, minutes)),
+            start_message: Some(start_message(&mode, minutes, &feedback_title)),
+            plan_steps: plan_steps(&mode, &feedback_title),
             completion_message: None,
+            recap_prompt: None,
+            encouragement: None,
         },
         updated_at: now,
     };
@@ -272,6 +282,8 @@ pub fn skip(app: AppHandle, state: &crate::AppState) -> Result<PomodoroPanelStat
     store.timer.ends_at = None;
     store.timer.paused_at = None;
     store.timer.feedback.completion_message = Some("这轮已经跳过，稍后可以重新开始。".to_string());
+    store.timer.feedback.recap_prompt = None;
+    store.timer.feedback.encouragement = None;
     store.timer.updated_at = now;
     write_store(&data_dir, &store)?;
     let panel = panel_state_from_store(&data_dir, store);
@@ -296,6 +308,8 @@ fn complete_run(app: &AppHandle, state: &crate::AppState, run_id: &str) -> Resul
         &completed_mode,
         store.timer.focus_streak,
     ));
+    store.timer.feedback.recap_prompt = recap_prompt(&completed_mode);
+    store.timer.feedback.encouragement = encouragement(&completed_mode, store.timer.focus_streak);
     if completed_mode == "focus" {
         store.timer.completed_focus_count = store.timer.completed_focus_count.saturating_add(1);
         store.timer.focus_streak = store.timer.focus_streak.saturating_add(1);
@@ -462,11 +476,30 @@ fn default_task_title(mode: &str) -> String {
     }
 }
 
-fn start_message(mode: &str, minutes: u64) -> String {
+fn start_message(mode: &str, minutes: u64, title: &str) -> String {
     match mode {
         "short_break" => format!("短休息 {minutes} 分钟开始。离开屏幕、喝水，回来再继续。"),
         "long_break" => format!("长休息 {minutes} 分钟开始。让脑子真的换个频道。"),
-        _ => format!("专注 {minutes} 分钟开始。先只抓一个最小可完成动作。"),
+        _ => format!("专注 {minutes} 分钟开始。先把「{title}」拆成一个可交付的小动作。"),
+    }
+}
+
+fn plan_steps(mode: &str, title: &str) -> Vec<String> {
+    match mode {
+        "focus" | "custom" => vec![
+            format!("把目标缩成一句：这轮结束时「{title}」要多出什么结果。"),
+            "先做 2 分钟准备：打开必要文件、关闭无关入口。".to_string(),
+            "只推进一个最小交付；如果卡住，记录阻塞点而不是硬熬。".to_string(),
+        ],
+        "short_break" => vec![
+            "站起来离开屏幕。".to_string(),
+            "喝水或伸展，不顺手打开新的信息流。".to_string(),
+        ],
+        "long_break" => vec![
+            "离开当前任务上下文。".to_string(),
+            "让眼睛和肩颈休息，回来后再决定下一轮目标。".to_string(),
+        ],
+        _ => Vec::new(),
     }
 }
 
@@ -479,6 +512,28 @@ fn completion_message(mode: &str, focus_streak_before_increment: u32) -> String 
         }
         _ => "这一轮完成了。花十秒写下做到了什么、下一步是什么。".to_string(),
     }
+}
+
+fn recap_prompt(mode: &str) -> Option<String> {
+    if mode == "focus" {
+        Some("复盘 10 秒：完成了什么？下一步是什么？有什么中断要记下？".to_string())
+    } else {
+        None
+    }
+}
+
+fn encouragement(mode: &str, focus_streak_before_increment: u32) -> Option<String> {
+    if mode != "focus" {
+        return None;
+    }
+    let streak = focus_streak_before_increment.saturating_add(1);
+    Some(if streak >= 3 {
+        format!("已经连续完成 {streak} 轮专注。保持轻量节奏，下一轮前也可以认真休息。")
+    } else if streak == 2 {
+        "连续两轮完成。不错，先别急着加码，稳住就很有用。".to_string()
+    } else {
+        "完成一轮就算数。小步推进比把自己燃尽更可靠。".to_string()
+    })
 }
 
 fn notification_title(mode: &str) -> &'static str {
@@ -538,5 +593,14 @@ mod tests {
         };
         let panel = panel_state_from_store(Path::new("."), store);
         assert_eq!(panel.next_mode, "long_break");
+    }
+
+    #[test]
+    fn feedback_breaks_focus_goal_into_steps_and_encourages_streaks() {
+        let steps = plan_steps("focus", "finish review");
+        assert_eq!(steps.len(), 3);
+        assert!(steps[0].contains("finish review"));
+        assert!(recap_prompt("focus").unwrap().contains("复盘"));
+        assert!(encouragement("focus", 2).unwrap().contains("连续完成 3 轮"));
     }
 }

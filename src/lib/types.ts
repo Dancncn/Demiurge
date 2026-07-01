@@ -186,7 +186,10 @@ export interface PomodoroTaskBinding {
 
 export interface PomodoroFeedback {
   start_message?: string | null;
+  plan_steps: string[];
   completion_message?: string | null;
+  recap_prompt?: string | null;
+  encouragement?: string | null;
 }
 
 export interface PomodoroTimer {
