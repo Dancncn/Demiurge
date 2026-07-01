@@ -17,6 +17,14 @@ function label(value: string) {
   return value.replaceAll("_", " ");
 }
 
+function formatCache(value?: number | null) {
+  if (!value) return "";
+  const diff = value - Date.now();
+  if (diff <= 0) return "缓存已过期";
+  const minutes = Math.max(1, Math.round(diff / 60000));
+  return `${minutes} 分钟后过期`;
+}
+
 export default function CompanionCard({ settings, onOpenSettings }: Props) {
   const [state, setState] = useState<CompanionPanelState | null>(null);
   const [loading, setLoading] = useState(false);
@@ -61,6 +69,8 @@ export default function CompanionCard({ settings, onOpenSettings }: Props) {
     settings?.companion_focus,
     settings?.weather_enabled,
     settings?.weather_city,
+    settings?.weather_location_mode,
+    settings?.weather_provider,
   ]);
 
   if (!settings?.companion_enabled) return null;
@@ -89,9 +99,11 @@ export default function CompanionCard({ settings, onOpenSettings }: Props) {
               {weather
                 ? `${weather.city} · ${weather.condition} · ${formatTemp(weather.temperature_c)} · 体感 ${formatTemp(
                     weather.apparent_temperature_c,
-                  )}`
+                  )}${
+                    weather.uv_index ? ` · UV ${Math.round(weather.uv_index)}` : ""
+                  }${weather.air_quality_index ? ` · AQI ${weather.air_quality_index}` : ""}`
                 : settings.weather_enabled
-                  ? settings.weather_city
+                  ? settings.weather_city || settings.weather_location_mode === "auto"
                     ? "天气加载中，失败时会安静降级。"
                     : "填写城市后启用天气陪伴。"
                   : "天气陪伴关闭，仅使用本地陪伴状态。"}
@@ -120,7 +132,7 @@ export default function CompanionCard({ settings, onOpenSettings }: Props) {
         </div>
       </div>
 
-      {(suggestions.length > 0 || error || state?.privacy.note) && (
+      {(suggestions.length > 0 || error || state?.weather_error || state?.privacy.note) && (
         <div className="mt-2 grid gap-2 lg:grid-cols-[minmax(0,1fr)_220px]">
           <div className="flex min-w-0 flex-wrap gap-1.5">
             {suggestions.map((item) => (
@@ -137,8 +149,19 @@ export default function CompanionCard({ settings, onOpenSettings }: Props) {
                 {error}
               </span>
             )}
+            {state?.weather_error && (
+              <span className="rounded-md border border-[#fde2e2] bg-[#fff7f7] px-2 py-1 text-[11px] text-[#b42318]">
+                {state.weather_error}
+              </span>
+            )}
+            {state?.weather_cache.active_cached && (
+              <span className="rounded-md border border-[#e2e5ea] bg-white px-2 py-1 text-[11px] text-[#59616d]">
+                {formatCache(state.weather_cache.expires_at)}
+              </span>
+            )}
           </div>
           <div className="truncate text-[11px] text-[#8a9099]" title={state?.privacy.note}>
+            {state?.privacy.provider ? `${state.privacy.provider} · ` : ""}
             {state?.privacy.note}
           </div>
         </div>

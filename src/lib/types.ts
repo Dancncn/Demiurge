@@ -79,6 +79,7 @@ export interface Settings {
   weather_enabled: boolean;
   weather_location_mode: string;
   weather_city: string;
+  weather_provider: string;
   voice_enabled: boolean;
   voice_stt_backend: string;
   voice_tts_backend: string;
@@ -109,15 +110,28 @@ export interface CompanionPanelState {
   privacy: CompanionPrivacyState;
   user_state: CompanionUserState;
   weather?: WeatherCard | null;
+  weather_cache: WeatherCacheState;
+  weather_error?: string | null;
   suggestions: CompanionSuggestion[];
   updated_at: number;
 }
 
 export interface CompanionPrivacyState {
   weather_enabled: boolean;
+  provider: string;
   location_mode: string;
   city: string;
   note: string;
+}
+
+export interface WeatherCacheState {
+  entries: number;
+  active_city?: string | null;
+  active_cached: boolean;
+  expires_at?: number | null;
+  ttl_ms: number;
+  last_error?: string | null;
+  location_cached: boolean;
 }
 
 export interface CompanionUserState {
@@ -137,6 +151,13 @@ export interface WeatherCard {
   precipitation_mm: number;
   humidity_percent?: number | null;
   wind_speed_kmh?: number | null;
+  uv_index?: number | null;
+  air_quality_index?: number | null;
+  pm2_5?: number | null;
+  day_temperature_min_c?: number | null;
+  day_temperature_max_c?: number | null;
+  commute_precipitation_probability?: number | null;
+  severe_weather: boolean;
   weather_code: number;
   condition: string;
   advice: string[];

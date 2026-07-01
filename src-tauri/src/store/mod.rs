@@ -98,6 +98,10 @@ fn default_weather_location_mode() -> String {
     "manual".to_string()
 }
 
+fn default_weather_provider() -> String {
+    "open_meteo".to_string()
+}
+
 fn default_voice_enabled() -> bool {
     DEFAULT_VOICE_ENABLED
 }
@@ -315,6 +319,8 @@ pub struct Settings {
     pub weather_location_mode: String,
     #[serde(default)]
     pub weather_city: String,
+    #[serde(default = "default_weather_provider")]
+    pub weather_provider: String,
     #[serde(default = "default_voice_enabled")]
     pub voice_enabled: bool,
     #[serde(default = "default_voice_stt_backend")]
@@ -393,6 +399,7 @@ impl Default for Settings {
             weather_enabled: DEFAULT_WEATHER_ENABLED,
             weather_location_mode: default_weather_location_mode(),
             weather_city: String::new(),
+            weather_provider: default_weather_provider(),
             voice_enabled: DEFAULT_VOICE_ENABLED,
             voice_stt_backend: default_voice_stt_backend(),
             voice_tts_backend: default_voice_tts_backend(),
@@ -606,6 +613,7 @@ mod tests {
         assert!(!settings.launch_on_startup);
         assert!(!settings.companion_memory_extraction_enabled);
         assert_eq!(settings.companion_memory_extraction_scope, "recent_turn");
+        assert_eq!(settings.weather_provider, "open_meteo");
     }
 
     #[test]

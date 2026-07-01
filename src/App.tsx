@@ -64,6 +64,7 @@ const PREVIEW_SETTINGS: Settings = {
   weather_enabled: false,
   weather_location_mode: "manual",
   weather_city: "",
+  weather_provider: "open_meteo",
   voice_enabled: false,
   voice_stt_backend: "",
   voice_tts_backend: "",

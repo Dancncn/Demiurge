@@ -1479,6 +1479,7 @@ export default function SettingsDialog({
       companion_do_not_disturb: form.companion_do_not_disturb.trim(),
       weather_location_mode: form.weather_location_mode.trim() || "manual",
       weather_city: form.weather_city.trim(),
+      weather_provider: form.weather_provider.trim() || "open_meteo",
       voice_stt_backend: form.voice_stt_backend.trim() || "none",
       voice_tts_backend: form.voice_tts_backend.trim() || "none",
       voice_id: form.voice_id.trim(),
@@ -2369,6 +2370,18 @@ export default function SettingsDialog({
                         onChange={(checked) => set("weather_enabled", checked)}
                       />
                       <div className="grid gap-4 md:grid-cols-2">
+                        <Field label={t("settings.companion.weatherProvider")} help={t("settings.companion.weatherProviderHelp")}>
+                          <select
+                            className={inputCls}
+                            value={form.weather_provider}
+                            onChange={(e) => set("weather_provider", e.target.value)}
+                          >
+                            <option value="open_meteo">Open-Meteo</option>
+                            <option value="web_search" disabled>
+                              {t("settings.companion.weatherProvider.webSearchReserved")}
+                            </option>
+                          </select>
+                        </Field>
                         <Field label={t("settings.companion.weatherCity")}>
                           <input
                             className={inputCls}

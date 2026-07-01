@@ -23,6 +23,8 @@ pub struct CompanionPanelState {
     pub privacy: CompanionPrivacyState,
     pub user_state: CompanionUserState,
     pub weather: Option<WeatherCard>,
+    pub weather_cache: WeatherCacheState,
+    pub weather_error: Option<String>,
     pub suggestions: Vec<CompanionSuggestion>,
     pub updated_at: u64,
 }
@@ -30,9 +32,21 @@ pub struct CompanionPanelState {
 #[derive(Clone, Debug, Serialize)]
 pub struct CompanionPrivacyState {
     pub weather_enabled: bool,
+    pub provider: String,
     pub location_mode: String,
     pub city: String,
     pub note: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct WeatherCacheState {
+    pub entries: usize,
+    pub active_city: Option<String>,
+    pub active_cached: bool,
+    pub expires_at: Option<u64>,
+    pub ttl_ms: u64,
+    pub last_error: Option<String>,
+    pub location_cached: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -54,6 +68,13 @@ pub struct WeatherCard {
     pub precipitation_mm: f32,
     pub humidity_percent: Option<u8>,
     pub wind_speed_kmh: Option<f32>,
+    pub uv_index: Option<f32>,
+    pub air_quality_index: Option<u16>,
+    pub pm2_5: Option<f32>,
+    pub day_temperature_min_c: Option<f32>,
+    pub day_temperature_max_c: Option<f32>,
+    pub commute_precipitation_probability: Option<u8>,
+    pub severe_weather: bool,
     pub weather_code: i32,
     pub condition: String,
     pub advice: Vec<String>,
@@ -129,7 +150,14 @@ struct CachedWeather {
     expires_at: u64,
 }
 
+#[derive(Clone)]
+struct CachedLocation {
+    city: String,
+    expires_at: u64,
+}
+
 static WEATHER_CACHE: OnceLock<Mutex<HashMap<String, CachedWeather>>> = OnceLock::new();
+static LOCATION_CACHE: OnceLock<Mutex<Option<CachedLocation>>> = OnceLock::new();
 
 pub fn clear_weather_cache() -> usize {
     let mut cache = WEATHER_CACHE
@@ -138,6 +166,9 @@ pub fn clear_weather_cache() -> usize {
         .unwrap();
     let count = cache.len();
     cache.clear();
+    if let Ok(mut location) = LOCATION_CACHE.get_or_init(|| Mutex::new(None)).lock() {
+        *location = None;
+    }
     count
 }
 
@@ -612,19 +643,23 @@ pub async fn panel_state(state: &AppState) -> CompanionPanelState {
             .map(|session| session.updated_at)
             .unwrap_or_default()
     };
-    let weather = if settings.companion_enabled
+    let (weather, weather_error) = if settings.companion_enabled
         && settings.weather_enabled
         && settings.weather_location_mode != "off"
     {
-        fetch_weather(state, &settings).await.ok()
+        match fetch_weather(state, &settings).await {
+            Ok(card) => (Some(card), None),
+            Err(err) => (None, Some(err)),
+        }
     } else {
-        None
+        (None, None)
     };
     let suggestions = build_suggestions(&settings, weather.as_ref(), recent_interaction_at);
     CompanionPanelState {
         enabled: settings.companion_enabled,
         privacy: CompanionPrivacyState {
             weather_enabled: settings.weather_enabled,
+            provider: weather_provider_label(&settings.weather_provider).to_string(),
             location_mode: settings.weather_location_mode.clone(),
             city: settings.weather_city.clone(),
             note: privacy_note(&settings),
@@ -638,13 +673,16 @@ pub async fn panel_state(state: &AppState) -> CompanionPanelState {
             recent_interaction_at,
         },
         weather,
+        weather_cache: weather_cache_state(&settings, weather_error.clone()),
+        weather_error,
         suggestions,
         updated_at: now_millis(),
     }
 }
 
 async fn fetch_weather(state: &AppState, settings: &Settings) -> Result<WeatherCard, String> {
-    let city = settings.weather_city.trim();
+    let city = resolve_weather_city(&state.http, settings).await?;
+    let city = city.trim();
     if city.is_empty() {
         return Err("Weather city is empty.".to_string());
     }
@@ -664,8 +702,12 @@ async fn fetch_weather(state: &AppState, settings: &Settings) -> Result<WeatherC
         }
     }
 
-    let place = geocode_city(&state.http, city).await?;
-    let mut card = forecast(&state.http, &place).await?;
+    let place = weather_provider(settings)
+        .geocode(&state.http, city)
+        .await?;
+    let mut card = weather_provider(settings)
+        .forecast(&state.http, &place)
+        .await?;
     card.advice = weather_advice(&card);
     WEATHER_CACHE
         .get_or_init(|| Mutex::new(HashMap::new()))
@@ -679,6 +721,143 @@ async fn fetch_weather(state: &AppState, settings: &Settings) -> Result<WeatherC
             },
         );
     Ok(card)
+}
+
+#[derive(Clone, Copy)]
+enum WeatherProvider {
+    OpenMeteo,
+}
+
+impl WeatherProvider {
+    async fn geocode(&self, client: &reqwest::Client, city: &str) -> Result<GeocodePlace, String> {
+        match self {
+            WeatherProvider::OpenMeteo => geocode_city(client, city).await,
+        }
+    }
+
+    async fn forecast(
+        &self,
+        client: &reqwest::Client,
+        place: &GeocodePlace,
+    ) -> Result<WeatherCard, String> {
+        match self {
+            WeatherProvider::OpenMeteo => forecast(client, place).await,
+        }
+    }
+}
+
+fn weather_provider(settings: &Settings) -> WeatherProvider {
+    match settings.weather_provider.trim() {
+        "open_meteo" | "" => WeatherProvider::OpenMeteo,
+        _ => WeatherProvider::OpenMeteo,
+    }
+}
+
+fn weather_provider_label(value: &str) -> &'static str {
+    match value.trim() {
+        "open_meteo" | "" => "Open-Meteo",
+        _ => "Open-Meteo",
+    }
+}
+
+async fn resolve_weather_city(
+    client: &reqwest::Client,
+    settings: &Settings,
+) -> Result<String, String> {
+    if settings.weather_location_mode == "auto" && settings.weather_city.trim().is_empty() {
+        return coarse_location_city(client).await;
+    }
+    Ok(settings.weather_city.trim().to_string())
+}
+
+#[derive(Deserialize)]
+struct IpLocationResponse {
+    #[serde(default)]
+    city: String,
+    #[serde(default)]
+    region: String,
+    #[serde(default)]
+    country_name: String,
+}
+
+async fn coarse_location_city(client: &reqwest::Client) -> Result<String, String> {
+    let now = now_millis();
+    if let Some(cached) = LOCATION_CACHE
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .unwrap()
+        .clone()
+    {
+        if cached.expires_at > now {
+            return Ok(cached.city);
+        }
+    }
+    let response = client
+        .get("https://ipapi.co/json/")
+        .send()
+        .await
+        .map_err(|e| format!("Coarse weather location failed: {e}"))?;
+    if !response.status().is_success() {
+        return Err(format!(
+            "Coarse weather location failed: HTTP {}",
+            response.status()
+        ));
+    }
+    let body = response
+        .json::<IpLocationResponse>()
+        .await
+        .map_err(|e| format!("Coarse weather location parse failed: {e}"))?;
+    let city = if body.city.trim().is_empty() {
+        return Err("Coarse weather location did not return a city.".to_string());
+    } else if body.region.trim().is_empty() {
+        format!("{}, {}", body.city.trim(), body.country_name.trim())
+    } else {
+        format!("{}, {}", body.city.trim(), body.region.trim())
+    };
+    *LOCATION_CACHE
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .unwrap() = Some(CachedLocation {
+        city: city.clone(),
+        expires_at: now + WEATHER_CACHE_TTL_MS,
+    });
+    Ok(city)
+}
+
+fn weather_cache_state(settings: &Settings, last_error: Option<String>) -> WeatherCacheState {
+    let cache = WEATHER_CACHE
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap();
+    let cache_key = settings.weather_city.trim().to_ascii_lowercase();
+    let active = if cache_key.is_empty() && settings.weather_location_mode == "auto" {
+        cache
+            .values()
+            .filter(|cached| cached.expires_at > now_millis())
+            .max_by_key(|cached| cached.card.fetched_at)
+    } else if cache_key.is_empty() {
+        None
+    } else {
+        cache.get(&cache_key)
+    };
+    let location_cached = LOCATION_CACHE
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .unwrap()
+        .as_ref()
+        .map(|cached| cached.expires_at > now_millis())
+        .unwrap_or(false);
+    WeatherCacheState {
+        entries: cache.len(),
+        active_city: active.map(|cached| cached.card.city.clone()),
+        active_cached: active
+            .map(|cached| cached.expires_at > now_millis())
+            .unwrap_or(false),
+        expires_at: active.map(|cached| cached.expires_at),
+        ttl_ms: WEATHER_CACHE_TTL_MS,
+        last_error,
+        location_cached,
+    }
 }
 
 #[derive(Deserialize)]
@@ -727,6 +906,10 @@ async fn geocode_city(client: &reqwest::Client, city: &str) -> Result<GeocodePla
 #[derive(Deserialize)]
 struct ForecastResponse {
     current: ForecastCurrent,
+    #[serde(default)]
+    daily: Option<ForecastDaily>,
+    #[serde(default)]
+    hourly: Option<ForecastHourly>,
 }
 
 #[derive(Deserialize)]
@@ -741,6 +924,36 @@ struct ForecastCurrent {
     weather_code: i32,
 }
 
+#[derive(Deserialize)]
+struct ForecastDaily {
+    #[serde(default)]
+    temperature_2m_max: Vec<f32>,
+    #[serde(default)]
+    temperature_2m_min: Vec<f32>,
+    #[serde(default)]
+    uv_index_max: Vec<f32>,
+}
+
+#[derive(Deserialize)]
+struct ForecastHourly {
+    #[serde(default)]
+    precipitation_probability: Vec<Option<u8>>,
+}
+
+#[derive(Deserialize)]
+struct AirQualityResponse {
+    #[serde(default)]
+    current: Option<AirQualityCurrent>,
+}
+
+#[derive(Deserialize)]
+struct AirQualityCurrent {
+    #[serde(default)]
+    us_aqi: Option<u16>,
+    #[serde(default)]
+    pm2_5: Option<f32>,
+}
+
 async fn forecast(client: &reqwest::Client, place: &GeocodePlace) -> Result<WeatherCard, String> {
     let response = client
         .get("https://api.open-meteo.com/v1/forecast")
@@ -752,6 +965,12 @@ async fn forecast(client: &reqwest::Client, place: &GeocodePlace) -> Result<Weat
                 "temperature_2m,apparent_temperature,precipitation,relative_humidity_2m,wind_speed_10m,weather_code"
                     .to_string(),
             ),
+            (
+                "daily",
+                "temperature_2m_max,temperature_2m_min,uv_index_max".to_string(),
+            ),
+            ("hourly", "precipitation_probability".to_string()),
+            ("forecast_days", "1".to_string()),
             ("timezone", "auto".to_string()),
         ])
         .send()
@@ -772,6 +991,25 @@ async fn forecast(client: &reqwest::Client, place: &GeocodePlace) -> Result<Weat
     } else {
         format!("{}, {}", place.name, place.admin1)
     };
+    let air = air_quality(client, place).await.ok().flatten();
+    let daily = body.daily.as_ref();
+    let hourly = body.hourly.as_ref();
+    let commute_precipitation_probability = hourly.and_then(|hourly| {
+        hourly
+            .precipitation_probability
+            .iter()
+            .take(24)
+            .flatten()
+            .max()
+            .copied()
+    });
+    let day_temperature_min_c = daily.and_then(|daily| daily.temperature_2m_min.first().copied());
+    let day_temperature_max_c = daily.and_then(|daily| daily.temperature_2m_max.first().copied());
+    let uv_index = daily.and_then(|daily| daily.uv_index_max.first().copied());
+    let severe_weather = matches!(body.current.weather_code, 95..=99)
+        || body.current.wind_speed_10m.unwrap_or_default() >= 45.0
+        || body.current.apparent_temperature >= 38.0
+        || body.current.apparent_temperature <= -8.0;
     Ok(WeatherCard {
         city: place_name,
         country: place.country.clone(),
@@ -780,6 +1018,13 @@ async fn forecast(client: &reqwest::Client, place: &GeocodePlace) -> Result<Weat
         precipitation_mm: body.current.precipitation,
         humidity_percent: body.current.relative_humidity_2m,
         wind_speed_kmh: body.current.wind_speed_10m,
+        uv_index,
+        air_quality_index: air.as_ref().and_then(|air| air.us_aqi),
+        pm2_5: air.as_ref().and_then(|air| air.pm2_5),
+        day_temperature_min_c,
+        day_temperature_max_c,
+        commute_precipitation_probability,
+        severe_weather,
         weather_code: body.current.weather_code,
         condition: weather_condition(body.current.weather_code).to_string(),
         advice: Vec::new(),
@@ -787,6 +1032,34 @@ async fn forecast(client: &reqwest::Client, place: &GeocodePlace) -> Result<Weat
         cached: false,
         fetched_at: now_millis(),
     })
+}
+
+async fn air_quality(
+    client: &reqwest::Client,
+    place: &GeocodePlace,
+) -> Result<Option<AirQualityCurrent>, String> {
+    let response = client
+        .get("https://air-quality-api.open-meteo.com/v1/air-quality")
+        .query(&[
+            ("latitude", place.latitude.to_string()),
+            ("longitude", place.longitude.to_string()),
+            ("current", "us_aqi,pm2_5".to_string()),
+            ("timezone", "auto".to_string()),
+        ])
+        .send()
+        .await
+        .map_err(|e| format!("Weather air-quality failed: {e}"))?;
+    if !response.status().is_success() {
+        return Err(format!(
+            "Weather air-quality failed: HTTP {}",
+            response.status()
+        ));
+    }
+    let body = response
+        .json::<AirQualityResponse>()
+        .await
+        .map_err(|e| format!("Weather air-quality parse failed: {e}"))?;
+    Ok(body.current)
 }
 
 fn build_suggestions(
@@ -897,17 +1170,35 @@ fn proactive_reminder_candidates(
 
 fn weather_advice(card: &WeatherCard) -> Vec<String> {
     let mut advice = Vec::new();
+    if card.severe_weather {
+        advice.push("天气有偏极端信号，出门前看一眼本地预警和交通信息。".to_string());
+    }
     if card.precipitation_mm > 0.1 || matches!(card.weather_code, 51..=67 | 80..=82 | 95..=99) {
         advice.push("可能有降雨，出门前看一眼伞和通勤路况。".to_string());
+    }
+    if card.commute_precipitation_probability.unwrap_or_default() >= 60 {
+        advice.push("今天降雨概率偏高，通勤时间可以多留一点缓冲。".to_string());
     }
     if card.apparent_temperature_c >= 32.0 {
         advice.push("体感温度偏高，补水和避开暴晒会更舒服。".to_string());
     } else if card.apparent_temperature_c <= 3.0 {
         advice.push("体感温度偏低，出门多加一层，别让冷风偷走精力。".to_string());
     }
+    if let (Some(max), Some(min)) = (card.day_temperature_max_c, card.day_temperature_min_c) {
+        if max - min >= 10.0 {
+            advice.push("昼夜温差有点大，外套可以按晚间温度准备。".to_string());
+        }
+    }
+    if card.uv_index.unwrap_or_default() >= 6.0 {
+        advice.push("紫外线偏强，长时间在户外的话留意防晒。".to_string());
+    }
+    if card.air_quality_index.unwrap_or_default() >= 101 || card.pm2_5.unwrap_or_default() >= 35.0 {
+        advice.push("空气质量对敏感人群不太友好，户外活动可以适当降强度。".to_string());
+    }
     if card.wind_speed_kmh.unwrap_or_default() >= 30.0 {
         advice.push("风力有点明显，轻便物品和外套帽子留意一下。".to_string());
     }
+    advice.truncate(5);
     advice
 }
 
@@ -931,9 +1222,12 @@ fn privacy_note(settings: &Settings) -> String {
         return "天气陪伴已关闭，不会查询城市天气。".to_string();
     }
     if settings.weather_location_mode == "manual" {
-        return "天气仅使用你手动填写的城市；当前原型不做自动定位。".to_string();
+        return format!(
+            "天气 provider：{}。仅发送手动城市给地理编码与天气服务；缓存只保留城市级天气，30 分钟过期。",
+            weather_provider_label(&settings.weather_provider)
+        );
     }
-    "自动定位暂未启用；会继续按手动城市查询。".to_string()
+    "粗略定位会通过 IP 定位服务估算城市，只缓存城市级信息 30 分钟；关闭天气或清理缓存会停止/清除位置缓存。".to_string()
 }
 
 fn tone_default_hint(tone: &str) -> &'static str {
@@ -1005,6 +1299,13 @@ mod tests {
             precipitation_mm: 0.0,
             humidity_percent: Some(60),
             wind_speed_kmh: Some(8.0),
+            uv_index: Some(7.0),
+            air_quality_index: Some(80),
+            pm2_5: Some(20.0),
+            day_temperature_min_c: Some(25.0),
+            day_temperature_max_c: Some(36.0),
+            commute_precipitation_probability: Some(20),
+            severe_weather: false,
             weather_code: 0,
             condition: "晴".to_string(),
             advice: vec!["体感温度偏高，补水和避开暴晒会更舒服。".to_string()],
@@ -1120,6 +1421,6 @@ mod tests {
         let mut settings = Settings::default();
         settings.weather_enabled = true;
         settings.weather_location_mode = "auto".to_string();
-        assert!(privacy_note(&settings).contains("暂未启用"));
+        assert!(privacy_note(&settings).contains("粗略定位"));
     }
 }
