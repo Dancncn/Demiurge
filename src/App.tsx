@@ -28,6 +28,7 @@ import ConfirmDialog from "./components/ConfirmDialog";
 import SettingsDialog, { type SettingsTab } from "./components/SettingsDialog";
 import MediaStudio from "./components/MediaStudio";
 import SkillsPanel from "./components/SkillsPanel";
+import CompanionCard from "./components/CompanionCard";
 import { CheckIcon, ChevronDownIcon, PanelLeftIcon } from "./components/Icons";
 import { attachmentKindLabel, buildAttachmentPrompt, formatAttachmentSize, type ProcessedAttachment } from "./lib/fileProcessing";
 import { autoContextBudget } from "./lib/providers";
@@ -52,6 +53,15 @@ const PREVIEW_SETTINGS: Settings = {
   theme: "system",
   launch_on_startup: false,
   auto_memory_enabled: true,
+  companion_enabled: true,
+  companion_tone: "gentle",
+  companion_mood: "neutral",
+  companion_energy: "normal",
+  companion_focus: "available",
+  companion_do_not_disturb: "",
+  weather_enabled: false,
+  weather_location_mode: "manual",
+  weather_city: "",
   voice_enabled: false,
   voice_stt_backend: "",
   voice_tts_backend: "",
@@ -953,6 +963,7 @@ export default function App() {
               </header>
 
               <GoalBar goal={goalPanel} busy={appBusy} progress={goalProgress} onAction={handleGoalAction} />
+              <CompanionCard settings={settings} onOpenSettings={() => openSettings("companion")} />
 
               <MessageList
                 items={items}

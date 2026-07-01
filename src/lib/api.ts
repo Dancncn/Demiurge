@@ -8,6 +8,8 @@ import type {
   AssistantErrorEvent,
   ConnectionTestResult,
   ConfirmRequestEvent,
+  CompanionPanelState,
+  CompanionMemorySuggestion,
   ContextPanelState,
   GoalPanelState,
   GoalProgressEvent,
@@ -91,6 +93,13 @@ export const goalContinue = () => invoke<GoalPanelState | null>("goal_continue")
 export const goalClear = () => invoke<GoalPanelState | null>("goal_clear");
 export const getHistory = () => invoke<Message[]>("get_history");
 export const contextPanelState = () => invoke<ContextPanelState>("context_panel_state");
+export const companionPanelState = () => invoke<CompanionPanelState>("companion_panel_state");
+export const companionClearWeatherCache = () =>
+  invoke<CompanionPanelState>("companion_clear_weather_cache");
+export const companionMemorySuggestions = () =>
+  invoke<CompanionMemorySuggestion[]>("companion_memory_suggestions");
+export const companionSaveMemorySuggestion = (id: string) =>
+  invoke<MemoryPanelState>("companion_save_memory_suggestion", { id });
 
 // 技能 / 检索面板：可选 query 用于按输入对技能做匹配检索打分。
 export const skillPanelState = (query?: string) =>

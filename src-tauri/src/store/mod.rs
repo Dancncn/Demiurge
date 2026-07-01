@@ -15,6 +15,8 @@ pub const DEFAULT_RESERVED_OUTPUT_TOKENS: usize = 4_000;
 pub const DEFAULT_AUTO_MEMORY_ENABLED: bool = true;
 pub const DEFAULT_VOICE_ENABLED: bool = false;
 pub const DEFAULT_COMPUTER_USE_ENABLED: bool = false;
+pub const DEFAULT_COMPANION_ENABLED: bool = true;
+pub const DEFAULT_WEATHER_ENABLED: bool = false;
 
 fn default_web_search_provider() -> String {
     "auto".to_string()
@@ -58,6 +60,34 @@ fn default_theme() -> String {
 
 fn default_auto_memory_enabled() -> bool {
     DEFAULT_AUTO_MEMORY_ENABLED
+}
+
+fn default_companion_enabled() -> bool {
+    DEFAULT_COMPANION_ENABLED
+}
+
+fn default_companion_tone() -> String {
+    "gentle".to_string()
+}
+
+fn default_companion_mood() -> String {
+    "neutral".to_string()
+}
+
+fn default_companion_energy() -> String {
+    "normal".to_string()
+}
+
+fn default_companion_focus() -> String {
+    "available".to_string()
+}
+
+fn default_weather_enabled() -> bool {
+    DEFAULT_WEATHER_ENABLED
+}
+
+fn default_weather_location_mode() -> String {
+    "manual".to_string()
 }
 
 fn default_voice_enabled() -> bool {
@@ -255,6 +285,24 @@ pub struct Settings {
     pub reasoning_effort: ReasoningEffort,
     #[serde(default = "default_auto_memory_enabled")]
     pub auto_memory_enabled: bool,
+    #[serde(default = "default_companion_enabled")]
+    pub companion_enabled: bool,
+    #[serde(default = "default_companion_tone")]
+    pub companion_tone: String,
+    #[serde(default = "default_companion_mood")]
+    pub companion_mood: String,
+    #[serde(default = "default_companion_energy")]
+    pub companion_energy: String,
+    #[serde(default = "default_companion_focus")]
+    pub companion_focus: String,
+    #[serde(default)]
+    pub companion_do_not_disturb: String,
+    #[serde(default = "default_weather_enabled")]
+    pub weather_enabled: bool,
+    #[serde(default = "default_weather_location_mode")]
+    pub weather_location_mode: String,
+    #[serde(default)]
+    pub weather_city: String,
     #[serde(default = "default_voice_enabled")]
     pub voice_enabled: bool,
     #[serde(default = "default_voice_stt_backend")]
@@ -322,6 +370,15 @@ impl Default for Settings {
             launch_on_startup: false,
             reasoning_effort: default_reasoning_effort(),
             auto_memory_enabled: DEFAULT_AUTO_MEMORY_ENABLED,
+            companion_enabled: DEFAULT_COMPANION_ENABLED,
+            companion_tone: default_companion_tone(),
+            companion_mood: default_companion_mood(),
+            companion_energy: default_companion_energy(),
+            companion_focus: default_companion_focus(),
+            companion_do_not_disturb: String::new(),
+            weather_enabled: DEFAULT_WEATHER_ENABLED,
+            weather_location_mode: default_weather_location_mode(),
+            weather_city: String::new(),
             voice_enabled: DEFAULT_VOICE_ENABLED,
             voice_stt_backend: default_voice_stt_backend(),
             voice_tts_backend: default_voice_tts_backend(),

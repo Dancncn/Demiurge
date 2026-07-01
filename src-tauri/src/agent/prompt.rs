@@ -164,6 +164,12 @@ fn build_ordered_sections(
             ),
         ),
         section(
+            "companion_context",
+            "Companion Context",
+            72,
+            crate::companion::prompt_context(settings),
+        ),
+        section(
             "conversation_summary",
             "Conversation Summary",
             65,

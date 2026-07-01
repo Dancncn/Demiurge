@@ -1,5 +1,6 @@
 //! Demiurge 引擎 —— Tauri v2 入口：全局状态、命令、构建器。
 mod agent;
+mod companion;
 mod connection_tests;
 mod credentials;
 mod llm;
@@ -1481,6 +1482,50 @@ async fn media_synthesize_speech(
     media::synthesize_speech(state.inner(), request).await
 }
 
+#[tauri::command]
+async fn companion_panel_state(
+    state: State<'_, AppState>,
+) -> Result<companion::CompanionPanelState, String> {
+    Ok(companion::panel_state(state.inner()).await)
+}
+
+#[tauri::command]
+async fn companion_clear_weather_cache(
+    state: State<'_, AppState>,
+) -> Result<companion::CompanionPanelState, String> {
+    companion::clear_weather_cache();
+    Ok(companion::panel_state(state.inner()).await)
+}
+
+#[tauri::command]
+fn companion_memory_suggestions(
+    state: State<'_, AppState>,
+) -> Vec<companion::CompanionMemorySuggestion> {
+    let settings = state.settings.lock().unwrap().clone();
+    companion::memory_suggestions(&settings)
+}
+
+#[tauri::command]
+fn companion_save_memory_suggestion(
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<agent::memory::MemoryPanelState, String> {
+    let settings = state.settings.lock().unwrap().clone();
+    let suggestion = companion::memory_suggestion_by_id(&settings, &id)
+        .ok_or_else(|| format!("Unknown companion memory suggestion: {id}"))?;
+    let (data, sandbox, packs, pack_id, session_id) = memory_context(state.inner());
+    agent::memory::add_entry(
+        &data,
+        &sandbox,
+        &packs,
+        &pack_id,
+        &session_id,
+        "user",
+        &suggestion.kind,
+        &suggestion.text,
+    )
+}
+
 fn webdav_auth(req: reqwest::RequestBuilder, config: &WebDavConfig) -> reqwest::RequestBuilder {
     let username = config.username.trim();
     if username.is_empty() {
@@ -1792,6 +1837,10 @@ pub fn run() {
             ocr_image_bytes,
             media_generate_image,
             media_synthesize_speech,
+            companion_panel_state,
+            companion_clear_weather_cache,
+            companion_memory_suggestions,
+            companion_save_memory_suggestion,
             ocr_model_status,
             ocr_download_models,
             workflow_panel_state,

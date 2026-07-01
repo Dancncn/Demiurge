@@ -68,6 +68,15 @@ export interface Settings {
   launch_on_startup: boolean;
   reasoning_effort: ReasoningEffort;
   auto_memory_enabled: boolean;
+  companion_enabled: boolean;
+  companion_tone: string;
+  companion_mood: string;
+  companion_energy: string;
+  companion_focus: string;
+  companion_do_not_disturb: string;
+  weather_enabled: boolean;
+  weather_location_mode: string;
+  weather_city: string;
   voice_enabled: boolean;
   voice_stt_backend: string;
   voice_tts_backend: string;
@@ -91,6 +100,60 @@ export interface Settings {
   tts_model: string;
   tts_voice: string;
   mcp_servers: McpServerConfig[];
+}
+
+export interface CompanionPanelState {
+  enabled: boolean;
+  privacy: CompanionPrivacyState;
+  user_state: CompanionUserState;
+  weather?: WeatherCard | null;
+  suggestions: CompanionSuggestion[];
+  updated_at: number;
+}
+
+export interface CompanionPrivacyState {
+  weather_enabled: boolean;
+  location_mode: string;
+  city: string;
+  note: string;
+}
+
+export interface CompanionUserState {
+  mood: string;
+  energy: string;
+  focus: string;
+  tone: string;
+  do_not_disturb: string;
+  recent_interaction_at: number;
+}
+
+export interface WeatherCard {
+  city: string;
+  country: string;
+  temperature_c: number;
+  apparent_temperature_c: number;
+  precipitation_mm: number;
+  humidity_percent?: number | null;
+  wind_speed_kmh?: number | null;
+  weather_code: number;
+  condition: string;
+  advice: string[];
+  source: string;
+  cached: boolean;
+  fetched_at: number;
+}
+
+export interface CompanionSuggestion {
+  kind: string;
+  priority: number;
+  text: string;
+}
+
+export interface CompanionMemorySuggestion {
+  id: string;
+  kind: string;
+  text: string;
+  reason: string;
 }
 
 export type McpTransportKind = "stdio";

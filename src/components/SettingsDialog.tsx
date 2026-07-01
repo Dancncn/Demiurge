@@ -4,6 +4,7 @@ import type {
   AgentEditorFile,
   AgentPanelState,
   AgentValidationResult,
+  CompanionMemorySuggestion,
   ConnectionTestResult,
   ContextPanelState,
   MemoryPanelState,
@@ -48,6 +49,7 @@ export type SettingsTab =
   | "provider"
   | "persona"
   | "media"
+  | "companion"
   | "web"
   | "files"
   | "context"
@@ -590,6 +592,9 @@ export default function SettingsDialog({
   const [memoryBusy, setMemoryBusy] = useState(false);
   const [memoryError, setMemoryError] = useState("");
   const [memoryDrafts, setMemoryDrafts] = useState<Record<string, { kind: string; text: string }>>({});
+  const [companionMemorySuggestions, setCompanionMemorySuggestions] = useState<CompanionMemorySuggestion[]>([]);
+  const [companionMemoryBusy, setCompanionMemoryBusy] = useState(false);
+  const [companionMemoryStatus, setCompanionMemoryStatus] = useState("");
   const [webdavBusy, setWebdavBusy] = useState(false);
   const [webdavStatus, setWebdavStatus] = useState("");
   const [webdavFiles, setWebdavFiles] = useState<WebDavBackupFile[]>([]);
@@ -679,6 +684,14 @@ export default function SettingsDialog({
       },
       (err) => {
         if (!cancelled) setMemoryError(String(err));
+      },
+    );
+    void api.companionMemorySuggestions().then(
+      (suggestions) => {
+        if (!cancelled) setCompanionMemorySuggestions(suggestions);
+      },
+      (err) => {
+        if (!cancelled) setCompanionMemoryStatus(String(err));
       },
     );
     void api.permissionPanelState().then(
@@ -824,6 +837,20 @@ export default function SettingsDialog({
       setMemoryError(String(err));
     } finally {
       setMemoryBusy(false);
+    }
+  };
+
+  const saveCompanionMemorySuggestion = async (id: string) => {
+    setCompanionMemoryBusy(true);
+    setCompanionMemoryStatus("");
+    try {
+      setMemoryState(await api.companionSaveMemorySuggestion(id));
+      setCompanionMemorySuggestions(await api.companionMemorySuggestions());
+      setCompanionMemoryStatus(t("settings.companion.memorySaved"));
+    } catch (err) {
+      setCompanionMemoryStatus(String(err));
+    } finally {
+      setCompanionMemoryBusy(false);
     }
   };
 
@@ -1325,6 +1352,11 @@ export default function SettingsDialog({
       detail: packs.find((pack) => pack.id === form.current_pack)?.name ?? form.current_pack,
     },
     { id: "media", label: t("settings.nav.media"), detail: form.image_model || t("settings.nav.detail.media") },
+    {
+      id: "companion",
+      label: t("settings.nav.companion"),
+      detail: form.companion_enabled ? t("settings.nav.detail.enabled") : t("settings.nav.detail.disabled"),
+    },
     { id: "web", label: t("settings.nav.web"), detail: selectedWebSearchProvider.label },
     {
       id: "files",
@@ -1361,6 +1393,13 @@ export default function SettingsDialog({
       theme: normalizeTheme(form.theme),
       launch_on_startup: form.launch_on_startup,
       reasoning_effort: normalizeReasoningEffort(form.reasoning_effort),
+      companion_tone: form.companion_tone.trim() || "gentle",
+      companion_mood: form.companion_mood.trim() || "neutral",
+      companion_energy: form.companion_energy.trim() || "normal",
+      companion_focus: form.companion_focus.trim() || "available",
+      companion_do_not_disturb: form.companion_do_not_disturb.trim(),
+      weather_location_mode: form.weather_location_mode.trim() || "manual",
+      weather_city: form.weather_city.trim(),
       voice_stt_backend: form.voice_stt_backend.trim() || "none",
       voice_tts_backend: form.voice_tts_backend.trim() || "none",
       voice_id: form.voice_id.trim(),
@@ -2181,6 +2220,136 @@ export default function SettingsDialog({
                           onChange={(e) => set("tts_voice", e.target.value)}
                         />
                       </Field>
+                    </div>
+                  </Section>
+                </>
+              )}
+
+              {activeTab === "companion" && (
+                <>
+                  <Section title={t("settings.companion.coreTitle")} description={t("settings.companion.coreDesc")}>
+                    <div className="grid gap-4">
+                      <ToggleRow
+                        checked={form.companion_enabled}
+                        title={t("settings.companion.enabled")}
+                        description={t("settings.companion.enabledDesc")}
+                        onChange={(checked) => set("companion_enabled", checked)}
+                      />
+                      <div className="grid gap-4 md:grid-cols-2">
+                        <Field label={t("settings.companion.tone")}>
+                          <select className={inputCls} value={form.companion_tone} onChange={(e) => set("companion_tone", e.target.value)}>
+                            <option value="quiet">{t("settings.companion.tone.quiet")}</option>
+                            <option value="gentle">{t("settings.companion.tone.gentle")}</option>
+                            <option value="bright">{t("settings.companion.tone.bright")}</option>
+                            <option value="wry">{t("settings.companion.tone.wry")}</option>
+                            <option value="coach">{t("settings.companion.tone.coach")}</option>
+                          </select>
+                        </Field>
+                        <Field label={t("settings.companion.focus")}>
+                          <select className={inputCls} value={form.companion_focus} onChange={(e) => set("companion_focus", e.target.value)}>
+                            <option value="available">{t("settings.companion.focus.available")}</option>
+                            <option value="focusing">{t("settings.companion.focus.focusing")}</option>
+                            <option value="resting">{t("settings.companion.focus.resting")}</option>
+                          </select>
+                        </Field>
+                        <Field label={t("settings.companion.mood")}>
+                          <select className={inputCls} value={form.companion_mood} onChange={(e) => set("companion_mood", e.target.value)}>
+                            <option value="neutral">{t("settings.companion.mood.neutral")}</option>
+                            <option value="good">{t("settings.companion.mood.good")}</option>
+                            <option value="stressed">{t("settings.companion.mood.stressed")}</option>
+                            <option value="down">{t("settings.companion.mood.down")}</option>
+                          </select>
+                        </Field>
+                        <Field label={t("settings.companion.energy")}>
+                          <select className={inputCls} value={form.companion_energy} onChange={(e) => set("companion_energy", e.target.value)}>
+                            <option value="low">{t("settings.companion.energy.low")}</option>
+                            <option value="normal">{t("settings.companion.energy.normal")}</option>
+                            <option value="high">{t("settings.companion.energy.high")}</option>
+                          </select>
+                        </Field>
+                      </div>
+                      <Field label={t("settings.companion.dnd")} help={t("settings.companion.dndHelp")}>
+                        <input
+                          className={inputCls}
+                          value={form.companion_do_not_disturb}
+                          placeholder="23:00-08:30"
+                          onChange={(e) => set("companion_do_not_disturb", e.target.value)}
+                        />
+                      </Field>
+                      <div className="rounded-lg border border-[#f2d7d5] bg-[#fffafa] p-3 text-[12px] leading-5 text-[#8a4b45]">
+                        {t("settings.companion.safety")}
+                      </div>
+                    </div>
+                  </Section>
+                  <Section title={t("settings.companion.weatherTitle")} description={t("settings.companion.weatherDesc")}>
+                    <div className="grid gap-4">
+                      <ToggleRow
+                        checked={form.weather_enabled}
+                        title={t("settings.companion.weatherEnabled")}
+                        description={t("settings.companion.weatherEnabledDesc")}
+                        onChange={(checked) => set("weather_enabled", checked)}
+                      />
+                      <div className="grid gap-4 md:grid-cols-2">
+                        <Field label={t("settings.companion.weatherCity")}>
+                          <input
+                            className={inputCls}
+                            value={form.weather_city}
+                            placeholder="Hangzhou"
+                            onChange={(e) => set("weather_city", e.target.value)}
+                          />
+                        </Field>
+                        <Field label={t("settings.companion.locationMode")} help={t("settings.companion.locationHelp")}>
+                          <select className={inputCls} value={form.weather_location_mode} onChange={(e) => set("weather_location_mode", e.target.value)}>
+                            <option value="manual">{t("settings.companion.location.manual")}</option>
+                            <option value="auto">{t("settings.companion.location.autoReserved")}</option>
+                            <option value="off">{t("settings.companion.location.off")}</option>
+                          </select>
+                        </Field>
+                      </div>
+                      <div className="rounded-lg border border-[#e2e5ea] bg-[#fbfcfd] p-3 text-[12px] leading-5 text-[#6f7782]">
+                        {t("settings.companion.weatherPrivacy")}
+                      </div>
+                    </div>
+                  </Section>
+                  <Section title={t("settings.companion.memoryTitle")} description={t("settings.companion.memoryDesc")}>
+                    <div className="grid gap-3">
+                      {companionMemorySuggestions.length ? (
+                        companionMemorySuggestions.map((suggestion) => (
+                          <div
+                            key={suggestion.id}
+                            className="rounded-lg border border-[#e2e5ea] bg-white p-3"
+                          >
+                            <div className="flex flex-wrap items-start justify-between gap-3">
+                              <div className="min-w-0">
+                                <div className="flex items-center gap-2">
+                                  <span className="rounded-md bg-[#eef1f5] px-1.5 py-0.5 text-[11px] text-[#59616d]">
+                                    {suggestion.kind}
+                                  </span>
+                                  <span className="text-[12px] text-[#7a8088]">{suggestion.reason}</span>
+                                </div>
+                                <div className="mt-2 text-[13px] leading-5 text-[#202124]">{suggestion.text}</div>
+                              </div>
+                              <button
+                                type="button"
+                                className={secondaryButtonCls}
+                                disabled={companionMemoryBusy}
+                                onClick={() => void saveCompanionMemorySuggestion(suggestion.id)}
+                              >
+                                {t("settings.companion.memorySave")}
+                              </button>
+                            </div>
+                          </div>
+                        ))
+                      ) : (
+                        <div className="rounded-lg border border-[#e2e5ea] bg-[#fbfcfd] p-3 text-[12px] text-[#7a8088]">
+                          {t("settings.companion.memoryEmpty")}
+                        </div>
+                      )}
+                      {companionMemoryStatus && (
+                        <div className="rounded-lg border border-[#e2e5ea] bg-[#fbfcfd] p-3 text-[12px] text-[#6f7782]">
+                          {companionMemoryStatus}
+                        </div>
+                      )}
                     </div>
                   </Section>
                 </>
