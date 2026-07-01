@@ -1195,6 +1195,9 @@ fn weather_advice(card: &WeatherCard) -> Vec<String> {
     if card.air_quality_index.unwrap_or_default() >= 101 || card.pm2_5.unwrap_or_default() >= 35.0 {
         advice.push("空气质量对敏感人群不太友好，户外活动可以适当降强度。".to_string());
     }
+    if card.humidity_percent.unwrap_or_default() >= 80 && card.apparent_temperature_c >= 28.0 {
+        advice.push("湿度偏高，体感会更闷，户外活动节奏可以放慢一点。".to_string());
+    }
     if card.wind_speed_kmh.unwrap_or_default() >= 30.0 {
         advice.push("风力有点明显，轻便物品和外套帽子留意一下。".to_string());
     }
@@ -1334,6 +1337,36 @@ mod tests {
         assert!(candidates
             .iter()
             .all(|item| item.text.contains("卡片") || item.text.contains("通知")));
+    }
+
+    #[test]
+    fn weather_advice_includes_refined_daily_signals() {
+        let card = WeatherCard {
+            city: "Hangzhou".to_string(),
+            country: "China".to_string(),
+            temperature_c: 30.0,
+            apparent_temperature_c: 34.0,
+            precipitation_mm: 0.0,
+            humidity_percent: Some(85),
+            wind_speed_kmh: Some(10.0),
+            uv_index: Some(8.0),
+            air_quality_index: Some(120),
+            pm2_5: Some(42.0),
+            day_temperature_min_c: Some(18.0),
+            day_temperature_max_c: Some(31.0),
+            commute_precipitation_probability: Some(70),
+            severe_weather: false,
+            weather_code: 1,
+            condition: "多云".to_string(),
+            advice: Vec::new(),
+            source: "Open-Meteo".to_string(),
+            cached: false,
+            fetched_at: 1,
+        };
+        let advice = weather_advice(&card);
+        assert!(advice.iter().any(|item| item.contains("紫外线")));
+        assert!(advice.iter().any(|item| item.contains("空气质量")));
+        assert!(advice.iter().any(|item| item.contains("通勤")));
     }
 
     #[test]
