@@ -70,6 +70,13 @@ pub struct CompanionSuggestion {
 }
 
 #[derive(Clone, Debug, Serialize)]
+pub struct HighRiskDetection {
+    pub kind: String,
+    pub severity: String,
+    pub support_message: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
 pub struct CompanionMemorySuggestion {
     pub id: String,
     pub kind: String,
@@ -226,6 +233,80 @@ pub fn memory_suggestion_by_id(settings: &Settings, id: &str) -> Option<Companio
     memory_suggestions(settings)
         .into_iter()
         .find(|suggestion| suggestion.id == id)
+}
+
+pub fn detect_high_risk_expression(text: &str) -> Option<HighRiskDetection> {
+    let normalized = text.to_ascii_lowercase();
+    let compact = text.split_whitespace().collect::<String>();
+    if contains_any(
+        &normalized,
+        &[
+            "kill myself",
+            "end my life",
+            "suicide",
+            "self harm",
+            "hurt myself",
+            "don't want to live",
+            "do not want to live",
+        ],
+    ) || contains_any(
+        &compact,
+        &[
+            "自杀",
+            "轻生",
+            "想死",
+            "不想活",
+            "结束生命",
+            "伤害自己",
+            "自残",
+            "活不下去",
+        ],
+    ) {
+        return Some(HighRiskDetection {
+            kind: "self_harm_or_crisis".to_string(),
+            severity: "high".to_string(),
+            support_message: crisis_support_message(),
+        });
+    }
+    if contains_any(
+        &normalized,
+        &[
+            "replace therapy",
+            "instead of therapy",
+            "instead of a doctor",
+            "stop my medication",
+            "diagnose me",
+        ],
+    ) || contains_any(
+        &compact,
+        &[
+            "替代心理治疗",
+            "替代医生",
+            "不用看医生",
+            "停药",
+            "诊断我",
+            "代替咨询师",
+        ],
+    ) {
+        return Some(HighRiskDetection {
+            kind: "medical_or_therapy_substitution".to_string(),
+            severity: "medium".to_string(),
+            support_message: professional_boundary_message(),
+        });
+    }
+    None
+}
+
+fn contains_any(text: &str, needles: &[&str]) -> bool {
+    needles.iter().any(|needle| text.contains(needle))
+}
+
+fn crisis_support_message() -> String {
+    "我听见你现在可能很难受。先别一个人扛着：如果你有马上伤害自己的风险，请立刻联系当地紧急服务，或去最近的急诊/安全地点；如果你在美国或加拿大，可以拨打或短信 988。也请尽快联系一个现实里可信任的人，让 TA 陪你待一会儿。\n\n我可以继续陪你把当下这几分钟撑过去，但我不能替代紧急救助或专业支持。".to_string()
+}
+
+fn professional_boundary_message() -> String {
+    "这类问题我可以做信息整理、陪你准备就医/咨询时要说的重点，但不能替代医生、心理治疗师或紧急干预，也不建议自行停药或把诊断交给聊天来决定。更稳妥的下一步是联系合格专业人士；如果风险正在升高，请优先联系当地紧急服务或可信任的人。".to_string()
 }
 
 pub fn memory_queue_state(data_dir: &Path) -> CompanionMemoryQueueState {
@@ -951,6 +1032,18 @@ mod tests {
         assert_eq!(candidates[0].kind.as_deref(), Some("stress"));
         assert_eq!(candidates[1].scope.as_deref(), Some("session"));
         assert_eq!(candidates[1].kind.as_deref(), Some("encouragement"));
+    }
+
+    #[test]
+    fn detects_high_risk_expressions_without_memory_payload() {
+        let crisis = detect_high_risk_expression("我真的不想活了").unwrap();
+        assert_eq!(crisis.kind, "self_harm_or_crisis");
+        assert_eq!(crisis.severity, "high");
+        assert!(crisis.support_message.contains("紧急"));
+
+        let boundary = detect_high_risk_expression("你可以替代心理治疗吗").unwrap();
+        assert_eq!(boundary.kind, "medical_or_therapy_substitution");
+        assert!(boundary.support_message.contains("不能替代"));
     }
 
     #[test]

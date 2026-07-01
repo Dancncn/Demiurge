@@ -306,6 +306,25 @@ fn handle_effort_slash(app: &AppHandle, state: &AppState, text: &str) -> Result<
     ))
 }
 
+fn persist_direct_reply(
+    state: &AppState,
+    session_id: &str,
+    user_text: String,
+    assistant_text: String,
+) {
+    {
+        let mut sessions = state.sessions.lock().unwrap();
+        if let Some(session) = sessions.get_mut(session_id) {
+            session.messages.push(Message::user(user_text));
+            session
+                .messages
+                .push(Message::assistant_text(assistant_text));
+            session.updated_at = store::now_millis();
+        }
+    }
+    state.persist_sessions();
+}
+
 // ---------------- Tauri 命令 ----------------
 
 /// 发送一条用户消息，跑完整轮 Agent 循环；过程通过事件流推给前端。
@@ -318,7 +337,7 @@ async fn send(app: AppHandle, state: State<'_, AppState>, text: String) -> Resul
         st,
         agent::session_engine::TurnStart {
             entrypoint: agent::session_engine::TurnEntrypoint::Send,
-            session_id,
+            session_id: session_id.clone(),
             input: text.clone(),
             workflow_run_id: None,
             agent_names: Vec::new(),
@@ -453,6 +472,10 @@ async fn send(app: AppHandle, state: State<'_, AppState>, text: String) -> Resul
             },
         )
         .await
+    } else if let Some(risk) = companion::detect_high_risk_expression(trimmed) {
+        persist_direct_reply(st, &session_id, text.clone(), risk.support_message.clone());
+        events.assistant_done(risk.support_message);
+        Ok(())
     } else {
         should_drive_goal = true;
         agent::run_turn(&app, st, text).await
@@ -488,23 +511,32 @@ async fn send_with_agents(
         st,
         agent::session_engine::TurnStart {
             entrypoint: agent::session_engine::TurnEntrypoint::SendWithAgents,
-            session_id,
+            session_id: session_id.clone(),
             input: text.clone(),
             workflow_run_id: None,
             agent_names: agent_names.clone(),
         },
     )?;
-    let res = agent::run_turn_with_options(
-        &app,
-        st,
-        text,
-        agent::TurnOptions {
-            agent_names,
-            ..agent::TurnOptions::default()
-        },
-    )
-    .await;
-    let res = if res.is_ok() && !st.cancel.load(Ordering::Relaxed) {
+    let mut should_drive_goal = true;
+    let res = if let Some(risk) = companion::detect_high_risk_expression(&text) {
+        should_drive_goal = false;
+        persist_direct_reply(st, &session_id, text.clone(), risk.support_message.clone());
+        let events = agent::session_engine::TurnEventEmitter::new(&app, st);
+        events.assistant_done(risk.support_message);
+        Ok(())
+    } else {
+        agent::run_turn_with_options(
+            &app,
+            st,
+            text,
+            agent::TurnOptions {
+                agent_names,
+                ..agent::TurnOptions::default()
+            },
+        )
+        .await
+    };
+    let res = if res.is_ok() && should_drive_goal && !st.cancel.load(Ordering::Relaxed) {
         agent::goal::drive_after_turn(&app, st).await
     } else {
         res
