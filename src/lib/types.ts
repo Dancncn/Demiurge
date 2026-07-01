@@ -172,6 +172,68 @@ export interface CompanionSuggestion {
   text: string;
 }
 
+export type PomodoroMode = "focus" | "short_break" | "long_break" | "custom";
+export type PomodoroStatus = "idle" | "running" | "paused";
+export type PomodoroTaskKind = "manual" | "session" | "goal" | "workflow";
+
+export interface PomodoroTaskBinding {
+  kind: PomodoroTaskKind;
+  title: string;
+  session_id?: string | null;
+  goal_objective?: string | null;
+  workflow_run_id?: string | null;
+}
+
+export interface PomodoroFeedback {
+  start_message?: string | null;
+  completion_message?: string | null;
+}
+
+export interface PomodoroTimer {
+  status: PomodoroStatus;
+  mode: PomodoroMode;
+  run_id?: string | null;
+  duration_secs: number;
+  remaining_secs: number;
+  started_at?: number | null;
+  ends_at?: number | null;
+  paused_at?: number | null;
+  completed_focus_count: number;
+  focus_streak: number;
+  task: PomodoroTaskBinding;
+  feedback: PomodoroFeedback;
+  updated_at: number;
+}
+
+export interface PomodoroRhythmMemory {
+  focus_sessions_completed: number;
+  focus_duration_counts: Record<string, number>;
+  interruption_reasons: Record<string, number>;
+  efficient_hour_counts: Record<string, number>;
+  last_completed_at?: number | null;
+}
+
+export interface PomodoroPanelState {
+  timer: PomodoroTimer;
+  rhythm: PomodoroRhythmMemory;
+  remaining_secs: number;
+  next_mode: PomodoroMode;
+  path: string;
+  updated_at: number;
+}
+
+export interface PomodoroStartRequest {
+  mode: PomodoroMode;
+  duration_minutes?: number | null;
+  task?: PomodoroTaskBinding | null;
+}
+
+export interface PomodoroCompletedEvent {
+  title: string;
+  body: string;
+  state: PomodoroPanelState;
+}
+
 export interface CompanionMemorySuggestion {
   id: string;
   kind: string;
