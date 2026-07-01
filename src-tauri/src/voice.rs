@@ -5,11 +5,11 @@
 //! backend is selected by `settings.voice_stt_backend`:
 //!   - `dashscope`  → Aliyun Bailian / DashScope ASR (`qwen3-asr-flash`)
 //!   - `openai`     → the active provider's OpenAI-compatible whisper endpoint
-//! TTS is still a reserved placeholder.
+//! TTS can route to the DashScope media adapter for one-shot synthesis.
 use serde::Serialize;
 use tauri::State;
 
-use crate::media::{dashscope_api_key, dashscope_base_url};
+use crate::media::{self, dashscope_api_key, dashscope_base_url, SpeechSynthesisRequest};
 use crate::store::Settings;
 
 #[derive(Clone, Debug, Serialize)]
@@ -193,13 +193,50 @@ pub async fn voice_synthesize(
     voice_id: Option<String>,
     state: State<'_, crate::AppState>,
 ) -> Result<String, String> {
-    let _ = (text, voice_id);
+    let requested_voice_id = voice_id;
     let settings = state.settings.lock().unwrap().clone();
     if !settings.voice_enabled {
         return Err("语音未启用。".to_string());
     }
-    Err(format!(
-        "语音合成 API 已预留，但尚未接入 TTS 后端：{}。",
-        settings.voice_tts_backend
-    ))
+    let text = text.trim();
+    if text.is_empty() {
+        return Err("Speech synthesis text is required.".to_string());
+    }
+
+    let backend = settings.voice_tts_backend.trim().to_ascii_lowercase();
+    match backend.as_str() {
+        "dashscope" | "aliyun" | "bailian" | "media" => {
+            let voice = requested_voice_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .or_else(|| {
+                    let value = settings.voice_id.trim();
+                    (!value.is_empty()).then_some(value)
+                })
+                .or_else(|| {
+                    let value = settings.tts_voice.trim();
+                    (!value.is_empty()).then_some(value)
+                })
+                .unwrap_or("Cherry")
+                .to_string();
+            let result = media::synthesize_speech(
+                state.inner(),
+                SpeechSynthesisRequest {
+                    text: text.to_string(),
+                    model: settings.tts_model.clone(),
+                    voice,
+                    language_type: "Chinese".to_string(),
+                },
+            )
+            .await?;
+            Ok(result.url)
+        }
+        "none" | "" => {
+            Err("No TTS backend selected. Set voice TTS backend to dashscope.".to_string())
+        }
+        other => Err(format!(
+            "Unknown TTS backend `{other}`. Supported backend: dashscope."
+        )),
+    }
 }

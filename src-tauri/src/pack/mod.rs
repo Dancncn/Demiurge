@@ -901,10 +901,14 @@ fn render_runtime_policy(manifest: &PackManifest) -> String {
         }
     }
     if let Some(memory) = &runtime.memory {
-        push_optional_line(&mut lines, "Memory namespace", memory.namespace.as_deref());
         push_optional_line(
             &mut lines,
-            "Memory write policy",
+            "Memory namespace hint",
+            memory.namespace.as_deref(),
+        );
+        push_optional_line(
+            &mut lines,
+            "Memory write policy hint",
             memory.write_policy.as_deref(),
         );
         push_list_line(&mut lines, "Preferred facts", &memory.preferred_facts);
@@ -914,7 +918,7 @@ fn render_runtime_policy(manifest: &PackManifest) -> String {
     if let Some(voice) = &runtime.voice {
         push_optional_line(
             &mut lines,
-            "Voice TTS profile",
+            "Voice TTS profile hint",
             voice.tts_profile.as_deref(),
         );
         if let Some(speed) = voice.speed {
@@ -922,7 +926,10 @@ fn render_runtime_policy(manifest: &PackManifest) -> String {
         }
     }
     if !runtime.permissions.is_empty() {
-        lines.push("Tool permission preferences:".to_string());
+        lines.push(
+            "Tool permission preferences (advisory; system permission rules still apply):"
+                .to_string(),
+        );
         for (tool, policy) in &runtime.permissions {
             lines.push(format!("- {tool}: {policy}"));
         }

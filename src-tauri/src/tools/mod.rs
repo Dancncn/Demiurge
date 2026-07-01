@@ -1187,9 +1187,9 @@ pub fn affected_paths(name: &str, args: &Value) -> Vec<String> {
             }
         }
         "worktree_create" => {
-            let label = str_arg("label");
+            let label = worktree::sanitize_label(str_arg("label"));
             if !label.is_empty() {
-                push(format!(".worktrees/{label}"));
+                push(format!(".demiurge/worktrees/{label}"));
             }
         }
         "screen_capture_region"

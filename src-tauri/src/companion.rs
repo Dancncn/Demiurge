@@ -686,6 +686,7 @@ async fn fetch_weather(state: &AppState, settings: &Settings) -> Result<WeatherC
     if city.is_empty() {
         return Err("Weather city is empty.".to_string());
     }
+    let provider = weather_provider(settings)?;
     let cache_key = city.to_ascii_lowercase();
     let now = now_millis();
     if let Some(cached) = WEATHER_CACHE
@@ -702,12 +703,8 @@ async fn fetch_weather(state: &AppState, settings: &Settings) -> Result<WeatherC
         }
     }
 
-    let place = weather_provider(settings)
-        .geocode(&state.http, city)
-        .await?;
-    let mut card = weather_provider(settings)
-        .forecast(&state.http, &place)
-        .await?;
+    let place = provider.geocode(&state.http, city).await?;
+    let mut card = provider.forecast(&state.http, &place).await?;
     card.advice = weather_advice(&card);
     WEATHER_CACHE
         .get_or_init(|| Mutex::new(HashMap::new()))
@@ -746,17 +743,17 @@ impl WeatherProvider {
     }
 }
 
-fn weather_provider(settings: &Settings) -> WeatherProvider {
+fn weather_provider(settings: &Settings) -> Result<WeatherProvider, String> {
     match settings.weather_provider.trim() {
-        "open_meteo" | "" => WeatherProvider::OpenMeteo,
-        _ => WeatherProvider::OpenMeteo,
+        "open_meteo" | "" => Ok(WeatherProvider::OpenMeteo),
+        other => Err(format!("Unsupported weather provider: {other}")),
     }
 }
 
 fn weather_provider_label(value: &str) -> &'static str {
     match value.trim() {
         "open_meteo" | "" => "Open-Meteo",
-        _ => "Open-Meteo",
+        _ => "Unsupported",
     }
 }
 
@@ -1367,6 +1364,52 @@ mod tests {
         assert!(advice.iter().any(|item| item.contains("紫外线")));
         assert!(advice.iter().any(|item| item.contains("空气质量")));
         assert!(advice.iter().any(|item| item.contains("通勤")));
+    }
+
+    #[tokio::test]
+    async fn fetch_weather_rejects_unsupported_provider_even_with_cached_city() {
+        clear_weather_cache();
+        let now = now_millis();
+        WEATHER_CACHE
+            .get_or_init(|| Mutex::new(HashMap::new()))
+            .lock()
+            .unwrap()
+            .insert(
+                "hangzhou".to_string(),
+                CachedWeather {
+                    card: WeatherCard {
+                        city: "Hangzhou".to_string(),
+                        country: "China".to_string(),
+                        temperature_c: 22.0,
+                        apparent_temperature_c: 22.0,
+                        precipitation_mm: 0.0,
+                        humidity_percent: None,
+                        wind_speed_kmh: None,
+                        uv_index: None,
+                        air_quality_index: None,
+                        pm2_5: None,
+                        day_temperature_min_c: None,
+                        day_temperature_max_c: None,
+                        commute_precipitation_probability: None,
+                        severe_weather: false,
+                        weather_code: 0,
+                        condition: "晴".to_string(),
+                        advice: Vec::new(),
+                        source: "Open-Meteo".to_string(),
+                        cached: false,
+                        fetched_at: now,
+                    },
+                    expires_at: now + WEATHER_CACHE_TTL_MS,
+                },
+            );
+
+        let state = crate::AppState::new(reqwest::Client::new());
+        let mut settings = Settings::default();
+        settings.weather_city = "Hangzhou".to_string();
+        settings.weather_provider = "web_search".to_string();
+        let err = fetch_weather(&state, &settings).await.unwrap_err();
+        assert!(err.contains("Unsupported weather provider"));
+        clear_weather_cache();
     }
 
     #[test]

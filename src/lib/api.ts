@@ -142,8 +142,8 @@ export const selectSession = (id: string) => invoke<void>("select_session", { id
 export const deleteSession = (id: string) => invoke<string>("delete_session", { id });
 export const renameSession = (id: string, title: string) => invoke<string>("rename_session", { id, title });
 
-// Voice API placeholders. These commands intentionally return a clear
-// "backend not implemented" error until a concrete STT/TTS provider is chosen.
+// Voice APIs. STT uses the configured recording backend; one-shot TTS can
+// route through the DashScope media adapter when voice_tts_backend=dashscope.
 export const voiceStatus = () => invoke<VoiceStatus>("voice_status");
 export const voiceTranscribe = (audio: number[], mimeType?: string, language?: string) =>
   invoke<string>("voice_transcribe", { audio, mimeType, language });

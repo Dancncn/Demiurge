@@ -460,6 +460,7 @@ async fn run_agent_step(
         json!({ "agent_id": id, "label": label, "phase": phase, "prompt": prompt, "agent": agent_name.clone() }),
     );
     let mode = SubagentContextMode::parse(context_mode.as_deref());
+    let cancel = state.workflow_cancels.lock().unwrap().get(run_id).cloned();
     let result = subagent::run(
         state,
         SubagentRequest {
@@ -471,12 +472,31 @@ async fn run_agent_step(
             max_total_tokens: workflow_budget(state, run_id).and_then(|budget| budget.remaining()),
             output_format: subagent::SubagentOutputFormat::Plain,
             reviewer_count: 1,
+            cancel,
         },
     )
     .await;
 
     match result {
         Ok(text) => {
+            if is_cancelled(state, run_id) {
+                update_agent(
+                    app,
+                    state,
+                    run_id,
+                    id,
+                    WorkflowStatus::Killed,
+                    Some(text.clone()),
+                    None,
+                );
+                let _ = workflow_journal::append(
+                    state,
+                    run_id,
+                    "agent_killed",
+                    json!({ "agent_id": id, "label": label, "result": text }),
+                );
+                return Ok(());
+            }
             record_budget_estimate(app, state, run_id, budget::estimate_text_tokens(&text));
             update_agent(
                 app,
