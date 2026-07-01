@@ -66,6 +66,14 @@ fn default_companion_enabled() -> bool {
     DEFAULT_COMPANION_ENABLED
 }
 
+fn default_companion_memory_extraction_enabled() -> bool {
+    false
+}
+
+fn default_companion_memory_extraction_scope() -> String {
+    "recent_turn".to_string()
+}
+
 fn default_companion_tone() -> String {
     "gentle".to_string()
 }
@@ -287,6 +295,10 @@ pub struct Settings {
     pub auto_memory_enabled: bool,
     #[serde(default = "default_companion_enabled")]
     pub companion_enabled: bool,
+    #[serde(default = "default_companion_memory_extraction_enabled")]
+    pub companion_memory_extraction_enabled: bool,
+    #[serde(default = "default_companion_memory_extraction_scope")]
+    pub companion_memory_extraction_scope: String,
     #[serde(default = "default_companion_tone")]
     pub companion_tone: String,
     #[serde(default = "default_companion_mood")]
@@ -371,6 +383,8 @@ impl Default for Settings {
             reasoning_effort: default_reasoning_effort(),
             auto_memory_enabled: DEFAULT_AUTO_MEMORY_ENABLED,
             companion_enabled: DEFAULT_COMPANION_ENABLED,
+            companion_memory_extraction_enabled: false,
+            companion_memory_extraction_scope: default_companion_memory_extraction_scope(),
             companion_tone: default_companion_tone(),
             companion_mood: default_companion_mood(),
             companion_energy: default_companion_energy(),
@@ -590,6 +604,8 @@ mod tests {
         assert_eq!(settings.reasoning_effort, ReasoningEffort::Auto);
         assert_eq!(settings.theme, "system");
         assert!(!settings.launch_on_startup);
+        assert!(!settings.companion_memory_extraction_enabled);
+        assert_eq!(settings.companion_memory_extraction_scope, "recent_turn");
     }
 
     #[test]

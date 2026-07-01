@@ -69,6 +69,8 @@ export interface Settings {
   reasoning_effort: ReasoningEffort;
   auto_memory_enabled: boolean;
   companion_enabled: boolean;
+  companion_memory_extraction_enabled: boolean;
+  companion_memory_extraction_scope: string;
   companion_tone: string;
   companion_mood: string;
   companion_energy: string;

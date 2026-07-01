@@ -557,6 +557,10 @@ fn normalize_kind(kind: &str) -> String {
         "session" => "session".to_string(),
         "pack" => "pack".to_string(),
         "preference" => "preference".to_string(),
+        "boundary" => "boundary".to_string(),
+        "routine" => "routine".to_string(),
+        "stress" => "stress".to_string(),
+        "encouragement" => "encouragement".to_string(),
         _ => "project".to_string(),
     }
 }

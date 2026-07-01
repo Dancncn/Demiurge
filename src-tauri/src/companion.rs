@@ -1,14 +1,21 @@
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 
+use crate::agent::conversation::Message;
+use crate::llm;
 use crate::store::{now_millis, Settings};
 use crate::AppState;
 
 const WEATHER_CACHE_TTL_MS: u64 = 30 * 60 * 1000;
+const MAX_COMPANION_MEMORY_INPUT_CHARS: usize = 6_000;
+const MAX_COMPANION_MEMORY_ITEMS: usize = 4;
+const MAX_COMPANION_MEMORY_TEXT_CHARS: usize = 220;
 
 #[derive(Clone, Debug, Serialize)]
 pub struct CompanionPanelState {
@@ -89,6 +96,20 @@ pub struct CompanionMemoryQueueState {
     pub path: String,
     pub pending_count: usize,
     pub items: Vec<CompanionMemoryQueueItem>,
+}
+
+#[derive(Deserialize)]
+struct CompanionMemoryExtraction {
+    #[serde(default)]
+    memories: Vec<CompanionMemoryCandidate>,
+}
+
+#[derive(Deserialize)]
+struct CompanionMemoryCandidate {
+    scope: Option<String>,
+    kind: Option<String>,
+    text: Option<String>,
+    reason: Option<String>,
 }
 
 #[derive(Clone)]
@@ -219,13 +240,38 @@ pub fn enqueue_memory_suggestion(
     source_session: &str,
     suggestion: CompanionMemorySuggestion,
 ) -> Result<CompanionMemoryQueueState, String> {
+    enqueue_memory_queue_item(
+        data_dir,
+        source_session,
+        &suggestion.reason,
+        "user",
+        &suggestion.kind,
+        &suggestion.text,
+    )
+}
+
+pub fn enqueue_memory_queue_item(
+    data_dir: &Path,
+    source_session: &str,
+    reason: &str,
+    scope: &str,
+    kind: &str,
+    text: &str,
+) -> Result<CompanionMemoryQueueState, String> {
+    let scope = normalize_memory_scope(scope);
+    let kind = normalize_memory_kind(kind);
+    let text = sanitize_memory_text(text, MAX_COMPANION_MEMORY_TEXT_CHARS);
+    if text.is_empty() {
+        return Ok(memory_queue_state(data_dir));
+    }
+    let reason = sanitize_memory_text(reason, 180);
     let mut items = read_memory_queue(data_dir);
-    let dedupe_key = memory_queue_dedupe_key("user", &suggestion.kind, &suggestion.text);
+    let dedupe_key = memory_queue_dedupe_key(&scope, &kind, &text);
     if let Some(existing) = items.iter_mut().find(|item| {
         item.status == "pending"
             && memory_queue_dedupe_key(&item.scope, &item.kind, &item.text) == dedupe_key
     }) {
-        existing.reason = suggestion.reason;
+        existing.reason = reason;
         existing.source_session = source_session.to_string();
     } else {
         let seq = items.len() + 1;
@@ -233,10 +279,10 @@ pub fn enqueue_memory_suggestion(
         items.push(CompanionMemoryQueueItem {
             id: format!("cmq_{created_at}_{seq}"),
             source_session: source_session.to_string(),
-            reason: suggestion.reason,
-            scope: "user".to_string(),
-            kind: suggestion.kind,
-            text: suggestion.text,
+            reason,
+            scope,
+            kind,
+            text,
             created_at,
             status: "pending".to_string(),
             saved_memory_id: None,
@@ -273,6 +319,76 @@ pub fn pending_memory_queue_item(data_dir: &Path, id: &str) -> Option<CompanionM
         .find(|item| item.id == id && item.status == "pending")
 }
 
+pub async fn extract_memory_to_queue(
+    client: &reqwest::Client,
+    settings: &Settings,
+    data_dir: &Path,
+    source_session: &str,
+    user_text: &str,
+    assistant_text: &str,
+    cancel: &AtomicBool,
+) -> Result<CompanionMemoryQueueState, String> {
+    let profile = llm::ProviderProfile::for_kind(settings.provider);
+    if !settings.companion_enabled
+        || !settings.companion_memory_extraction_enabled
+        || (profile.requires_api_key && settings.api_key.trim().is_empty())
+        || cancel.load(Ordering::Relaxed)
+    {
+        return Ok(memory_queue_state(data_dir));
+    }
+
+    let turn_text = cap_text(
+        &format!("User:\n{user_text}\n\nAssistant:\n{assistant_text}"),
+        MAX_COMPANION_MEMORY_INPUT_CHARS,
+    );
+    let prompt = format!(
+        r#"Extract only stable companion-memory candidates from this conversation turn.
+Allowed categories:
+- stress sources the user explicitly described;
+- sleep/work rhythm or break preferences;
+- preferred names or forms of address;
+- reminder preferences and disliked reminder styles;
+- encouragement style that is likely to help the user.
+
+Do not extract sensitive crisis/medical/therapy-risk content, secrets, transient tasks, guesses, or anything uncertain.
+Every item must be user-reviewable before it is saved.
+Return at most 4 items. Use scope "user" unless the note is clearly only session-local.
+Return JSON only:
+{{"memories":[{{"scope":"user|session","kind":"preference|boundary|routine|stress|encouragement","text":"...","reason":"why this looks durable"}}]}}
+
+Conversation:
+{turn_text}"#
+    );
+
+    let messages = vec![
+        Message::system(
+            "You extract companion memory candidates for user review. Output JSON only.",
+        ),
+        Message::user(prompt),
+    ];
+    let turn =
+        llm::stream_completion(client, settings, &messages, &json!([]), |_| {}, cancel).await?;
+    if cancel.load(Ordering::Relaxed) || turn.finish_reason == "interrupted" {
+        return Ok(memory_queue_state(data_dir));
+    }
+
+    let extraction = parse_companion_memory_extraction(&turn.content)?;
+    let candidates = normalize_companion_memory_candidates(extraction.memories);
+    for candidate in candidates {
+        let _ = enqueue_memory_queue_item(
+            data_dir,
+            source_session,
+            &candidate
+                .reason
+                .unwrap_or_else(|| "LLM companion memory extraction.".to_string()),
+            candidate.scope.as_deref().unwrap_or("user"),
+            candidate.kind.as_deref().unwrap_or("preference"),
+            candidate.text.as_deref().unwrap_or_default(),
+        )?;
+    }
+    Ok(memory_queue_state(data_dir))
+}
+
 fn memory_queue_path(data_dir: &Path) -> PathBuf {
     data_dir.join("companion-memory-queue.json")
 }
@@ -302,6 +418,80 @@ fn memory_queue_dedupe_key(scope: &str, kind: &str, text: &str) -> String {
             .join(" ")
             .to_ascii_lowercase()
     )
+}
+
+fn parse_companion_memory_extraction(content: &str) -> Result<CompanionMemoryExtraction, String> {
+    let trimmed = content.trim();
+    let json_text = if let Some(inner) = trimmed.strip_prefix("```json") {
+        inner.trim().trim_end_matches("```").trim()
+    } else if let Some(inner) = trimmed.strip_prefix("```") {
+        inner.trim().trim_end_matches("```").trim()
+    } else {
+        trimmed
+    };
+    serde_json::from_str::<CompanionMemoryExtraction>(json_text)
+        .map_err(|e| format!("Failed to parse companion memory extraction result: {e}"))
+}
+
+fn normalize_companion_memory_candidates(
+    candidates: Vec<CompanionMemoryCandidate>,
+) -> Vec<CompanionMemoryCandidate> {
+    let mut out = Vec::new();
+    for candidate in candidates.into_iter().take(MAX_COMPANION_MEMORY_ITEMS) {
+        let text = sanitize_memory_text(
+            candidate.text.as_deref().unwrap_or_default(),
+            MAX_COMPANION_MEMORY_TEXT_CHARS,
+        );
+        if text.is_empty() {
+            continue;
+        }
+        out.push(CompanionMemoryCandidate {
+            scope: Some(normalize_memory_scope(
+                candidate.scope.as_deref().unwrap_or("user"),
+            )),
+            kind: Some(normalize_memory_kind(
+                candidate.kind.as_deref().unwrap_or("preference"),
+            )),
+            text: Some(text),
+            reason: Some(sanitize_memory_text(
+                candidate
+                    .reason
+                    .as_deref()
+                    .unwrap_or("LLM companion memory extraction."),
+                180,
+            )),
+        });
+    }
+    out
+}
+
+fn normalize_memory_scope(scope: &str) -> String {
+    match scope.trim().to_ascii_lowercase().as_str() {
+        "session" => "session".to_string(),
+        _ => "user".to_string(),
+    }
+}
+
+fn normalize_memory_kind(kind: &str) -> String {
+    match kind.trim().to_ascii_lowercase().as_str() {
+        "boundary" | "routine" | "stress" | "encouragement" => kind.trim().to_ascii_lowercase(),
+        _ => "preference".to_string(),
+    }
+}
+
+fn sanitize_memory_text(text: &str, max_chars: usize) -> String {
+    cap_text(
+        &text.split_whitespace().collect::<Vec<_>>().join(" "),
+        max_chars,
+    )
+}
+
+fn cap_text(text: &str, max_chars: usize) -> String {
+    if text.chars().count() <= max_chars {
+        text.to_string()
+    } else {
+        text.chars().take(max_chars).collect()
+    }
 }
 
 fn cached_weather_for_city(city: &str) -> Option<WeatherCard> {
@@ -740,6 +930,21 @@ mod tests {
         assert_eq!(state.pending_count, 0);
         assert_eq!(state.items[0].status, "ignored");
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn parses_llm_companion_memory_candidates_for_review() {
+        let raw = r#"{"memories":[
+          {"scope":"user","kind":"stress","text":"Deadlines are a recurring stress source.","reason":"User described this as recurring."},
+          {"scope":"session","kind":"encouragement","text":"Short, practical encouragement helps.","reason":"User preferred low-pressure support."}
+        ]}"#;
+        let extraction = parse_companion_memory_extraction(raw).unwrap();
+        let candidates = normalize_companion_memory_candidates(extraction.memories);
+        assert_eq!(candidates.len(), 2);
+        assert_eq!(candidates[0].scope.as_deref(), Some("user"));
+        assert_eq!(candidates[0].kind.as_deref(), Some("stress"));
+        assert_eq!(candidates[1].scope.as_deref(), Some("session"));
+        assert_eq!(candidates[1].kind.as_deref(), Some("encouragement"));
     }
 
     #[test]
