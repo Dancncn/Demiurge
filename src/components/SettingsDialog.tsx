@@ -4,6 +4,7 @@ import type {
   AgentEditorFile,
   AgentPanelState,
   AgentValidationResult,
+  CompanionMemoryQueueState,
   CompanionMemorySuggestion,
   ConnectionTestResult,
   ContextPanelState,
@@ -593,6 +594,7 @@ export default function SettingsDialog({
   const [memoryError, setMemoryError] = useState("");
   const [memoryDrafts, setMemoryDrafts] = useState<Record<string, { kind: string; text: string }>>({});
   const [companionMemorySuggestions, setCompanionMemorySuggestions] = useState<CompanionMemorySuggestion[]>([]);
+  const [companionMemoryQueue, setCompanionMemoryQueue] = useState<CompanionMemoryQueueState | null>(null);
   const [companionMemoryBusy, setCompanionMemoryBusy] = useState(false);
   const [companionMemoryStatus, setCompanionMemoryStatus] = useState("");
   const [webdavBusy, setWebdavBusy] = useState(false);
@@ -689,6 +691,14 @@ export default function SettingsDialog({
     void api.companionMemorySuggestions().then(
       (suggestions) => {
         if (!cancelled) setCompanionMemorySuggestions(suggestions);
+      },
+      (err) => {
+        if (!cancelled) setCompanionMemoryStatus(String(err));
+      },
+    );
+    void api.companionMemoryQueueState().then(
+      (queue) => {
+        if (!cancelled) setCompanionMemoryQueue(queue);
       },
       (err) => {
         if (!cancelled) setCompanionMemoryStatus(String(err));
@@ -840,13 +850,40 @@ export default function SettingsDialog({
     }
   };
 
-  const saveCompanionMemorySuggestion = async (id: string) => {
+  const enqueueCompanionMemorySuggestion = async (id: string) => {
     setCompanionMemoryBusy(true);
     setCompanionMemoryStatus("");
     try {
-      setMemoryState(await api.companionSaveMemorySuggestion(id));
+      setCompanionMemoryQueue(await api.companionEnqueueMemorySuggestion(id));
       setCompanionMemorySuggestions(await api.companionMemorySuggestions());
+      setCompanionMemoryStatus(t("settings.companion.memoryQueued"));
+    } catch (err) {
+      setCompanionMemoryStatus(String(err));
+    } finally {
+      setCompanionMemoryBusy(false);
+    }
+  };
+
+  const saveCompanionMemoryQueueItem = async (id: string) => {
+    setCompanionMemoryBusy(true);
+    setCompanionMemoryStatus("");
+    try {
+      setCompanionMemoryQueue(await api.companionSaveMemoryQueueItem(id));
+      setMemoryState(await api.memoryPanelState());
       setCompanionMemoryStatus(t("settings.companion.memorySaved"));
+    } catch (err) {
+      setCompanionMemoryStatus(String(err));
+    } finally {
+      setCompanionMemoryBusy(false);
+    }
+  };
+
+  const ignoreCompanionMemoryQueueItem = async (id: string) => {
+    setCompanionMemoryBusy(true);
+    setCompanionMemoryStatus("");
+    try {
+      setCompanionMemoryQueue(await api.companionIgnoreMemoryQueueItem(id));
+      setCompanionMemoryStatus(t("settings.companion.memoryIgnored"));
     } catch (err) {
       setCompanionMemoryStatus(String(err));
     } finally {
@@ -2313,6 +2350,66 @@ export default function SettingsDialog({
                   </Section>
                   <Section title={t("settings.companion.memoryTitle")} description={t("settings.companion.memoryDesc")}>
                     <div className="grid gap-3">
+                      <div className="rounded-lg border border-[#e2e5ea] bg-[#fbfcfd] p-3">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div>
+                            <div className="text-[13px] font-medium text-[#202124]">
+                              {t("settings.companion.memoryQueueTitle")}
+                            </div>
+                            <div className="mt-1 break-all text-[11px] text-[#8a9099]">
+                              {companionMemoryQueue?.path || t("settings.companion.memoryQueueLoading")}
+                            </div>
+                          </div>
+                          <span className="rounded-md bg-white px-2 py-1 text-[11px] text-[#59616d]">
+                            {t("settings.companion.memoryPending", {
+                              n: companionMemoryQueue?.pending_count ?? 0,
+                            })}
+                          </span>
+                        </div>
+                        <div className="mt-3 grid gap-2">
+                          {companionMemoryQueue?.items.length ? (
+                            companionMemoryQueue.items.slice(0, 12).map((item) => (
+                              <div key={item.id} className="rounded-md border border-[#e8ebef] bg-white p-2">
+                                <div className="flex flex-wrap items-center gap-2 text-[11px] text-[#7a8088]">
+                                  <span className="rounded-md bg-[#eef1f5] px-1.5 py-0.5 text-[#59616d]">
+                                    {item.status}
+                                  </span>
+                                  <span>{item.scope}</span>
+                                  <span>{item.kind}</span>
+                                  <span>{formatTime(item.created_at)}</span>
+                                  <span className="truncate">session {item.source_session}</span>
+                                </div>
+                                <div className="mt-1 text-[12px] leading-5 text-[#202124]">{item.text}</div>
+                                <div className="mt-1 text-[11px] leading-4 text-[#8a9099]">{item.reason}</div>
+                                {item.status === "pending" && (
+                                  <div className="mt-2 flex justify-end gap-2">
+                                    <button
+                                      type="button"
+                                      className={secondaryButtonCls}
+                                      disabled={companionMemoryBusy}
+                                      onClick={() => void ignoreCompanionMemoryQueueItem(item.id)}
+                                    >
+                                      {t("settings.companion.memoryIgnore")}
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className={secondaryButtonCls}
+                                      disabled={companionMemoryBusy}
+                                      onClick={() => void saveCompanionMemoryQueueItem(item.id)}
+                                    >
+                                      {t("settings.companion.memorySave")}
+                                    </button>
+                                  </div>
+                                )}
+                              </div>
+                            ))
+                          ) : (
+                            <div className="rounded-md border border-dashed border-[#d8dde5] bg-white p-3 text-[12px] text-[#7a8088]">
+                              {t("settings.companion.memoryQueueEmpty")}
+                            </div>
+                          )}
+                        </div>
+                      </div>
                       {companionMemorySuggestions.length ? (
                         companionMemorySuggestions.map((suggestion) => (
                           <div
@@ -2333,9 +2430,9 @@ export default function SettingsDialog({
                                 type="button"
                                 className={secondaryButtonCls}
                                 disabled={companionMemoryBusy}
-                                onClick={() => void saveCompanionMemorySuggestion(suggestion.id)}
+                                onClick={() => void enqueueCompanionMemorySuggestion(suggestion.id)}
                               >
-                                {t("settings.companion.memorySave")}
+                                {t("settings.companion.memoryEnqueue")}
                               </button>
                             </div>
                           </div>

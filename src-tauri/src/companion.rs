@@ -1,4 +1,6 @@
 use std::collections::HashMap;
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
 use serde::{Deserialize, Serialize};
@@ -66,6 +68,27 @@ pub struct CompanionMemorySuggestion {
     pub kind: String,
     pub text: String,
     pub reason: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CompanionMemoryQueueItem {
+    pub id: String,
+    pub source_session: String,
+    pub reason: String,
+    pub scope: String,
+    pub kind: String,
+    pub text: String,
+    pub created_at: u64,
+    pub status: String,
+    #[serde(default)]
+    pub saved_memory_id: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct CompanionMemoryQueueState {
+    pub path: String,
+    pub pending_count: usize,
+    pub items: Vec<CompanionMemoryQueueItem>,
 }
 
 #[derive(Clone)]
@@ -178,6 +201,107 @@ pub fn memory_suggestion_by_id(settings: &Settings, id: &str) -> Option<Companio
     memory_suggestions(settings)
         .into_iter()
         .find(|suggestion| suggestion.id == id)
+}
+
+pub fn memory_queue_state(data_dir: &Path) -> CompanionMemoryQueueState {
+    let mut items = read_memory_queue(data_dir);
+    items.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+    let pending_count = items.iter().filter(|item| item.status == "pending").count();
+    CompanionMemoryQueueState {
+        path: memory_queue_path(data_dir).to_string_lossy().to_string(),
+        pending_count,
+        items,
+    }
+}
+
+pub fn enqueue_memory_suggestion(
+    data_dir: &Path,
+    source_session: &str,
+    suggestion: CompanionMemorySuggestion,
+) -> Result<CompanionMemoryQueueState, String> {
+    let mut items = read_memory_queue(data_dir);
+    let dedupe_key = memory_queue_dedupe_key("user", &suggestion.kind, &suggestion.text);
+    if let Some(existing) = items.iter_mut().find(|item| {
+        item.status == "pending"
+            && memory_queue_dedupe_key(&item.scope, &item.kind, &item.text) == dedupe_key
+    }) {
+        existing.reason = suggestion.reason;
+        existing.source_session = source_session.to_string();
+    } else {
+        let seq = items.len() + 1;
+        let created_at = now_millis();
+        items.push(CompanionMemoryQueueItem {
+            id: format!("cmq_{created_at}_{seq}"),
+            source_session: source_session.to_string(),
+            reason: suggestion.reason,
+            scope: "user".to_string(),
+            kind: suggestion.kind,
+            text: suggestion.text,
+            created_at,
+            status: "pending".to_string(),
+            saved_memory_id: None,
+        });
+    }
+    write_memory_queue(data_dir, &items)?;
+    Ok(memory_queue_state(data_dir))
+}
+
+pub fn mark_memory_queue_item(
+    data_dir: &Path,
+    id: &str,
+    status: &str,
+    saved_memory_id: Option<String>,
+) -> Result<CompanionMemoryQueueState, String> {
+    let status = match status {
+        "pending" | "saved" | "ignored" => status,
+        _ => return Err(format!("Unknown companion memory queue status: {status}")),
+    };
+    let mut items = read_memory_queue(data_dir);
+    let item = items
+        .iter_mut()
+        .find(|item| item.id == id)
+        .ok_or_else(|| format!("Unknown companion memory queue item: {id}"))?;
+    item.status = status.to_string();
+    item.saved_memory_id = saved_memory_id;
+    write_memory_queue(data_dir, &items)?;
+    Ok(memory_queue_state(data_dir))
+}
+
+pub fn pending_memory_queue_item(data_dir: &Path, id: &str) -> Option<CompanionMemoryQueueItem> {
+    read_memory_queue(data_dir)
+        .into_iter()
+        .find(|item| item.id == id && item.status == "pending")
+}
+
+fn memory_queue_path(data_dir: &Path) -> PathBuf {
+    data_dir.join("companion-memory-queue.json")
+}
+
+fn read_memory_queue(data_dir: &Path) -> Vec<CompanionMemoryQueueItem> {
+    fs::read_to_string(memory_queue_path(data_dir))
+        .ok()
+        .and_then(|raw| serde_json::from_str::<Vec<CompanionMemoryQueueItem>>(&raw).ok())
+        .unwrap_or_default()
+}
+
+fn write_memory_queue(data_dir: &Path, items: &[CompanionMemoryQueueItem]) -> Result<(), String> {
+    fs::create_dir_all(data_dir).map_err(|e| format!("Failed to create data directory: {e}"))?;
+    let raw = serde_json::to_string_pretty(items)
+        .map_err(|e| format!("Failed to serialize companion memory queue: {e}"))?;
+    fs::write(memory_queue_path(data_dir), raw)
+        .map_err(|e| format!("Failed to write companion memory queue: {e}"))
+}
+
+fn memory_queue_dedupe_key(scope: &str, kind: &str, text: &str) -> String {
+    format!(
+        "{}:{}:{}",
+        scope.trim().to_ascii_lowercase(),
+        kind.trim().to_ascii_lowercase(),
+        text.split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .to_ascii_lowercase()
+    )
 }
 
 fn cached_weather_for_city(city: &str) -> Option<WeatherCard> {
@@ -584,6 +708,38 @@ mod tests {
 
         settings.companion_enabled = false;
         assert!(memory_suggestions(&settings).is_empty());
+    }
+
+    #[test]
+    fn memory_queue_keeps_pending_items_with_review_metadata() {
+        let root = std::env::temp_dir().join(format!(
+            "demiurge_companion_memory_queue_{}",
+            crate::store::now_millis()
+        ));
+        let suggestion = CompanionMemorySuggestion {
+            id: "tone".to_string(),
+            kind: "preference".to_string(),
+            text: "Prefers gentle reminders.".to_string(),
+            reason: "Stable companion tone preference.".to_string(),
+        };
+
+        let state = enqueue_memory_suggestion(&root, "session_1", suggestion.clone()).unwrap();
+        assert_eq!(state.pending_count, 1);
+        let item = &state.items[0];
+        assert_eq!(item.source_session, "session_1");
+        assert_eq!(item.scope, "user");
+        assert_eq!(item.kind, "preference");
+        assert_eq!(item.status, "pending");
+
+        let state = enqueue_memory_suggestion(&root, "session_2", suggestion).unwrap();
+        assert_eq!(state.pending_count, 1);
+        assert_eq!(state.items.len(), 1);
+        assert_eq!(state.items[0].source_session, "session_2");
+
+        let state = mark_memory_queue_item(&root, &state.items[0].id, "ignored", None).unwrap();
+        assert_eq!(state.pending_count, 0);
+        assert_eq!(state.items[0].status, "ignored");
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

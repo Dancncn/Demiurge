@@ -156,6 +156,26 @@ export interface CompanionMemorySuggestion {
   reason: string;
 }
 
+export type CompanionMemoryQueueStatus = "pending" | "saved" | "ignored";
+
+export interface CompanionMemoryQueueItem {
+  id: string;
+  source_session: string;
+  reason: string;
+  scope: string;
+  kind: string;
+  text: string;
+  created_at: number;
+  status: CompanionMemoryQueueStatus;
+  saved_memory_id?: string | null;
+}
+
+export interface CompanionMemoryQueueState {
+  path: string;
+  pending_count: number;
+  items: CompanionMemoryQueueItem[];
+}
+
 export type McpTransportKind = "stdio";
 
 export interface McpEnvVar {

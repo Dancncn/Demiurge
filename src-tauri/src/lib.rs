@@ -1506,24 +1506,55 @@ fn companion_memory_suggestions(
 }
 
 #[tauri::command]
-fn companion_save_memory_suggestion(
+fn companion_memory_queue_state(
+    state: State<'_, AppState>,
+) -> companion::CompanionMemoryQueueState {
+    let data_dir = state.data_dir.lock().unwrap().clone();
+    companion::memory_queue_state(&data_dir)
+}
+
+#[tauri::command]
+fn companion_enqueue_memory_suggestion(
     state: State<'_, AppState>,
     id: String,
-) -> Result<agent::memory::MemoryPanelState, String> {
+) -> Result<companion::CompanionMemoryQueueState, String> {
     let settings = state.settings.lock().unwrap().clone();
     let suggestion = companion::memory_suggestion_by_id(&settings, &id)
         .ok_or_else(|| format!("Unknown companion memory suggestion: {id}"))?;
+    let data_dir = state.data_dir.lock().unwrap().clone();
+    let session_id = state.sessions.lock().unwrap().active.clone();
+    companion::enqueue_memory_suggestion(&data_dir, &session_id, suggestion)
+}
+
+#[tauri::command]
+fn companion_save_memory_queue_item(
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<companion::CompanionMemoryQueueState, String> {
+    let data_dir = state.data_dir.lock().unwrap().clone();
+    let item = companion::pending_memory_queue_item(&data_dir, &id)
+        .ok_or_else(|| format!("Unknown pending companion memory queue item: {id}"))?;
     let (data, sandbox, packs, pack_id, session_id) = memory_context(state.inner());
-    agent::memory::add_entry(
+    let _panel = agent::memory::add_entry(
         &data,
         &sandbox,
         &packs,
         &pack_id,
         &session_id,
-        "user",
-        &suggestion.kind,
-        &suggestion.text,
-    )
+        &item.scope,
+        &item.kind,
+        &item.text,
+    )?;
+    companion::mark_memory_queue_item(&data_dir, &id, "saved", None)
+}
+
+#[tauri::command]
+fn companion_ignore_memory_queue_item(
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<companion::CompanionMemoryQueueState, String> {
+    let data_dir = state.data_dir.lock().unwrap().clone();
+    companion::mark_memory_queue_item(&data_dir, &id, "ignored", None)
 }
 
 fn webdav_auth(req: reqwest::RequestBuilder, config: &WebDavConfig) -> reqwest::RequestBuilder {
@@ -1840,7 +1871,10 @@ pub fn run() {
             companion_panel_state,
             companion_clear_weather_cache,
             companion_memory_suggestions,
-            companion_save_memory_suggestion,
+            companion_memory_queue_state,
+            companion_enqueue_memory_suggestion,
+            companion_save_memory_queue_item,
+            companion_ignore_memory_queue_item,
             ocr_model_status,
             ocr_download_models,
             workflow_panel_state,
