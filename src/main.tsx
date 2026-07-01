@@ -8,8 +8,6 @@ import "@fontsource-variable/jetbrains-mono";
 // 离散字重消除合成加粗（fake bold）导致的中文笔画糊化；罕用字回退系统中文字体。
 import "./assets/fonts/misans-subset.css";
 import "./style.css";
-import "katex/dist/katex.min.css";
-import "highlight.js/styles/github.css";
 
 ReactDOM.createRoot(document.getElementById("app") as HTMLElement).render(
   <React.StrictMode>
