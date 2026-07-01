@@ -1574,8 +1574,9 @@ fn pomodoro_resume(
 fn pomodoro_skip(
     app: AppHandle,
     state: State<'_, AppState>,
+    request: Option<pomodoro::PomodoroSkipRequest>,
 ) -> Result<pomodoro::PomodoroPanelState, String> {
-    pomodoro::skip(app, state.inner())
+    pomodoro::skip(app, state.inner(), request)
 }
 
 #[tauri::command]

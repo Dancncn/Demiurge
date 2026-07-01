@@ -18,6 +18,8 @@ const modeLabels: Record<PomodoroMode, string> = {
   custom: "自定义",
 };
 
+const interruptionReasons = ["切换任务", "消息打断", "卡住了", "临时离开"];
+
 function formatClock(totalSeconds: number) {
   const safe = Math.max(0, Math.floor(totalSeconds));
   const minutes = Math.floor(safe / 60);
@@ -38,6 +40,12 @@ function notify(title: string, body: string) {
   }
 }
 
+function topRhythmEntry(values?: Record<string, number>) {
+  const entries = Object.entries(values ?? {}).filter(([, count]) => count > 0);
+  entries.sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+  return entries[0]?.[0] ?? "";
+}
+
 type Props = {
   activeSessionId: string;
   activeSessionTitle?: string;
@@ -50,6 +58,7 @@ export default function PomodoroCard({ activeSessionId, activeSessionTitle, goal
   const [customMinutes, setCustomMinutes] = useState(25);
   const [taskKind, setTaskKind] = useState<PomodoroTaskKind>("manual");
   const [manualTitle, setManualTitle] = useState("");
+  const [skipReason, setSkipReason] = useState("");
   const [workflowRuns, setWorkflowRuns] = useState<WorkflowRunProgress[]>([]);
   const [workflowRunId, setWorkflowRunId] = useState("");
   const [busy, setBusy] = useState(false);
@@ -100,6 +109,14 @@ export default function PomodoroCard({ activeSessionId, activeSessionTitle, goal
   }, [duration, remaining]);
 
   const selectedWorkflow = workflowRuns.find((run) => run.run_id === workflowRunId) ?? workflowRuns[0] ?? null;
+  const preferredDuration = topRhythmEntry(state?.rhythm.focus_duration_counts);
+  const efficientHour = topRhythmEntry(state?.rhythm.efficient_hour_counts);
+  const commonInterruption = topRhythmEntry(state?.rhythm.interruption_reasons);
+  const rhythmSummary = [
+    preferredDuration ? `偏好 ${preferredDuration}m` : "",
+    efficientHour ? `高效 ${String(efficientHour).padStart(2, "0")}:00` : "",
+    commonInterruption ? `常见中断 ${commonInterruption}` : "",
+  ].filter(Boolean);
 
   function taskBinding(): PomodoroTaskBinding {
     if (taskKind === "session") {
@@ -148,8 +165,14 @@ export default function PomodoroCard({ activeSessionId, activeSessionTitle, goal
         mode,
         duration_minutes: mode === "custom" ? customMinutes : undefined,
         task: taskBinding(),
+        local_hour: new Date().getHours(),
       }),
     );
+
+  const skip = async () => {
+    await runAction(() => api.pomodoroSkip({ reason: skipReason.trim() || null }));
+    setSkipReason("");
+  };
 
   const statusLabel = active
     ? `${modeLabels[timer?.mode ?? "focus"]} · ${timer?.status === "paused" ? "已暂停" : "进行中"}`
@@ -248,6 +271,21 @@ export default function PomodoroCard({ activeSessionId, activeSessionTitle, goal
 
         {active && (
           <div className="flex items-center gap-2">
+            {timer?.mode === "focus" && (
+              <select
+                value={skipReason}
+                onChange={(e) => setSkipReason(e.target.value)}
+                className="h-8 max-w-32 rounded-md border border-[#d9dfe7] bg-white px-2 text-[12px] outline-none"
+                title="中断原因"
+              >
+                <option value="">中断原因</option>
+                {interruptionReasons.map((reason) => (
+                  <option key={reason} value={reason}>
+                    {reason}
+                  </option>
+                ))}
+              </select>
+            )}
             <button
               type="button"
               onClick={() => void runAction(paused ? api.pomodoroResume : api.pomodoroPause)}
@@ -259,7 +297,7 @@ export default function PomodoroCard({ activeSessionId, activeSessionTitle, goal
             </button>
             <button
               type="button"
-              onClick={() => void runAction(api.pomodoroSkip)}
+              onClick={() => void skip()}
               disabled={busy}
               className="grid h-8 w-8 place-items-center rounded-md border border-[#d9dfe7] text-[#4f5661] transition hover:bg-[#f5f6f8] disabled:opacity-50"
               title="跳过"
@@ -284,6 +322,15 @@ export default function PomodoroCard({ activeSessionId, activeSessionTitle, goal
           ) : null}
         </div>
       )}
+      {rhythmSummary.length ? (
+        <div className="mt-2 flex flex-wrap gap-1.5 text-[11px] text-[#6f7782]">
+          {rhythmSummary.map((item) => (
+            <span key={item} className="rounded-md bg-[#f6f7f9] px-2 py-1">
+              {item}
+            </span>
+          ))}
+        </div>
+      ) : null}
     </section>
   );
 }

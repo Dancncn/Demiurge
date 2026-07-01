@@ -199,6 +199,7 @@ export interface PomodoroTimer {
   duration_secs: number;
   remaining_secs: number;
   started_at?: number | null;
+  started_hour?: number | null;
   ends_at?: number | null;
   paused_at?: number | null;
   completed_focus_count: number;
@@ -229,6 +230,11 @@ export interface PomodoroStartRequest {
   mode: PomodoroMode;
   duration_minutes?: number | null;
   task?: PomodoroTaskBinding | null;
+  local_hour?: number | null;
+}
+
+export interface PomodoroSkipRequest {
+  reason?: string | null;
 }
 
 export interface PomodoroCompletedEvent {

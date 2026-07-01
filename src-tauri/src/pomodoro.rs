@@ -47,6 +47,8 @@ pub struct PomodoroTimer {
     pub duration_secs: u64,
     pub remaining_secs: u64,
     pub started_at: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_hour: Option<u8>,
     pub ends_at: Option<u64>,
     pub paused_at: Option<u64>,
     pub completed_focus_count: u32,
@@ -65,6 +67,7 @@ impl Default for PomodoroTimer {
             duration_secs: DEFAULT_FOCUS_MINUTES * 60,
             remaining_secs: 0,
             started_at: None,
+            started_hour: None,
             ends_at: None,
             paused_at: None,
             completed_focus_count: 0,
@@ -152,6 +155,14 @@ pub struct PomodoroStartRequest {
     pub duration_minutes: Option<u64>,
     #[serde(default)]
     pub task: Option<PomodoroTaskBinding>,
+    #[serde(default)]
+    pub local_hour: Option<u8>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct PomodoroSkipRequest {
+    #[serde(default)]
+    pub reason: Option<String>,
 }
 
 pub fn hydrate(app: AppHandle, state: &crate::AppState) {
@@ -194,6 +205,10 @@ pub fn start(
     let task = request.task.unwrap_or_default();
     let title = normalized_task_title(&task).unwrap_or_else(|| default_task_title(&mode));
     let feedback_title = title.clone();
+    let started_hour = request
+        .local_hour
+        .filter(|hour| *hour < 24)
+        .or_else(|| Some(hour_from_epoch_millis(now)));
     cancel_runtime_timer(state);
     store.timer = PomodoroTimer {
         status: "running".to_string(),
@@ -202,6 +217,7 @@ pub fn start(
         duration_secs,
         remaining_secs: duration_secs,
         started_at: Some(now),
+        started_hour,
         ends_at: Some(now + duration_secs * 1000),
         paused_at: None,
         completed_focus_count: store.timer.completed_focus_count,
@@ -268,7 +284,11 @@ pub fn resume(app: AppHandle, state: &crate::AppState) -> Result<PomodoroPanelSt
     Ok(panel)
 }
 
-pub fn skip(app: AppHandle, state: &crate::AppState) -> Result<PomodoroPanelState, String> {
+pub fn skip(
+    app: AppHandle,
+    state: &crate::AppState,
+    request: Option<PomodoroSkipRequest>,
+) -> Result<PomodoroPanelState, String> {
     let data_dir = state.data_dir.lock().unwrap().clone();
     let mut store = read_store(&data_dir);
     if store.timer.status == "idle" {
@@ -276,11 +296,19 @@ pub fn skip(app: AppHandle, state: &crate::AppState) -> Result<PomodoroPanelStat
     }
     cancel_runtime_timer(state);
     let now = crate::store::now_millis();
+    if store.timer.mode == "focus" {
+        record_interruption_reason(
+            &mut store.rhythm,
+            request.and_then(|value| value.reason).as_deref(),
+        );
+        store.timer.focus_streak = 0;
+    }
     store.timer.status = "idle".to_string();
     store.timer.run_id = None;
     store.timer.remaining_secs = 0;
     store.timer.ends_at = None;
     store.timer.paused_at = None;
+    store.timer.started_hour = None;
     store.timer.feedback.completion_message = Some("这轮已经跳过，稍后可以重新开始。".to_string());
     store.timer.feedback.recap_prompt = None;
     store.timer.feedback.encouragement = None;
@@ -299,11 +327,14 @@ fn complete_run(app: &AppHandle, state: &crate::AppState, run_id: &str) -> Resul
     }
     let now = crate::store::now_millis();
     let completed_mode = store.timer.mode.clone();
+    let completed_duration_secs = store.timer.duration_secs;
+    let completed_started_hour = store.timer.started_hour;
     store.timer.status = "idle".to_string();
     store.timer.run_id = None;
     store.timer.remaining_secs = 0;
     store.timer.ends_at = None;
     store.timer.paused_at = None;
+    store.timer.started_hour = None;
     store.timer.feedback.completion_message = Some(completion_message(
         &completed_mode,
         store.timer.focus_streak,
@@ -313,6 +344,12 @@ fn complete_run(app: &AppHandle, state: &crate::AppState, run_id: &str) -> Resul
     if completed_mode == "focus" {
         store.timer.completed_focus_count = store.timer.completed_focus_count.saturating_add(1);
         store.timer.focus_streak = store.timer.focus_streak.saturating_add(1);
+        record_focus_completion(
+            &mut store.rhythm,
+            completed_duration_secs,
+            completed_started_hour,
+            now,
+        );
     } else {
         store.timer.focus_streak = 0;
     }
@@ -476,6 +513,44 @@ fn default_task_title(mode: &str) -> String {
     }
 }
 
+fn record_focus_completion(
+    rhythm: &mut PomodoroRhythmMemory,
+    duration_secs: u64,
+    started_hour: Option<u8>,
+    completed_at: u64,
+) {
+    let minutes = duration_minutes_from_secs(duration_secs);
+    rhythm.focus_sessions_completed = rhythm.focus_sessions_completed.saturating_add(1);
+    let duration_count = rhythm.focus_duration_counts.entry(minutes).or_insert(0);
+    *duration_count = duration_count.saturating_add(1);
+    let hour = started_hour.unwrap_or_else(|| hour_from_epoch_millis(completed_at));
+    let hour_count = rhythm.efficient_hour_counts.entry(hour).or_insert(0);
+    *hour_count = hour_count.saturating_add(1);
+    rhythm.last_completed_at = Some(completed_at);
+}
+
+fn record_interruption_reason(rhythm: &mut PomodoroRhythmMemory, reason: Option<&str>) {
+    let reason = normalized_interruption_reason(reason);
+    let reason_count = rhythm.interruption_reasons.entry(reason).or_insert(0);
+    *reason_count = reason_count.saturating_add(1);
+}
+
+fn normalized_interruption_reason(reason: Option<&str>) -> String {
+    let value = reason
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("unspecified");
+    value.chars().take(80).collect()
+}
+
+fn duration_minutes_from_secs(duration_secs: u64) -> u64 {
+    duration_secs.saturating_add(59) / 60
+}
+
+fn hour_from_epoch_millis(epoch_millis: u64) -> u8 {
+    ((epoch_millis / 3_600_000) % 24) as u8
+}
+
 fn start_message(mode: &str, minutes: u64, title: &str) -> String {
     match mode {
         "short_break" => format!("短休息 {minutes} 分钟开始。离开屏幕、喝水，回来再继续。"),
@@ -617,5 +692,29 @@ mod tests {
         let title = normalized_task_title(&task).unwrap();
         assert_eq!(title.len(), 120);
         assert!(title.chars().all(|ch| ch == 'x'));
+    }
+
+    #[test]
+    fn rhythm_records_focus_duration_and_hour() {
+        let mut rhythm = PomodoroRhythmMemory::default();
+        record_focus_completion(&mut rhythm, 25 * 60, Some(14), 123_456);
+        record_focus_completion(&mut rhythm, 25 * 60, Some(14), 223_456);
+
+        assert_eq!(rhythm.focus_sessions_completed, 2);
+        assert_eq!(rhythm.focus_duration_counts.get(&25), Some(&2));
+        assert_eq!(rhythm.efficient_hour_counts.get(&14), Some(&2));
+        assert_eq!(rhythm.last_completed_at, Some(223_456));
+    }
+
+    #[test]
+    fn rhythm_records_normalized_interruption_reasons() {
+        let mut rhythm = PomodoroRhythmMemory::default();
+        record_interruption_reason(&mut rhythm, Some("  messages  "));
+        record_interruption_reason(&mut rhythm, None);
+
+        assert_eq!(rhythm.interruption_reasons.get("messages"), Some(&1));
+        assert_eq!(rhythm.interruption_reasons.get("unspecified"), Some(&1));
+        let long = "x".repeat(100);
+        assert_eq!(normalized_interruption_reason(Some(&long)).len(), 80);
     }
 }

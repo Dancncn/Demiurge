@@ -28,6 +28,7 @@ import type {
   PlanState,
   PomodoroCompletedEvent,
   PomodoroPanelState,
+  PomodoroSkipRequest,
   PomodoroStartRequest,
   PermissionPanelState,
   PermissionRuleInput,
@@ -105,7 +106,8 @@ export const pomodoroStart = (request: PomodoroStartRequest) =>
   invoke<PomodoroPanelState>("pomodoro_start", { request });
 export const pomodoroPause = () => invoke<PomodoroPanelState>("pomodoro_pause");
 export const pomodoroResume = () => invoke<PomodoroPanelState>("pomodoro_resume");
-export const pomodoroSkip = () => invoke<PomodoroPanelState>("pomodoro_skip");
+export const pomodoroSkip = (request?: PomodoroSkipRequest) =>
+  invoke<PomodoroPanelState>("pomodoro_skip", { request: request ?? null });
 export const companionMemorySuggestions = () =>
   invoke<CompanionMemorySuggestion[]>("companion_memory_suggestions");
 export const companionMemoryQueueState = () =>
