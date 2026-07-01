@@ -66,6 +66,14 @@ fn default_companion_enabled() -> bool {
     DEFAULT_COMPANION_ENABLED
 }
 
+fn default_companion_memory_extraction_enabled() -> bool {
+    false
+}
+
+fn default_companion_memory_extraction_scope() -> String {
+    "recent_turn".to_string()
+}
+
 fn default_companion_tone() -> String {
     "gentle".to_string()
 }
@@ -88,6 +96,10 @@ fn default_weather_enabled() -> bool {
 
 fn default_weather_location_mode() -> String {
     "manual".to_string()
+}
+
+fn default_weather_provider() -> String {
+    "open_meteo".to_string()
 }
 
 fn default_voice_enabled() -> bool {
@@ -287,6 +299,10 @@ pub struct Settings {
     pub auto_memory_enabled: bool,
     #[serde(default = "default_companion_enabled")]
     pub companion_enabled: bool,
+    #[serde(default = "default_companion_memory_extraction_enabled")]
+    pub companion_memory_extraction_enabled: bool,
+    #[serde(default = "default_companion_memory_extraction_scope")]
+    pub companion_memory_extraction_scope: String,
     #[serde(default = "default_companion_tone")]
     pub companion_tone: String,
     #[serde(default = "default_companion_mood")]
@@ -303,6 +319,8 @@ pub struct Settings {
     pub weather_location_mode: String,
     #[serde(default)]
     pub weather_city: String,
+    #[serde(default = "default_weather_provider")]
+    pub weather_provider: String,
     #[serde(default = "default_voice_enabled")]
     pub voice_enabled: bool,
     #[serde(default = "default_voice_stt_backend")]
@@ -371,6 +389,8 @@ impl Default for Settings {
             reasoning_effort: default_reasoning_effort(),
             auto_memory_enabled: DEFAULT_AUTO_MEMORY_ENABLED,
             companion_enabled: DEFAULT_COMPANION_ENABLED,
+            companion_memory_extraction_enabled: false,
+            companion_memory_extraction_scope: default_companion_memory_extraction_scope(),
             companion_tone: default_companion_tone(),
             companion_mood: default_companion_mood(),
             companion_energy: default_companion_energy(),
@@ -379,6 +399,7 @@ impl Default for Settings {
             weather_enabled: DEFAULT_WEATHER_ENABLED,
             weather_location_mode: default_weather_location_mode(),
             weather_city: String::new(),
+            weather_provider: default_weather_provider(),
             voice_enabled: DEFAULT_VOICE_ENABLED,
             voice_stt_backend: default_voice_stt_backend(),
             voice_tts_backend: default_voice_tts_backend(),
@@ -590,6 +611,9 @@ mod tests {
         assert_eq!(settings.reasoning_effort, ReasoningEffort::Auto);
         assert_eq!(settings.theme, "system");
         assert!(!settings.launch_on_startup);
+        assert!(!settings.companion_memory_extraction_enabled);
+        assert_eq!(settings.companion_memory_extraction_scope, "recent_turn");
+        assert_eq!(settings.weather_provider, "open_meteo");
     }
 
     #[test]

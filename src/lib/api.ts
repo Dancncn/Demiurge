@@ -8,6 +8,7 @@ import type {
   AssistantErrorEvent,
   ConnectionTestResult,
   ConfirmRequestEvent,
+  CompanionMemoryQueueState,
   CompanionPanelState,
   CompanionMemorySuggestion,
   ContextPanelState,
@@ -98,8 +99,20 @@ export const companionClearWeatherCache = () =>
   invoke<CompanionPanelState>("companion_clear_weather_cache");
 export const companionMemorySuggestions = () =>
   invoke<CompanionMemorySuggestion[]>("companion_memory_suggestions");
-export const companionSaveMemorySuggestion = (id: string) =>
-  invoke<MemoryPanelState>("companion_save_memory_suggestion", { id });
+export const companionMemoryQueueState = () =>
+  invoke<CompanionMemoryQueueState>("companion_memory_queue_state");
+export const companionEnqueueMemorySuggestion = (id: string) =>
+  invoke<CompanionMemoryQueueState>("companion_enqueue_memory_suggestion", { id });
+export const companionSaveMemoryQueueItem = (id: string, resolution?: "merge" | "replace" | "keep_new") =>
+  invoke<CompanionMemoryQueueState>("companion_save_memory_queue_item", { id, resolution: resolution ?? null });
+export const companionIgnoreMemoryQueueItem = (id: string) =>
+  invoke<CompanionMemoryQueueState>("companion_ignore_memory_queue_item", { id });
+export const companionSaveAllMemoryQueueItems = () =>
+  invoke<CompanionMemoryQueueState>("companion_save_all_memory_queue_items");
+export const companionIgnoreAllMemoryQueueItems = () =>
+  invoke<CompanionMemoryQueueState>("companion_ignore_all_memory_queue_items");
+export const companionUndoMemoryQueueItem = (id: string) =>
+  invoke<CompanionMemoryQueueState>("companion_undo_memory_queue_item", { id });
 
 // 技能 / 检索面板：可选 query 用于按输入对技能做匹配检索打分。
 export const skillPanelState = (query?: string) =>

@@ -10,7 +10,7 @@ use super::conversation::Message;
 use super::{
     budget, context, custom, goal, memory, prompt, session_engine, summary, workflow_journal,
 };
-use crate::{llm, pack, permission, store, tools};
+use crate::{companion, llm, pack, permission, store, tools};
 use permission::PermissionRequest;
 
 /// 单工具结果回传给前端时的最大展示长度（完整结果仍会进上下文喂回模型）
@@ -417,6 +417,17 @@ pub async fn run_turn_with_options(
                 &state.http,
                 &settings,
                 &sandbox_dir,
+                &original_user_text,
+                &assistant_text,
+                &state.cancel,
+            )
+            .await;
+            let data_dir = state.data_dir.lock().unwrap().clone();
+            let _ = companion::extract_memory_to_queue(
+                &state.http,
+                &settings,
+                &data_dir,
+                &sid,
                 &original_user_text,
                 &assistant_text,
                 &state.cancel,
