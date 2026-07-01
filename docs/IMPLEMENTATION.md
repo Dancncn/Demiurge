@@ -74,6 +74,7 @@ Demiurge/
 │     ├─ ocr.rs
 │     ├─ media.rs
 │     ├─ voice.rs
+│     ├─ pomodoro.rs
 │     ├─ agent/
 │     ├─ llm/
 │     ├─ mcp/
@@ -103,6 +104,7 @@ Demiurge/
 | `ocr.rs` | OCR 模型路径、ModelScope/Hugging Face 源、下载进度事件、缺模型检查、手动安装提示和 OCR 推理入口 | `model_status()` / `download_models()` / `recognize_rgba()` |
 | `voice.rs` | STT(ASR) 已接入云端转写后端（DashScope `qwen3-asr-flash` / OpenAI 兼容 Whisper，由 `voice_stt_backend` 选择并校验凭据）；TTS 仍为预留占位 | `voice_transcribe()` / `voice_synthesize()` / `voice_status()` |
 | `media.rs` | DashScope 媒体后端（图像生成）与 voice 用的 dashscope 凭据 / base_url 辅助 | `generate_image()` / `dashscope_api_key()` |
+| `pomodoro.rs` | 番茄钟运行时、持久化状态、完成事件、节奏记忆和勿扰联动所需的面板状态 | `pomodoro_state()` / `pomodoro_start()` / `pomodoro_pause()` / `pomodoro_resume()` / `pomodoro_skip()` |
 | `agent/session_engine.rs` | turn runtime state、入口互斥、中断标记、统一 agent event envelope 和会话写入封装 | `begin_turn()` / `finish_turn()` / `TurnEventEmitter` / `SessionTurnStore` |
 | `agent/runner.rs` | Agent loop，处理模型流、tool calls、tool results、最终回答 | `run_turn()` / `run_turn_with_options()` |
 | `agent/conversation.rs` | 内部消息结构和 tool call/result 表示 | `Message` / `ToolCall` |
@@ -144,6 +146,7 @@ Demiurge/
 | `components/Sidebar.tsx` | 会话列表、会话重命名/删除、角色包选择、基础入口 |
 | `components/Composer.tsx` | 输入框、中断/发送状态 |
 | `components/MessageList.tsx` | 用户消息、助手消息、工具卡片渲染 |
+| `components/PomodoroCard.tsx` | 聊天页番茄钟控制面板，支持任务绑定、暂停/继续/跳过、中断原因、桌面通知和节奏摘要 |
 | `components/Markdown.tsx` | GFM、代码块、KaTeX 渲染 |
 | `components/ToolCard.tsx` | tool-start/tool-end 展示，包含 MCP tool/resource 进度摘要 |
 | `components/ConfirmDialog.tsx` | 敏感工具确认，支持 once/session/project scope |
@@ -161,6 +164,7 @@ app_data_dir/
 ├─ permissions.json              # 项目级权限规则
 ├─ permission_audit.jsonl        # 轻量权限审计
 ├─ companion-memory-queue.json   # 陪伴记忆待确认队列
+├─ pomodoro.json                 # 番茄钟当前状态、任务绑定和节奏记忆
 ├─ memory/user.md                # user-scope 手动记忆
 ├─ skills/*/SKILL.md             # global skills
 ├─ sandbox/                      # 文件工具可访问的工作区
@@ -249,6 +253,12 @@ Companion memory 走独立的用户确认链路：手动陪伴建议和授权后
 `companion.rs` 负责聊天页 Companion 卡片、陪伴 prompt context、记忆队列、高风险表达检测和天气陪伴。高风险表达检测在 `send` / `send_with_agents` 进入 LLM 前运行，命中自伤/危机或医疗/心理治疗替代诉求时直接持久化一条支持性回复，并跳过普通记忆抽取。
 
 天气使用 provider 抽象，当前默认实现是无 key 的 Open-Meteo：手动城市会先地理编码再查询 forecast；粗略定位模式只在用户开启且未填写城市时通过 IP 估算城市，并仅缓存城市级信息。天气缓存和粗略位置缓存均为 30 分钟 TTL，可从 Companion 卡片或 Settings 天气数据治理区域清理。天气卡片展示 provider、缓存过期、错误降级、温度/体感/AQI/UV 等摘要；建议覆盖降雨、通勤降雨概率、体感高低温、昼夜温差、紫外线、空气质量、湿度、风力和极端天气信号，文案保持低频克制。
+
+## Pomodoro / Focus Rhythm
+
+`pomodoro.rs` 负责本地番茄钟状态和节奏陪伴。状态持久化到 `pomodoro.json`，包含当前 timer、任务绑定、连续专注计数、偏好时长计数、中断原因计数、高效小时计数和最近完成时间。前端通过 `PomodoroCard` 调用 `pomodoro_start/pause/resume/skip`，可选择专注、短休息、长休息或自定义时长，并把计时绑定到当前会话、Goal、Workflow run 或手动标题。
+
+计时完成后后端发出 `pomodoro-updated` 和 `pomodoro-completed` 事件，前端用 Web Notification 和 Tauri attention request 做桌面提醒。专注开始时会生成轻量拆解步骤，结束后给出复盘提示和连续完成鼓励；跳过专注时可记录中断原因。Companion 面板读取 Pomodoro 状态，专注中会收起低优先级主动提醒，只保留高优先级提示和专注保护提示。
 
 ## 上下文工程
 
