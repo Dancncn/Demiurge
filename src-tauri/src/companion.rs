@@ -1096,7 +1096,7 @@ fn build_suggestions(
         for advice in &weather.advice {
             items.push(CompanionSuggestion {
                 kind: "weather".to_string(),
-                priority: 1,
+                priority: 2,
                 text: advice.clone(),
             });
         }

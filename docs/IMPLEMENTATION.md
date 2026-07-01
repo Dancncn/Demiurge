@@ -147,7 +147,7 @@ Demiurge/
 | `components/Markdown.tsx` | GFM、代码块、KaTeX 渲染 |
 | `components/ToolCard.tsx` | tool-start/tool-end 展示，包含 MCP tool/resource 进度摘要 |
 | `components/ConfirmDialog.tsx` | 敏感工具确认，支持 once/session/project scope |
-| `components/SettingsDialog.tsx` | provider、Persona Pack zip 导入、Web Search、MCP server、OCR 模型源/下载进度/缺模型引导、语音、WebDAV、权限、分层记忆维护和 Context 可视化设置，以及 Provider/Web Search/WebDAV 连接测试 |
+| `components/SettingsDialog.tsx` | provider、Persona Pack zip 导入、Web Search、MCP server、OCR 模型源/下载进度/缺模型引导、语音、WebDAV、权限、Companion/Weather、分层记忆维护和 Context 可视化设置，以及 Provider/Web Search/WebDAV 连接测试 |
 | `components/WorkflowsPanel.tsx` | workflow 定义、run/stop、agent、phase、log 的 live 状态 |
 
 ## 运行数据目录
@@ -160,6 +160,7 @@ app_data_dir/
 ├─ sessions.json                 # 多会话、active session、rolling summary、goal state
 ├─ permissions.json              # 项目级权限规则
 ├─ permission_audit.jsonl        # 轻量权限审计
+├─ companion-memory-queue.json   # 陪伴记忆待确认队列
 ├─ memory/user.md                # user-scope 手动记忆
 ├─ skills/*/SKILL.md             # global skills
 ├─ sandbox/                      # 文件工具可访问的工作区
@@ -239,7 +240,15 @@ Memory 仍以 Markdown 为主，但读写路径已分层：
 - pack：`packs/<pack_id>/memory.md`
 - project legacy：`sandbox/memory.md` 只读兼容加载
 
-Prompt 会按 user/project/session/pack 加载分层 memory，并继续兼容旧的 project legacy memory。Settings Memory 面板按 scope 展示 path、条目、重复项和统计，支持对 user/project/session/pack 手动新增、编辑 kind/text、删除和去重；自动 memory extraction 仍优先写入 project scope，后续再扩展到更细粒度的自动归档策略。
+Prompt 会按 user/project/session/pack 加载分层 memory，并继续兼容旧的 project legacy memory。Settings Memory 面板按 scope 展示 path、条目、重复项和统计，支持对 user/project/session/pack 手动新增、编辑 kind/text、删除和去重；通用自动 memory extraction 仍优先写入 project scope。
+
+Companion memory 走独立的用户确认链路：手动陪伴建议和授权后的 LLM 陪伴抽取都会先写入 `companion-memory-queue.json`，每条包含来源会话、原因、scope、kind、正文、创建时间和状态。Settings 的 Companion 页提供抽取开关、范围说明、最近队列记录、批量保存/忽略、撤销写入和跳转 Memory 面板；保存前会检查目标 scope 的相近记忆，提示合并、替换或保留新条目。
+
+## Companion / Weather
+
+`companion.rs` 负责聊天页 Companion 卡片、陪伴 prompt context、记忆队列、高风险表达检测和天气陪伴。高风险表达检测在 `send` / `send_with_agents` 进入 LLM 前运行，命中自伤/危机或医疗/心理治疗替代诉求时直接持久化一条支持性回复，并跳过普通记忆抽取。
+
+天气使用 provider 抽象，当前默认实现是无 key 的 Open-Meteo：手动城市会先地理编码再查询 forecast；粗略定位模式只在用户开启且未填写城市时通过 IP 估算城市，并仅缓存城市级信息。天气缓存和粗略位置缓存均为 30 分钟 TTL，可从 Companion 卡片或 Settings 天气数据治理区域清理。天气卡片展示 provider、缓存过期、错误降级、温度/体感/AQI/UV 等摘要；建议覆盖降雨、通勤降雨概率、体感高低温、昼夜温差、紫外线、空气质量、湿度、风力和极端天气信号，文案保持低频克制。
 
 ## 上下文工程
 
