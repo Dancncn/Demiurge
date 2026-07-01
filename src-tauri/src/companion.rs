@@ -90,6 +90,11 @@ pub struct CompanionSuggestion {
     pub text: String,
 }
 
+#[derive(Clone, Debug)]
+struct PomodoroFocusGuard {
+    task_title: String,
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub struct HighRiskDetection {
     pub kind: String,
@@ -654,7 +659,14 @@ pub async fn panel_state(state: &AppState) -> CompanionPanelState {
     } else {
         (None, None)
     };
-    let suggestions = build_suggestions(&settings, weather.as_ref(), recent_interaction_at);
+    let pomodoro = crate::pomodoro::panel_state(state);
+    let focus_guard = pomodoro_focus_guard(&pomodoro);
+    let suggestions = build_suggestions(
+        &settings,
+        weather.as_ref(),
+        recent_interaction_at,
+        focus_guard.as_ref(),
+    );
     CompanionPanelState {
         enabled: settings.companion_enabled,
         privacy: CompanionPrivacyState {
@@ -1063,10 +1075,21 @@ fn build_suggestions(
     settings: &Settings,
     weather: Option<&WeatherCard>,
     recent_interaction_at: u64,
+    focus_guard: Option<&PomodoroFocusGuard>,
 ) -> Vec<CompanionSuggestion> {
     let mut items = Vec::new();
     if !settings.companion_enabled {
         return items;
+    }
+    if let Some(guard) = focus_guard {
+        items.push(CompanionSuggestion {
+            kind: "focus_guard".to_string(),
+            priority: 3,
+            text: format!(
+                "专注计时中：{}。低优先级主动提醒已收起，只保留高优先级提示。",
+                guard.task_title
+            ),
+        });
     }
     if settings.companion_focus == "focusing" {
         items.push(CompanionSuggestion {
@@ -1093,16 +1116,20 @@ fn build_suggestions(
         for advice in &weather.advice {
             items.push(CompanionSuggestion {
                 kind: "weather".to_string(),
-                priority: 2,
+                priority: if weather.severe_weather { 3 } else { 2 },
                 text: advice.clone(),
             });
         }
     }
-    items.extend(proactive_reminder_candidates(
-        settings,
-        weather,
-        recent_interaction_at,
-    ));
+    if focus_guard.is_none() {
+        items.extend(proactive_reminder_candidates(
+            settings,
+            weather,
+            recent_interaction_at,
+        ));
+    } else {
+        items.retain(|item| item.priority >= 3 || item.kind == "focus_guard");
+    }
     if items.is_empty() {
         items.push(CompanionSuggestion {
             kind: "check_in".to_string(),
@@ -1117,6 +1144,23 @@ fn build_suggestions(
     });
     items.truncate(4);
     items
+}
+
+fn pomodoro_focus_guard(panel: &crate::pomodoro::PomodoroPanelState) -> Option<PomodoroFocusGuard> {
+    let timer = &panel.timer;
+    if !matches!(timer.status.as_str(), "running" | "paused") {
+        return None;
+    }
+    if !matches!(timer.mode.as_str(), "focus" | "custom") {
+        return None;
+    }
+    let title = timer.task.title.trim();
+    let task_title = if title.is_empty() {
+        "Focus session".to_string()
+    } else {
+        cap_text(title, 80)
+    };
+    Some(PomodoroFocusGuard { task_title })
 }
 
 fn proactive_reminder_candidates(
@@ -1313,10 +1357,53 @@ mod tests {
             cached: false,
             fetched_at: 1,
         };
-        let suggestions = build_suggestions(&settings(), Some(&weather), now_millis());
+        let suggestions = build_suggestions(&settings(), Some(&weather), now_millis(), None);
         assert!(suggestions.len() <= 4);
         assert!(suggestions.iter().any(|item| item.kind == "mood"));
         assert!(suggestions.iter().any(|item| item.kind == "weather"));
+    }
+
+    #[test]
+    fn pomodoro_focus_guard_suppresses_low_priority_suggestions() {
+        let mut settings = settings();
+        settings.companion_focus = "available".to_string();
+        let weather = WeatherCard {
+            city: "Hangzhou".to_string(),
+            country: "China".to_string(),
+            temperature_c: 22.0,
+            apparent_temperature_c: 22.0,
+            precipitation_mm: 0.0,
+            humidity_percent: Some(60),
+            wind_speed_kmh: Some(8.0),
+            uv_index: Some(2.0),
+            air_quality_index: Some(80),
+            pm2_5: Some(20.0),
+            day_temperature_min_c: Some(18.0),
+            day_temperature_max_c: Some(24.0),
+            commute_precipitation_probability: Some(20),
+            severe_weather: false,
+            weather_code: 0,
+            condition: "clear".to_string(),
+            advice: vec!["low priority weather nudge".to_string()],
+            source: "Open-Meteo".to_string(),
+            cached: false,
+            fetched_at: 1,
+        };
+        let guard = PomodoroFocusGuard {
+            task_title: "ship focus".to_string(),
+        };
+        let suggestions = build_suggestions(
+            &settings,
+            Some(&weather),
+            now_millis().saturating_sub(5 * 60 * 60 * 1000),
+            Some(&guard),
+        );
+
+        assert!(suggestions.iter().any(|item| item.kind == "focus_guard"));
+        assert!(suggestions.iter().all(|item| item.priority >= 3));
+        assert!(!suggestions.iter().any(|item| item.kind == "energy"));
+        assert!(!suggestions.iter().any(|item| item.kind == "weather"));
+        assert!(!suggestions.iter().any(|item| item.kind == "reminder_time"));
     }
 
     #[test]

@@ -29,6 +29,7 @@ import SettingsDialog, { type SettingsTab } from "./components/SettingsDialog";
 import MediaStudio from "./components/MediaStudio";
 import SkillsPanel from "./components/SkillsPanel";
 import CompanionCard from "./components/CompanionCard";
+import PomodoroCard from "./components/PomodoroCard";
 import { CheckIcon, ChevronDownIcon, PanelLeftIcon } from "./components/Icons";
 import { attachmentKindLabel, buildAttachmentPrompt, formatAttachmentSize, type ProcessedAttachment } from "./lib/fileProcessing";
 import { autoContextBudget } from "./lib/providers";
@@ -967,6 +968,7 @@ export default function App() {
 
               <GoalBar goal={goalPanel} busy={appBusy} progress={goalProgress} onAction={handleGoalAction} />
               <CompanionCard settings={settings} onOpenSettings={() => openSettings("companion")} />
+              <PomodoroCard activeSessionId={activeId} activeSessionTitle={activeSession?.title} goal={goalPanel} />
 
               <MessageList
                 items={items}

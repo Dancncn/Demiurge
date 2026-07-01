@@ -26,6 +26,10 @@ import type {
   PermissionMode,
   PermissionScope,
   PlanState,
+  PomodoroCompletedEvent,
+  PomodoroPanelState,
+  PomodoroSkipRequest,
+  PomodoroStartRequest,
   PermissionPanelState,
   PermissionRuleInput,
   SessionEnginePanelState,
@@ -97,6 +101,13 @@ export const contextPanelState = () => invoke<ContextPanelState>("context_panel_
 export const companionPanelState = () => invoke<CompanionPanelState>("companion_panel_state");
 export const companionClearWeatherCache = () =>
   invoke<CompanionPanelState>("companion_clear_weather_cache");
+export const pomodoroState = () => invoke<PomodoroPanelState>("pomodoro_state");
+export const pomodoroStart = (request: PomodoroStartRequest) =>
+  invoke<PomodoroPanelState>("pomodoro_start", { request });
+export const pomodoroPause = () => invoke<PomodoroPanelState>("pomodoro_pause");
+export const pomodoroResume = () => invoke<PomodoroPanelState>("pomodoro_resume");
+export const pomodoroSkip = (request?: PomodoroSkipRequest) =>
+  invoke<PomodoroPanelState>("pomodoro_skip", { request: request ?? null });
 export const companionMemorySuggestions = () =>
   invoke<CompanionMemorySuggestion[]>("companion_memory_suggestions");
 export const companionMemoryQueueState = () =>
@@ -175,6 +186,10 @@ export const listenSettingsUpdated = (handler: (e: Settings) => void) =>
   listen<Settings>("settings-updated", (e) => handler(e.payload));
 export const listenMcpUpdated = (handler: (e: McpPanelState) => void) =>
   listen<McpPanelState>("mcp-updated", (e) => handler(e.payload));
+export const listenPomodoroUpdated = (handler: (e: PomodoroPanelState) => void) =>
+  listen<PomodoroPanelState>("pomodoro-updated", (e) => handler(e.payload));
+export const listenPomodoroCompleted = (handler: (e: PomodoroCompletedEvent) => void) =>
+  listen<PomodoroCompletedEvent>("pomodoro-completed", (e) => handler(e.payload));
 export const listenSessionEngineUpdated = (handler: (e: SessionEnginePanelState) => void) =>
   listen<SessionEnginePanelState>("session-engine-updated", (e) => handler(e.payload));
 export const listenUnifiedAgentEvents = (handler: (e: AgentEventEnvelope) => void) =>

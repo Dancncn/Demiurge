@@ -9,6 +9,7 @@ mod media;
 mod ocr;
 mod pack;
 mod permission;
+mod pomodoro;
 mod startup;
 mod store;
 mod tools;
@@ -51,6 +52,7 @@ pub struct AppState {
     pub edit_undo_stack: Mutex<Vec<tools::EditUndoEntry>>,
     pub workflow_runs: Mutex<Vec<agent::workflow_runtime::WorkflowRunProgress>>,
     pub workflow_cancels: Mutex<HashMap<String, Arc<AtomicBool>>>,
+    pub pomodoro: Mutex<pomodoro::PomodoroRuntime>,
     pub session_engine: Mutex<agent::session_engine::SessionEngineState>,
     pub mcp: mcp::McpManager,
     /// 用户中断标志
@@ -91,6 +93,7 @@ impl AppState {
             edit_undo_stack: Mutex::new(Vec::new()),
             workflow_runs: Mutex::new(Vec::new()),
             workflow_cancels: Mutex::new(HashMap::new()),
+            pomodoro: Mutex::new(pomodoro::PomodoroRuntime::default()),
             session_engine: Mutex::new(agent::session_engine::SessionEngineState::default()),
             mcp: mcp::McpManager::default(),
             cancel: AtomicBool::new(false),
@@ -1538,6 +1541,45 @@ async fn companion_clear_weather_cache(
 }
 
 #[tauri::command]
+fn pomodoro_state(state: State<'_, AppState>) -> pomodoro::PomodoroPanelState {
+    pomodoro::panel_state(state.inner())
+}
+
+#[tauri::command]
+fn pomodoro_start(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    request: pomodoro::PomodoroStartRequest,
+) -> Result<pomodoro::PomodoroPanelState, String> {
+    pomodoro::start(app, state.inner(), request)
+}
+
+#[tauri::command]
+fn pomodoro_pause(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<pomodoro::PomodoroPanelState, String> {
+    pomodoro::pause(app, state.inner())
+}
+
+#[tauri::command]
+fn pomodoro_resume(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<pomodoro::PomodoroPanelState, String> {
+    pomodoro::resume(app, state.inner())
+}
+
+#[tauri::command]
+fn pomodoro_skip(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    request: Option<pomodoro::PomodoroSkipRequest>,
+) -> Result<pomodoro::PomodoroPanelState, String> {
+    pomodoro::skip(app, state.inner(), request)
+}
+
+#[tauri::command]
 fn companion_memory_suggestions(
     state: State<'_, AppState>,
 ) -> Vec<companion::CompanionMemorySuggestion> {
@@ -2069,6 +2111,7 @@ pub fn run() {
             *state.settings.lock().unwrap() = settings;
             *state.sessions.lock().unwrap() = sessions;
             agent::workflow_runtime::hydrate_persisted_runs(state.inner());
+            pomodoro::hydrate(app.handle().clone(), state.inner());
             // 保证落盘一次（迁移/初始化后）
             state.persist_sessions();
             Ok(())
@@ -2135,6 +2178,11 @@ pub fn run() {
             media_synthesize_speech,
             companion_panel_state,
             companion_clear_weather_cache,
+            pomodoro_state,
+            pomodoro_start,
+            pomodoro_pause,
+            pomodoro_resume,
+            pomodoro_skip,
             companion_memory_suggestions,
             companion_memory_queue_state,
             companion_enqueue_memory_suggestion,

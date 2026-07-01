@@ -484,6 +484,7 @@ mod tests {
             edit_undo_stack: Mutex::new(Vec::new()),
             workflow_runs: Mutex::new(Vec::new()),
             workflow_cancels: Mutex::new(std::collections::HashMap::new()),
+            pomodoro: Mutex::new(crate::pomodoro::PomodoroRuntime::default()),
             session_engine: Mutex::new(crate::agent::session_engine::SessionEngineState::default()),
             mcp: crate::mcp::McpManager::default(),
             cancel: std::sync::atomic::AtomicBool::new(false),
