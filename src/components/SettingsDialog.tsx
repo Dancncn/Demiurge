@@ -864,11 +864,11 @@ export default function SettingsDialog({
     }
   };
 
-  const saveCompanionMemoryQueueItem = async (id: string) => {
+  const saveCompanionMemoryQueueItem = async (id: string, resolution?: "merge" | "replace" | "keep_new") => {
     setCompanionMemoryBusy(true);
     setCompanionMemoryStatus("");
     try {
-      setCompanionMemoryQueue(await api.companionSaveMemoryQueueItem(id));
+      setCompanionMemoryQueue(await api.companionSaveMemoryQueueItem(id, resolution));
       setMemoryState(await api.memoryPanelState());
       setCompanionMemoryStatus(t("settings.companion.memorySaved"));
     } catch (err) {
@@ -2466,6 +2466,12 @@ export default function SettingsDialog({
                                 </div>
                                 <div className="mt-1 text-[12px] leading-5 text-[#202124]">{item.text}</div>
                                 <div className="mt-1 text-[11px] leading-4 text-[#8a9099]">{item.reason}</div>
+                                {item.status === "pending" && item.duplicate_memory_text && (
+                                  <div className="mt-2 rounded-md border border-[#f5d6a4] bg-[#fffaf0] p-2 text-[11px] leading-4 text-[#7a4d00]">
+                                    <div className="font-medium">{t("settings.companion.memoryDuplicate")}</div>
+                                    <div className="mt-1">{item.duplicate_memory_text}</div>
+                                  </div>
+                                )}
                                 {item.status === "pending" && (
                                   <div className="mt-2 flex justify-end gap-2">
                                     <button
@@ -2476,14 +2482,43 @@ export default function SettingsDialog({
                                     >
                                       {t("settings.companion.memoryIgnore")}
                                     </button>
-                                    <button
-                                      type="button"
-                                      className={secondaryButtonCls}
-                                      disabled={companionMemoryBusy}
-                                      onClick={() => void saveCompanionMemoryQueueItem(item.id)}
-                                    >
-                                      {t("settings.companion.memorySave")}
-                                    </button>
+                                    {item.duplicate_memory_text ? (
+                                      <>
+                                        <button
+                                          type="button"
+                                          className={secondaryButtonCls}
+                                          disabled={companionMemoryBusy}
+                                          onClick={() => void saveCompanionMemoryQueueItem(item.id, "merge")}
+                                        >
+                                          {t("settings.companion.memoryMerge")}
+                                        </button>
+                                        <button
+                                          type="button"
+                                          className={secondaryButtonCls}
+                                          disabled={companionMemoryBusy}
+                                          onClick={() => void saveCompanionMemoryQueueItem(item.id, "replace")}
+                                        >
+                                          {t("settings.companion.memoryReplace")}
+                                        </button>
+                                        <button
+                                          type="button"
+                                          className={secondaryButtonCls}
+                                          disabled={companionMemoryBusy}
+                                          onClick={() => void saveCompanionMemoryQueueItem(item.id, "keep_new")}
+                                        >
+                                          {t("settings.companion.memoryKeepNew")}
+                                        </button>
+                                      </>
+                                    ) : (
+                                      <button
+                                        type="button"
+                                        className={secondaryButtonCls}
+                                        disabled={companionMemoryBusy}
+                                        onClick={() => void saveCompanionMemoryQueueItem(item.id)}
+                                      >
+                                        {t("settings.companion.memorySave")}
+                                      </button>
+                                    )}
                                   </div>
                                 )}
                                 {item.status === "saved" && item.saved_memory_id && (

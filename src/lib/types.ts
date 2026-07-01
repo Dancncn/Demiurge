@@ -170,6 +170,8 @@ export interface CompanionMemoryQueueItem {
   created_at: number;
   status: CompanionMemoryQueueStatus;
   saved_memory_id?: string | null;
+  duplicate_memory_id?: string | null;
+  duplicate_memory_text?: string | null;
 }
 
 export interface CompanionMemoryQueueState {

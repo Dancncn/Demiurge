@@ -89,6 +89,10 @@ pub struct CompanionMemoryQueueItem {
     pub status: String,
     #[serde(default)]
     pub saved_memory_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duplicate_memory_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duplicate_memory_text: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -286,6 +290,8 @@ pub fn enqueue_memory_queue_item(
             created_at,
             status: "pending".to_string(),
             saved_memory_id: None,
+            duplicate_memory_id: None,
+            duplicate_memory_text: None,
         });
     }
     write_memory_queue(data_dir, &items)?;

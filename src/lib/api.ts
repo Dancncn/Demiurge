@@ -103,8 +103,8 @@ export const companionMemoryQueueState = () =>
   invoke<CompanionMemoryQueueState>("companion_memory_queue_state");
 export const companionEnqueueMemorySuggestion = (id: string) =>
   invoke<CompanionMemoryQueueState>("companion_enqueue_memory_suggestion", { id });
-export const companionSaveMemoryQueueItem = (id: string) =>
-  invoke<CompanionMemoryQueueState>("companion_save_memory_queue_item", { id });
+export const companionSaveMemoryQueueItem = (id: string, resolution?: "merge" | "replace" | "keep_new") =>
+  invoke<CompanionMemoryQueueState>("companion_save_memory_queue_item", { id, resolution: resolution ?? null });
 export const companionIgnoreMemoryQueueItem = (id: string) =>
   invoke<CompanionMemoryQueueState>("companion_ignore_memory_queue_item", { id });
 export const companionSaveAllMemoryQueueItems = () =>

@@ -1509,8 +1509,7 @@ fn companion_memory_suggestions(
 fn companion_memory_queue_state(
     state: State<'_, AppState>,
 ) -> companion::CompanionMemoryQueueState {
-    let data_dir = state.data_dir.lock().unwrap().clone();
-    companion::memory_queue_state(&data_dir)
+    companion_queue_state(state.inner())
 }
 
 #[tauri::command]
@@ -1524,29 +1523,69 @@ fn companion_enqueue_memory_suggestion(
     let data_dir = state.data_dir.lock().unwrap().clone();
     let session_id = state.sessions.lock().unwrap().active.clone();
     companion::enqueue_memory_suggestion(&data_dir, &session_id, suggestion)
+        .map(|_| companion_queue_state(state.inner()))
 }
 
 #[tauri::command]
 fn companion_save_memory_queue_item(
     state: State<'_, AppState>,
     id: String,
+    resolution: Option<String>,
 ) -> Result<companion::CompanionMemoryQueueState, String> {
     let data_dir = state.data_dir.lock().unwrap().clone();
     let item = companion::pending_memory_queue_item(&data_dir, &id)
         .ok_or_else(|| format!("Unknown pending companion memory queue item: {id}"))?;
     let (data, sandbox, packs, pack_id, session_id) = memory_context(state.inner());
-    let panel = agent::memory::add_entry(
-        &data,
-        &sandbox,
-        &packs,
-        &pack_id,
-        &session_id,
-        &item.scope,
-        &item.kind,
-        &item.text,
-    )?;
-    let saved_id = find_saved_memory_id(&panel, &item);
-    companion::mark_memory_queue_item(&data_dir, &id, "saved", saved_id)
+    let panel = agent::memory::panel_state(&data, &sandbox, &packs, &pack_id, &session_id);
+    let duplicate = find_similar_memory_entry(&panel, &item);
+    let resolution = resolution.unwrap_or_default();
+    let saved_id = match (duplicate, resolution.as_str()) {
+        (Some(existing), "merge") => {
+            let merged = merge_memory_text(&existing.text, &item.text);
+            agent::memory::update_entry(
+                &data,
+                &sandbox,
+                &packs,
+                &pack_id,
+                &session_id,
+                &existing.id,
+                &item.kind,
+                &merged,
+            )?;
+            Some(existing.id)
+        }
+        (Some(existing), "replace") => {
+            agent::memory::update_entry(
+                &data,
+                &sandbox,
+                &packs,
+                &pack_id,
+                &session_id,
+                &existing.id,
+                &item.kind,
+                &item.text,
+            )?;
+            Some(existing.id)
+        }
+        (Some(_), "keep_new") | (None, _) => {
+            let panel = agent::memory::add_entry(
+                &data,
+                &sandbox,
+                &packs,
+                &pack_id,
+                &session_id,
+                &item.scope,
+                &item.kind,
+                &item.text,
+            )?;
+            find_saved_memory_id(&panel, &item)
+        }
+        (Some(_), _) => {
+            return Err("Similar memory exists; choose merge, replace, or keep_new.".to_string())
+        }
+    };
+    companion::mark_memory_queue_item(&data_dir, &id, "saved", saved_id)?;
+    Ok(companion_queue_state(state.inner()))
 }
 
 #[tauri::command]
@@ -1555,7 +1594,8 @@ fn companion_ignore_memory_queue_item(
     id: String,
 ) -> Result<companion::CompanionMemoryQueueState, String> {
     let data_dir = state.data_dir.lock().unwrap().clone();
-    companion::mark_memory_queue_item(&data_dir, &id, "ignored", None)
+    companion::mark_memory_queue_item(&data_dir, &id, "ignored", None)?;
+    Ok(companion_queue_state(state.inner()))
 }
 
 #[tauri::command]
@@ -1570,20 +1610,37 @@ fn companion_save_all_memory_queue_items(
         .collect::<Vec<_>>();
     let (data, sandbox, packs, pack_id, session_id) = memory_context(state.inner());
     for item in pending {
-        let panel = agent::memory::add_entry(
-            &data,
-            &sandbox,
-            &packs,
-            &pack_id,
-            &session_id,
-            &item.scope,
-            &item.kind,
-            &item.text,
-        )?;
-        let saved_id = find_saved_memory_id(&panel, &item);
+        let panel = agent::memory::panel_state(&data, &sandbox, &packs, &pack_id, &session_id);
+        let duplicate = find_similar_memory_entry(&panel, &item);
+        let saved_id = if let Some(existing) = duplicate {
+            let merged = merge_memory_text(&existing.text, &item.text);
+            agent::memory::update_entry(
+                &data,
+                &sandbox,
+                &packs,
+                &pack_id,
+                &session_id,
+                &existing.id,
+                &item.kind,
+                &merged,
+            )?;
+            Some(existing.id)
+        } else {
+            let panel = agent::memory::add_entry(
+                &data,
+                &sandbox,
+                &packs,
+                &pack_id,
+                &session_id,
+                &item.scope,
+                &item.kind,
+                &item.text,
+            )?;
+            find_saved_memory_id(&panel, &item)
+        };
         companion::mark_memory_queue_item(&data_dir, &item.id, "saved", saved_id)?;
     }
-    Ok(companion::memory_queue_state(&data_dir))
+    Ok(companion_queue_state(state.inner()))
 }
 
 #[tauri::command]
@@ -1600,7 +1657,7 @@ fn companion_ignore_all_memory_queue_items(
     for id in pending_ids {
         companion::mark_memory_queue_item(&data_dir, &id, "ignored", None)?;
     }
-    Ok(companion::memory_queue_state(&data_dir))
+    Ok(companion_queue_state(state.inner()))
 }
 
 #[tauri::command]
@@ -1620,7 +1677,25 @@ fn companion_undo_memory_queue_item(
         .ok_or_else(|| "Saved memory id is not available for undo.".to_string())?;
     let (data, sandbox, packs, pack_id, session_id) = memory_context(state.inner());
     agent::memory::delete_entry(&data, &sandbox, &packs, &pack_id, &session_id, &memory_id)?;
-    companion::mark_memory_queue_item(&data_dir, &id, "pending", None)
+    companion::mark_memory_queue_item(&data_dir, &id, "pending", None)?;
+    Ok(companion_queue_state(state.inner()))
+}
+
+fn companion_queue_state(state: &AppState) -> companion::CompanionMemoryQueueState {
+    let data_dir = state.data_dir.lock().unwrap().clone();
+    let (data, sandbox, packs, pack_id, session_id) = memory_context(state);
+    let panel = agent::memory::panel_state(&data, &sandbox, &packs, &pack_id, &session_id);
+    let mut queue = companion::memory_queue_state(&data_dir);
+    for item in &mut queue.items {
+        if item.status != "pending" {
+            continue;
+        }
+        if let Some(existing) = find_similar_memory_entry(&panel, item) {
+            item.duplicate_memory_id = Some(existing.id);
+            item.duplicate_memory_text = Some(existing.text);
+        }
+    }
+    queue
 }
 
 fn find_saved_memory_id(
@@ -1635,6 +1710,73 @@ fn find_saved_memory_id(
         })
         .max_by_key(|entry| entry.line)
         .map(|entry| entry.id.clone())
+}
+
+fn find_similar_memory_entry(
+    panel: &agent::memory::MemoryPanelState,
+    item: &companion::CompanionMemoryQueueItem,
+) -> Option<agent::memory::MemoryEntry> {
+    panel
+        .entries
+        .iter()
+        .filter(|entry| entry.scope == item.scope)
+        .find(|entry| memory_text_similar(&entry.text, &item.text))
+        .cloned()
+}
+
+fn memory_text_similar(a: &str, b: &str) -> bool {
+    let a_key = normalize_memory_text_key(a);
+    let b_key = normalize_memory_text_key(b);
+    if a_key.is_empty() || b_key.is_empty() {
+        return false;
+    }
+    if a_key == b_key
+        || (a_key.len() > 14 && b_key.contains(&a_key))
+        || (b_key.len() > 14 && a_key.contains(&b_key))
+    {
+        return true;
+    }
+    let a_words = a_key
+        .split_whitespace()
+        .collect::<std::collections::HashSet<_>>();
+    let b_words = b_key
+        .split_whitespace()
+        .collect::<std::collections::HashSet<_>>();
+    if a_words.len() < 3 || b_words.len() < 3 {
+        return false;
+    }
+    let intersection = a_words.intersection(&b_words).count();
+    let union = a_words.union(&b_words).count().max(1);
+    (intersection as f32 / union as f32) >= 0.72
+}
+
+fn normalize_memory_text_key(value: &str) -> String {
+    value
+        .trim()
+        .trim_start_matches('-')
+        .trim()
+        .trim_start_matches("[user]")
+        .trim_start_matches("[project]")
+        .trim_start_matches("[session]")
+        .trim_start_matches("[pack]")
+        .trim_start_matches("[preference]")
+        .trim_start_matches("[boundary]")
+        .trim_start_matches("[routine]")
+        .trim_start_matches("[stress]")
+        .trim_start_matches("[encouragement]")
+        .trim()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_ascii_lowercase()
+}
+
+fn merge_memory_text(existing: &str, incoming: &str) -> String {
+    if memory_text_similar(existing, incoming) {
+        incoming.to_string()
+    } else {
+        format!("{}; {}", existing.trim(), incoming.trim())
+    }
 }
 
 fn webdav_auth(req: reqwest::RequestBuilder, config: &WebDavConfig) -> reqwest::RequestBuilder {
