@@ -1535,7 +1535,7 @@ fn companion_save_memory_queue_item(
     let item = companion::pending_memory_queue_item(&data_dir, &id)
         .ok_or_else(|| format!("Unknown pending companion memory queue item: {id}"))?;
     let (data, sandbox, packs, pack_id, session_id) = memory_context(state.inner());
-    let _panel = agent::memory::add_entry(
+    let panel = agent::memory::add_entry(
         &data,
         &sandbox,
         &packs,
@@ -1545,7 +1545,8 @@ fn companion_save_memory_queue_item(
         &item.kind,
         &item.text,
     )?;
-    companion::mark_memory_queue_item(&data_dir, &id, "saved", None)
+    let saved_id = find_saved_memory_id(&panel, &item);
+    companion::mark_memory_queue_item(&data_dir, &id, "saved", saved_id)
 }
 
 #[tauri::command]
@@ -1555,6 +1556,85 @@ fn companion_ignore_memory_queue_item(
 ) -> Result<companion::CompanionMemoryQueueState, String> {
     let data_dir = state.data_dir.lock().unwrap().clone();
     companion::mark_memory_queue_item(&data_dir, &id, "ignored", None)
+}
+
+#[tauri::command]
+fn companion_save_all_memory_queue_items(
+    state: State<'_, AppState>,
+) -> Result<companion::CompanionMemoryQueueState, String> {
+    let data_dir = state.data_dir.lock().unwrap().clone();
+    let pending = companion::memory_queue_state(&data_dir)
+        .items
+        .into_iter()
+        .filter(|item| item.status == "pending")
+        .collect::<Vec<_>>();
+    let (data, sandbox, packs, pack_id, session_id) = memory_context(state.inner());
+    for item in pending {
+        let panel = agent::memory::add_entry(
+            &data,
+            &sandbox,
+            &packs,
+            &pack_id,
+            &session_id,
+            &item.scope,
+            &item.kind,
+            &item.text,
+        )?;
+        let saved_id = find_saved_memory_id(&panel, &item);
+        companion::mark_memory_queue_item(&data_dir, &item.id, "saved", saved_id)?;
+    }
+    Ok(companion::memory_queue_state(&data_dir))
+}
+
+#[tauri::command]
+fn companion_ignore_all_memory_queue_items(
+    state: State<'_, AppState>,
+) -> Result<companion::CompanionMemoryQueueState, String> {
+    let data_dir = state.data_dir.lock().unwrap().clone();
+    let pending_ids = companion::memory_queue_state(&data_dir)
+        .items
+        .into_iter()
+        .filter(|item| item.status == "pending")
+        .map(|item| item.id)
+        .collect::<Vec<_>>();
+    for id in pending_ids {
+        companion::mark_memory_queue_item(&data_dir, &id, "ignored", None)?;
+    }
+    Ok(companion::memory_queue_state(&data_dir))
+}
+
+#[tauri::command]
+fn companion_undo_memory_queue_item(
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<companion::CompanionMemoryQueueState, String> {
+    let data_dir = state.data_dir.lock().unwrap().clone();
+    let item = companion::memory_queue_state(&data_dir)
+        .items
+        .into_iter()
+        .find(|item| item.id == id && item.status == "saved")
+        .ok_or_else(|| format!("Unknown saved companion memory queue item: {id}"))?;
+    let memory_id = item
+        .saved_memory_id
+        .clone()
+        .ok_or_else(|| "Saved memory id is not available for undo.".to_string())?;
+    let (data, sandbox, packs, pack_id, session_id) = memory_context(state.inner());
+    agent::memory::delete_entry(&data, &sandbox, &packs, &pack_id, &session_id, &memory_id)?;
+    companion::mark_memory_queue_item(&data_dir, &id, "pending", None)
+}
+
+fn find_saved_memory_id(
+    panel: &agent::memory::MemoryPanelState,
+    item: &companion::CompanionMemoryQueueItem,
+) -> Option<String> {
+    panel
+        .entries
+        .iter()
+        .filter(|entry| {
+            entry.scope == item.scope && entry.kind == item.kind && entry.text == item.text
+        })
+        .max_by_key(|entry| entry.line)
+        .map(|entry| entry.id.clone())
 }
 
 fn webdav_auth(req: reqwest::RequestBuilder, config: &WebDavConfig) -> reqwest::RequestBuilder {
@@ -1875,6 +1955,9 @@ pub fn run() {
             companion_enqueue_memory_suggestion,
             companion_save_memory_queue_item,
             companion_ignore_memory_queue_item,
+            companion_save_all_memory_queue_items,
+            companion_ignore_all_memory_queue_items,
+            companion_undo_memory_queue_item,
             ocr_model_status,
             ocr_download_models,
             workflow_panel_state,

@@ -54,6 +54,8 @@ const PREVIEW_SETTINGS: Settings = {
   launch_on_startup: false,
   auto_memory_enabled: true,
   companion_enabled: true,
+  companion_memory_extraction_enabled: false,
+  companion_memory_extraction_scope: "recent_turn",
   companion_tone: "gentle",
   companion_mood: "neutral",
   companion_energy: "normal",

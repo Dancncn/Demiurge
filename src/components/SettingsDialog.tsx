@@ -878,12 +878,53 @@ export default function SettingsDialog({
     }
   };
 
+  const saveAllCompanionMemoryQueueItems = async () => {
+    setCompanionMemoryBusy(true);
+    setCompanionMemoryStatus("");
+    try {
+      setCompanionMemoryQueue(await api.companionSaveAllMemoryQueueItems());
+      setMemoryState(await api.memoryPanelState());
+      setCompanionMemoryStatus(t("settings.companion.memorySaved"));
+    } catch (err) {
+      setCompanionMemoryStatus(String(err));
+    } finally {
+      setCompanionMemoryBusy(false);
+    }
+  };
+
   const ignoreCompanionMemoryQueueItem = async (id: string) => {
     setCompanionMemoryBusy(true);
     setCompanionMemoryStatus("");
     try {
       setCompanionMemoryQueue(await api.companionIgnoreMemoryQueueItem(id));
       setCompanionMemoryStatus(t("settings.companion.memoryIgnored"));
+    } catch (err) {
+      setCompanionMemoryStatus(String(err));
+    } finally {
+      setCompanionMemoryBusy(false);
+    }
+  };
+
+  const ignoreAllCompanionMemoryQueueItems = async () => {
+    setCompanionMemoryBusy(true);
+    setCompanionMemoryStatus("");
+    try {
+      setCompanionMemoryQueue(await api.companionIgnoreAllMemoryQueueItems());
+      setCompanionMemoryStatus(t("settings.companion.memoryIgnored"));
+    } catch (err) {
+      setCompanionMemoryStatus(String(err));
+    } finally {
+      setCompanionMemoryBusy(false);
+    }
+  };
+
+  const undoCompanionMemoryQueueItem = async (id: string) => {
+    setCompanionMemoryBusy(true);
+    setCompanionMemoryStatus("");
+    try {
+      setCompanionMemoryQueue(await api.companionUndoMemoryQueueItem(id));
+      setMemoryState(await api.memoryPanelState());
+      setCompanionMemoryStatus(t("settings.companion.memoryUndone"));
     } catch (err) {
       setCompanionMemoryStatus(String(err));
     } finally {
@@ -1430,6 +1471,7 @@ export default function SettingsDialog({
       theme: normalizeTheme(form.theme),
       launch_on_startup: form.launch_on_startup,
       reasoning_effort: normalizeReasoningEffort(form.reasoning_effort),
+      companion_memory_extraction_scope: form.companion_memory_extraction_scope.trim() || "recent_turn",
       companion_tone: form.companion_tone.trim() || "gentle",
       companion_mood: form.companion_mood.trim() || "neutral",
       companion_energy: form.companion_energy.trim() || "normal",
@@ -2350,6 +2392,28 @@ export default function SettingsDialog({
                   </Section>
                   <Section title={t("settings.companion.memoryTitle")} description={t("settings.companion.memoryDesc")}>
                     <div className="grid gap-3">
+                      <div className="grid gap-3 rounded-lg border border-[#e2e5ea] bg-[#fbfcfd] p-3">
+                        <ToggleRow
+                          checked={form.companion_memory_extraction_enabled}
+                          title={t("settings.companion.extractEnabled")}
+                          description={t("settings.companion.extractEnabledDesc")}
+                          onChange={(checked) => set("companion_memory_extraction_enabled", checked)}
+                        />
+                        <div className="grid gap-3 md:grid-cols-[180px_minmax(0,1fr)]">
+                          <Field label={t("settings.companion.extractScope")}>
+                            <select
+                              className={inputCls}
+                              value={form.companion_memory_extraction_scope}
+                              onChange={(e) => set("companion_memory_extraction_scope", e.target.value)}
+                            >
+                              <option value="recent_turn">{t("settings.companion.extractScope.recentTurn")}</option>
+                            </select>
+                          </Field>
+                          <div className="rounded-md border border-[#e8ebef] bg-white p-3 text-[12px] leading-5 text-[#6f7782]">
+                            {t("settings.companion.extractAuditNote")}
+                          </div>
+                        </div>
+                      </div>
                       <div className="rounded-lg border border-[#e2e5ea] bg-[#fbfcfd] p-3">
                         <div className="flex flex-wrap items-center justify-between gap-2">
                           <div>
@@ -2365,6 +2429,27 @@ export default function SettingsDialog({
                               n: companionMemoryQueue?.pending_count ?? 0,
                             })}
                           </span>
+                        </div>
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          <button
+                            type="button"
+                            className={secondaryButtonCls}
+                            disabled={companionMemoryBusy || !(companionMemoryQueue?.pending_count ?? 0)}
+                            onClick={() => void saveAllCompanionMemoryQueueItems()}
+                          >
+                            {t("settings.companion.memorySaveAll")}
+                          </button>
+                          <button
+                            type="button"
+                            className={secondaryButtonCls}
+                            disabled={companionMemoryBusy || !(companionMemoryQueue?.pending_count ?? 0)}
+                            onClick={() => void ignoreAllCompanionMemoryQueueItems()}
+                          >
+                            {t("settings.companion.memoryIgnoreAll")}
+                          </button>
+                          <button type="button" className={secondaryButtonCls} onClick={() => setActiveTab("context")}>
+                            {t("settings.companion.memoryOpenPanel")}
+                          </button>
                         </div>
                         <div className="mt-3 grid gap-2">
                           {companionMemoryQueue?.items.length ? (
@@ -2398,6 +2483,18 @@ export default function SettingsDialog({
                                       onClick={() => void saveCompanionMemoryQueueItem(item.id)}
                                     >
                                       {t("settings.companion.memorySave")}
+                                    </button>
+                                  </div>
+                                )}
+                                {item.status === "saved" && item.saved_memory_id && (
+                                  <div className="mt-2 flex justify-end">
+                                    <button
+                                      type="button"
+                                      className={secondaryButtonCls}
+                                      disabled={companionMemoryBusy}
+                                      onClick={() => void undoCompanionMemoryQueueItem(item.id)}
+                                    >
+                                      {t("settings.companion.memoryUndo")}
                                     </button>
                                   </div>
                                 )}
