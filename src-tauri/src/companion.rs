@@ -620,7 +620,7 @@ pub async fn panel_state(state: &AppState) -> CompanionPanelState {
     } else {
         None
     };
-    let suggestions = build_suggestions(&settings, weather.as_ref());
+    let suggestions = build_suggestions(&settings, weather.as_ref(), recent_interaction_at);
     CompanionPanelState {
         enabled: settings.companion_enabled,
         privacy: CompanionPrivacyState {
@@ -792,6 +792,7 @@ async fn forecast(client: &reqwest::Client, place: &GeocodePlace) -> Result<Weat
 fn build_suggestions(
     settings: &Settings,
     weather: Option<&WeatherCard>,
+    recent_interaction_at: u64,
 ) -> Vec<CompanionSuggestion> {
     let mut items = Vec::new();
     if !settings.companion_enabled {
@@ -827,6 +828,11 @@ fn build_suggestions(
             });
         }
     }
+    items.extend(proactive_reminder_candidates(
+        settings,
+        weather,
+        recent_interaction_at,
+    ));
     if items.is_empty() {
         items.push(CompanionSuggestion {
             kind: "check_in".to_string(),
@@ -840,6 +846,52 @@ fn build_suggestions(
             .then_with(|| a.kind.cmp(&b.kind))
     });
     items.truncate(4);
+    items
+}
+
+fn proactive_reminder_candidates(
+    settings: &Settings,
+    weather: Option<&WeatherCard>,
+    recent_interaction_at: u64,
+) -> Vec<CompanionSuggestion> {
+    let mut items = Vec::new();
+    if settings.companion_focus == "focusing" {
+        items.push(CompanionSuggestion {
+            kind: "reminder_policy".to_string(),
+            priority: 1,
+            text: "专注状态下，主动提醒只留在卡片里，默认不发桌面通知。".to_string(),
+        });
+        return items;
+    }
+    if !settings.companion_do_not_disturb.trim().is_empty() {
+        items.push(CompanionSuggestion {
+            kind: "reminder_policy".to_string(),
+            priority: 1,
+            text: format!(
+                "免打扰偏好是 {}；桌面通知需要另外授权。",
+                settings.companion_do_not_disturb.trim()
+            ),
+        });
+    }
+    let now = now_millis();
+    let inactive_for_ms = now.saturating_sub(recent_interaction_at);
+    if recent_interaction_at > 0 && inactive_for_ms >= 4 * 60 * 60 * 1000 {
+        items.push(CompanionSuggestion {
+            kind: "reminder_time".to_string(),
+            priority: 1,
+            text: "有一阵没互动了，卡片里只留一个轻量候选：回来时先做一个小起手动作。".to_string(),
+        });
+    }
+    if matches!(
+        weather.map(|card| card.weather_code),
+        Some(61..=67 | 80..=82 | 95..=99)
+    ) {
+        items.push(CompanionSuggestion {
+            kind: "reminder_weather".to_string(),
+            priority: 1,
+            text: "天气候选只在卡片展示；出门前再确认降雨和通勤即可。".to_string(),
+        });
+    }
     items
 }
 
@@ -960,10 +1012,27 @@ mod tests {
             cached: false,
             fetched_at: 1,
         };
-        let suggestions = build_suggestions(&settings(), Some(&weather));
+        let suggestions = build_suggestions(&settings(), Some(&weather), now_millis());
         assert!(suggestions.len() <= 4);
         assert!(suggestions.iter().any(|item| item.kind == "mood"));
         assert!(suggestions.iter().any(|item| item.kind == "weather"));
+    }
+
+    #[test]
+    fn proactive_candidates_stay_card_scoped_and_low_frequency() {
+        let mut settings = settings();
+        settings.companion_focus = "available".to_string();
+        settings.companion_do_not_disturb = "23:00-08:00".to_string();
+        let candidates = proactive_reminder_candidates(
+            &settings,
+            None,
+            now_millis().saturating_sub(5 * 60 * 60 * 1000),
+        );
+        assert!(candidates.iter().any(|item| item.kind == "reminder_policy"));
+        assert!(candidates.iter().any(|item| item.kind == "reminder_time"));
+        assert!(candidates
+            .iter()
+            .all(|item| item.text.contains("卡片") || item.text.contains("通知")));
     }
 
     #[test]
