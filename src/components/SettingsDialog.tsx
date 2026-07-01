@@ -6,6 +6,7 @@ import type {
   AgentValidationResult,
   CompanionMemoryQueueState,
   CompanionMemorySuggestion,
+  CompanionPanelState,
   ConnectionTestResult,
   ContextPanelState,
   MemoryPanelState,
@@ -595,6 +596,7 @@ export default function SettingsDialog({
   const [memoryDrafts, setMemoryDrafts] = useState<Record<string, { kind: string; text: string }>>({});
   const [companionMemorySuggestions, setCompanionMemorySuggestions] = useState<CompanionMemorySuggestion[]>([]);
   const [companionMemoryQueue, setCompanionMemoryQueue] = useState<CompanionMemoryQueueState | null>(null);
+  const [companionState, setCompanionState] = useState<CompanionPanelState | null>(null);
   const [companionMemoryBusy, setCompanionMemoryBusy] = useState(false);
   const [companionMemoryStatus, setCompanionMemoryStatus] = useState("");
   const [webdavBusy, setWebdavBusy] = useState(false);
@@ -702,6 +704,14 @@ export default function SettingsDialog({
       },
       (err) => {
         if (!cancelled) setCompanionMemoryStatus(String(err));
+      },
+    );
+    void api.companionPanelState().then(
+      (state) => {
+        if (!cancelled) setCompanionState(state);
+      },
+      (err) => {
+        if (!cancelled) console.error("Failed to read companion state", err);
       },
     );
     void api.permissionPanelState().then(
@@ -925,6 +935,19 @@ export default function SettingsDialog({
       setCompanionMemoryQueue(await api.companionUndoMemoryQueueItem(id));
       setMemoryState(await api.memoryPanelState());
       setCompanionMemoryStatus(t("settings.companion.memoryUndone"));
+    } catch (err) {
+      setCompanionMemoryStatus(String(err));
+    } finally {
+      setCompanionMemoryBusy(false);
+    }
+  };
+
+  const clearWeatherGovernanceCache = async () => {
+    setCompanionMemoryBusy(true);
+    setCompanionMemoryStatus("");
+    try {
+      setCompanionState(await api.companionClearWeatherCache());
+      setCompanionMemoryStatus(t("settings.companion.weatherCacheCleared"));
     } catch (err) {
       setCompanionMemoryStatus(String(err));
     } finally {
@@ -2400,6 +2423,33 @@ export default function SettingsDialog({
                       </div>
                       <div className="rounded-lg border border-[#e2e5ea] bg-[#fbfcfd] p-3 text-[12px] leading-5 text-[#6f7782]">
                         {t("settings.companion.weatherPrivacy")}
+                      </div>
+                      <div className="rounded-lg border border-[#e2e5ea] bg-white p-3">
+                        <div className="flex flex-wrap items-start justify-between gap-3">
+                          <div className="text-[12px] leading-5 text-[#6f7782]">
+                            <div className="font-medium text-[#202124]">{t("settings.companion.weatherCacheTitle")}</div>
+                            <div>
+                              {t("settings.companion.weatherCacheSummary", {
+                                entries: companionState?.weather_cache.entries ?? 0,
+                                city: companionState?.weather_cache.active_city ?? "-",
+                                expires: companionState?.weather_cache.expires_at
+                                  ? formatTime(companionState.weather_cache.expires_at)
+                                  : "-",
+                              })}
+                            </div>
+                            {companionState?.weather_cache.last_error && (
+                              <div className="mt-1 text-[#b42318]">{companionState.weather_cache.last_error}</div>
+                            )}
+                          </div>
+                          <button
+                            type="button"
+                            className={secondaryButtonCls}
+                            disabled={companionMemoryBusy}
+                            onClick={() => void clearWeatherGovernanceCache()}
+                          >
+                            {t("settings.companion.weatherClearCache")}
+                          </button>
+                        </div>
                       </div>
                     </div>
                   </Section>
