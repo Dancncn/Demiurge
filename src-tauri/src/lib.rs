@@ -3,6 +3,7 @@ mod agent;
 mod companion;
 mod connection_tests;
 mod credentials;
+mod embed;
 mod llm;
 pub mod mcp;
 mod media;
@@ -18,6 +19,7 @@ mod voice;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
@@ -208,6 +210,15 @@ struct WebDavBackupFile {
     size: u64,
 }
 
+#[derive(Serialize)]
+struct WorkspaceState {
+    path: String,
+    name: String,
+    is_git: bool,
+    branch: Option<String>,
+    dirty: bool,
+}
+
 fn memory_context(state: &AppState) -> (PathBuf, PathBuf, PathBuf, String, String) {
     let data_dir = state.data_dir.lock().unwrap().clone();
     let sandbox_dir = state.sandbox_dir.lock().unwrap().clone();
@@ -279,6 +290,67 @@ fn effort_status(settings: &Settings) -> String {
 
 fn emit_settings_updated(app: &AppHandle, settings: &Settings) {
     let _ = app.emit("settings-updated", settings.clone());
+}
+
+fn handle_recall_slash(state: &AppState, query: &str) -> Result<String, String> {
+    if query.is_empty() {
+        return Ok(
+            "用法：/recall <查询> — 用当前角色包 Lorebook 做召回，返回 chunk 列表与分数。"
+                .to_string(),
+        );
+    }
+    let settings = state.settings.lock().unwrap().clone();
+    let pack_id = settings.current_pack.clone();
+    if pack_id.is_empty() {
+        return Err("未选择角色包".to_string());
+    }
+    let packs_dir = state.packs_dir.lock().unwrap().clone();
+    let data_dir = state.data_dir.lock().unwrap().clone();
+    let embed = crate::embed::provider_from_settings(&state.http, &settings);
+    let detail = pack::lorebook_recall_detail(
+        &packs_dir,
+        &data_dir,
+        &pack_id,
+        query,
+        10,
+        embed.as_deref(),
+        settings.hybrid_weight,
+    )?;
+    Ok(format_recall_detail(&detail))
+}
+
+fn format_recall_detail(detail: &pack::LoreRecallDetail) -> String {
+    let mut out = format!(
+        "Lorebook recall: `{}` ({} chunks indexed, {} hits)\n",
+        detail.query,
+        detail.total_chunks,
+        detail.hits.len()
+    );
+    if detail.hits.is_empty() {
+        out.push_str("无命中。");
+        return out;
+    }
+    for (i, hit) in detail.hits.iter().enumerate() {
+        let heading = hit
+            .heading
+            .as_deref()
+            .filter(|h| !h.is_empty())
+            .unwrap_or(&hit.title);
+        out.push_str(&format!(
+            "\n{}. score={:.1} — {}#{} / {}\n",
+            i + 1,
+            hit.score,
+            hit.source,
+            hit.chunk_index,
+            heading
+        ));
+        if !hit.matched_terms.is_empty() {
+            out.push_str(&format!("   matched: {}\n", hit.matched_terms.join(", ")));
+        }
+        let preview: String = hit.text.chars().take(200).collect();
+        out.push_str(&format!("   {preview}…\n"));
+    }
+    out
 }
 
 fn handle_effort_slash(app: &AppHandle, state: &AppState, text: &str) -> Result<String, String> {
@@ -394,6 +466,11 @@ async fn send(app: AppHandle, state: State<'_, AppState>, text: String) -> Resul
         Ok(())
     } else if trimmed == "/effort" || trimmed.starts_with("/effort ") {
         let body = handle_effort_slash(&app, st, trimmed)?;
+        events.assistant_done(body);
+        Ok(())
+    } else if trimmed == "/recall" || trimmed.starts_with("/recall ") {
+        let query = trimmed.trim_start_matches("/recall").trim();
+        let body = handle_recall_slash(st, query)?;
         events.assistant_done(body);
         Ok(())
     } else if trimmed == "/workflows" {
@@ -844,9 +921,11 @@ fn import_pack_zip(
     state: State<'_, AppState>,
     file_name: String,
     bytes: Vec<u8>,
-) -> Result<pack::PackManifest, String> {
+) -> Result<pack::PackImportResult, String> {
     let dir = state.packs_dir.lock().unwrap().clone();
-    pack::import_zip(&dir, &file_name, bytes)
+    let manifest = pack::import_zip(&dir, &file_name, bytes)?;
+    let warnings = pack::credit_warnings(&manifest);
+    Ok(pack::PackImportResult { manifest, warnings })
 }
 
 #[tauri::command]
@@ -873,12 +952,126 @@ fn preview_pack_lorebook(
 ) -> Result<String, String> {
     let packs_dir = state.packs_dir.lock().unwrap().clone();
     let data_dir = state.data_dir.lock().unwrap().clone();
+    let settings = state.settings.lock().unwrap().clone();
+    let embed = crate::embed::provider_from_settings(&state.http, &settings);
     Ok(pack::lorebook_context(
         &packs_dir,
         &data_dir,
         &id,
         Some(&query),
+        embed.as_deref(),
+        settings.hybrid_weight,
     ))
+}
+
+/// 导入 Live2D 模型文件夹到当前角色包的 live2d/ 子目录，并更新 manifest.live2d。
+#[tauri::command]
+fn import_pack_live2d_folder(
+    state: State<'_, AppState>,
+    pack_id: String,
+    src_dir: String,
+) -> Result<pack::PackManifest, String> {
+    let dir = state.packs_dir.lock().unwrap().clone();
+    pack::import_live2d_folder(&dir, &pack_id, &src_dir)
+}
+
+/// 解析当前角色包 Live2D 模型的绝对路径（前端用 convertFileSrc 转 asset URL）。
+#[tauri::command]
+fn resolve_pack_live2d_path(state: State<'_, AppState>, pack_id: String) -> Result<String, String> {
+    let dir = state.packs_dir.lock().unwrap().clone();
+    pack::resolve_live2d_model_path(&dir, &pack_id)
+}
+
+/// 移除角色包的 Live2D 模型（删 live2d/ 目录并清空 manifest.live2d）。
+#[tauri::command]
+fn remove_pack_live2d(
+    state: State<'_, AppState>,
+    pack_id: String,
+) -> Result<pack::PackManifest, String> {
+    let dir = state.packs_dir.lock().unwrap().clone();
+    pack::remove_live2d(&dir, &pack_id)
+}
+
+/// 在系统文件管理器中打开指定角色包目录。
+#[tauri::command]
+fn open_pack_dir(state: State<'_, AppState>, id: String) -> Result<(), String> {
+    let dir = state.packs_dir.lock().unwrap().clone().join(&id);
+    if !dir.is_dir() {
+        return Err(format!("角色包 `{id}` 不存在"));
+    }
+    tools::execute_open(&dir.to_string_lossy()).map(|_| ())
+}
+
+#[tauri::command]
+fn import_pack_lore_files(
+    state: State<'_, AppState>,
+    id: String,
+    files: Vec<pack::PackLoreFile>,
+) -> Result<pack::PackManifest, String> {
+    let dir = state.packs_dir.lock().unwrap().clone();
+    pack::import_pack_lore_files(&dir, &id, files)
+}
+
+#[tauri::command]
+fn list_pack_files(
+    state: State<'_, AppState>,
+    id: String,
+    sub_dir: Option<String>,
+) -> Result<Vec<pack::PackFileEntry>, String> {
+    let dir = state.packs_dir.lock().unwrap().clone();
+    pack::list_pack_files(&dir, &id, sub_dir.as_deref())
+}
+
+#[tauri::command]
+fn read_pack_file(
+    state: State<'_, AppState>,
+    id: String,
+    path: String,
+) -> Result<pack::PackFileContent, String> {
+    let dir = state.packs_dir.lock().unwrap().clone();
+    pack::read_pack_file(&dir, &id, &path)
+}
+
+#[tauri::command]
+fn lorebook_index_status(
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<pack::LoreIndexStatus, String> {
+    let packs_dir = state.packs_dir.lock().unwrap().clone();
+    let data_dir = state.data_dir.lock().unwrap().clone();
+    pack::lorebook_index_status(&packs_dir, &data_dir, &id)
+}
+
+#[tauri::command]
+fn lorebook_recall_detail(
+    state: State<'_, AppState>,
+    id: String,
+    query: String,
+    limit: Option<usize>,
+) -> Result<pack::LoreRecallDetail, String> {
+    let packs_dir = state.packs_dir.lock().unwrap().clone();
+    let data_dir = state.data_dir.lock().unwrap().clone();
+    let settings = state.settings.lock().unwrap().clone();
+    let embed = crate::embed::provider_from_settings(&state.http, &settings);
+    pack::lorebook_recall_detail(
+        &packs_dir,
+        &data_dir,
+        &id,
+        &query,
+        limit.unwrap_or(50),
+        embed.as_deref(),
+        settings.hybrid_weight,
+    )
+}
+
+#[tauri::command]
+fn lorebook_rebuild_index(
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<pack::LoreIndexStatus, String> {
+    let packs_dir = state.packs_dir.lock().unwrap().clone();
+    let data_dir = state.data_dir.lock().unwrap().clone();
+    pack::lorebook_rebuild_index(&packs_dir, &data_dir, &id)
 }
 
 #[tauri::command]
@@ -1073,6 +1266,23 @@ fn memory_dedupe_apply(
 ) -> Result<agent::memory::MemoryPanelState, String> {
     let (data, sandbox, packs, pack_id, session_id) = memory_context(state.inner());
     agent::memory::apply_dedupe(&data, &sandbox, &packs, &pack_id, &session_id)
+}
+
+#[tauri::command]
+fn memory_migrate_namespace(
+    state: State<'_, AppState>,
+    from_ns: String,
+    to_ns: String,
+) -> Result<agent::memory::MemoryPanelState, String> {
+    let (data, sandbox, packs, pack_id, session_id) = memory_context(state.inner());
+    agent::memory::migrate_namespace(&data, &sandbox, &from_ns, &to_ns)?;
+    Ok(agent::memory::panel_state(
+        &data,
+        &sandbox,
+        &packs,
+        &pack_id,
+        &session_id,
+    ))
 }
 
 // ---- 会话管理 ----
@@ -1496,6 +1706,45 @@ fn rename_session(state: State<'_, AppState>, id: String, title: String) -> Resu
 fn open_sandbox(state: State<'_, AppState>) -> Result<(), String> {
     let dir = state.sandbox_dir.lock().unwrap().clone();
     tools::execute_open(&dir.to_string_lossy()).map(|_| ())
+}
+
+#[tauri::command]
+fn workspace_state(state: State<'_, AppState>) -> WorkspaceState {
+    let dir = state.sandbox_dir.lock().unwrap().clone();
+    let name = dir
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("Workspace")
+        .to_string();
+
+    let branch_output = Command::new("git")
+        .args(["rev-parse", "--abbrev-ref", "HEAD"])
+        .current_dir(&dir)
+        .output();
+    let branch = branch_output.ok().and_then(|output| {
+        if !output.status.success() {
+            return None;
+        }
+        let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if text.is_empty() { None } else { Some(text) }
+    });
+
+    let dirty = Command::new("git")
+        .args(["status", "--porcelain"])
+        .current_dir(&dir)
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .map(|output| !String::from_utf8_lossy(&output.stdout).trim().is_empty())
+        .unwrap_or(false);
+
+    WorkspaceState {
+        path: dir.to_string_lossy().to_string(),
+        name,
+        is_git: branch.is_some(),
+        branch,
+        dirty,
+    }
 }
 
 #[tauri::command]
@@ -2077,6 +2326,7 @@ pub fn run() {
         .expect("failed to build reqwest::Client");
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .manage(AppState::new(http))
         .setup(|app| {
             if let Some(window) = app.get_webview_window("main") {
@@ -2143,9 +2393,19 @@ pub fn run() {
             mcp_set_server_enabled,
             list_packs,
             import_pack_zip,
+            open_pack_dir,
+            import_pack_lore_files,
+            list_pack_files,
+            read_pack_file,
+            lorebook_index_status,
+            lorebook_recall_detail,
+            lorebook_rebuild_index,
             read_pack_manifest_json,
             save_pack_manifest_json,
             preview_pack_lorebook,
+            import_pack_live2d_folder,
+            resolve_pack_live2d_path,
+            remove_pack_live2d,
             agent_panel_state,
             agent_template_json,
             agent_validate_json,
@@ -2162,6 +2422,7 @@ pub fn run() {
             memory_update_entry,
             memory_delete_entry,
             memory_dedupe_apply,
+            memory_migrate_namespace,
             list_sessions,
             session_stats,
             get_history,
@@ -2173,6 +2434,7 @@ pub fn run() {
             delete_session,
             rename_session,
             open_sandbox,
+            workspace_state,
             ocr_image_bytes,
             media_generate_image,
             media_synthesize_speech,

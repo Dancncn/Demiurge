@@ -62,6 +62,18 @@ fn default_auto_memory_enabled() -> bool {
     DEFAULT_AUTO_MEMORY_ENABLED
 }
 
+fn default_embedding_provider() -> String {
+    "none".to_string()
+}
+
+fn default_embedding_dims() -> usize {
+    1024
+}
+
+fn default_hybrid_weight() -> f32 {
+    0.5
+}
+
 fn default_companion_enabled() -> bool {
     DEFAULT_COMPANION_ENABLED
 }
@@ -297,6 +309,27 @@ pub struct Settings {
     pub reasoning_effort: ReasoningEffort,
     #[serde(default = "default_auto_memory_enabled")]
     pub auto_memory_enabled: bool,
+    /// 是否启用 Lorebook 向量召回（embedding 混合 RRF）。
+    #[serde(default)]
+    pub embedding_enabled: bool,
+    /// embedding provider 类型："none"（默认，纯 BM25）或 "remote"。
+    #[serde(default = "default_embedding_provider")]
+    pub embedding_provider: String,
+    /// 远程 embedding base URL（OpenAI 兼容，如 DashScope / OpenAI）。
+    #[serde(default)]
+    pub embedding_base_url: String,
+    /// 远程 embedding API Key。TODO: 后续接入凭据管理器，避免明文存 settings。
+    #[serde(default)]
+    pub embedding_api_key: String,
+    /// embedding 模型名（如 text-embedding-v3 / text-embedding-3-small）。
+    #[serde(default)]
+    pub embedding_model: String,
+    /// 输出向量维度，用于缓存失效判断。默认 1024。
+    #[serde(default = "default_embedding_dims")]
+    pub embedding_dims: usize,
+    /// 混合召回权重：0.0=纯稀疏，1.0=纯稠密，默认 0.5（RRF 融合）。
+    #[serde(default = "default_hybrid_weight")]
+    pub hybrid_weight: f32,
     #[serde(default = "default_companion_enabled")]
     pub companion_enabled: bool,
     #[serde(default = "default_companion_memory_extraction_enabled")]
@@ -388,6 +421,13 @@ impl Default for Settings {
             launch_on_startup: false,
             reasoning_effort: default_reasoning_effort(),
             auto_memory_enabled: DEFAULT_AUTO_MEMORY_ENABLED,
+            embedding_enabled: false,
+            embedding_provider: default_embedding_provider(),
+            embedding_base_url: String::new(),
+            embedding_api_key: String::new(),
+            embedding_model: String::new(),
+            embedding_dims: default_embedding_dims(),
+            hybrid_weight: default_hybrid_weight(),
             companion_enabled: DEFAULT_COMPANION_ENABLED,
             companion_memory_extraction_enabled: false,
             companion_memory_extraction_scope: default_companion_memory_extraction_scope(),

@@ -1,4 +1,5 @@
 //! 角色包加载 + 清单。MVP 文本版清单，格式预留可成长字段（Live2D / TTS / 表情等）。
+use crate::embed;
 use base64::{engine::general_purpose, Engine as _};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -17,6 +18,10 @@ const MAX_LORE_CHUNK_CHARS: usize = 1_200;
 const MAX_LORE_CONTEXT_CHARS: usize = 4_000;
 const MAX_LORE_CONTEXT_CHUNKS: usize = 4;
 const DEFAULT_LORE_EXTENSIONS: &[&str] = &["md", "markdown", "txt"];
+const MAX_PACK_READ_BYTES: u64 = 512 * 1024;
+const MAX_PACK_LIST_ENTRIES: usize = 1000;
+const MAX_LIVE2D_IMPORT_BYTES: u64 = 200 * 1024 * 1024;
+const MAX_LIVE2D_IMPORT_FILES: usize = 200;
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct PackManifest {
@@ -37,11 +42,63 @@ pub struct PackManifest {
     )]
     pub avatar_data_url: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub live2d: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub character: Option<CharacterCard>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub runtime: Option<CharacterRuntime>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub lorebook: Vec<LoreEntry>,
+    /// 素材授权/出处清单（avatar、persona、lore、voice 等）。导入时缺失会产出提示。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub credits: Vec<AssetCredit>,
+    /// 整包 license 声明（如 MIT、CC-BY-4.0 等）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub license: Option<String>,
+}
+
+/// 单条素材授权记录：asset 是包内相对路径或字段名，author/source/license 可选。
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+pub struct AssetCredit {
+    pub asset: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub author: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub license: Option<String>,
+}
+
+/// 包内文件浏览条目。
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct PackFileEntry {
+    pub path: String,
+    pub is_dir: bool,
+    pub size: u64,
+    pub modified_ms: u64,
+}
+
+/// 包内文件读取结果：文本文件返 text，图片返 base64 data URL。
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct PackFileContent {
+    pub path: String,
+    pub text: Option<String>,
+    pub data_url: Option<String>,
+    pub truncated: bool,
+}
+
+/// 批量 lore 导入入参。
+#[derive(Deserialize, Clone, Debug)]
+pub struct PackLoreFile {
+    pub name: String,
+    pub bytes: Vec<u8>,
+}
+
+/// zip 导入结果：manifest + 授权缺失等非阻塞警告。
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct PackImportResult {
+    pub manifest: PackManifest,
+    pub warnings: Vec<String>,
 }
 
 pub struct Pack {
@@ -188,6 +245,9 @@ struct LoreIndexCache {
     pack_id: String,
     files: Vec<LoreFileSignature>,
     chunks: Vec<LoreChunk>,
+    /// 生成 chunks.embeddings 所用的 provider+model 标识；切换 model 时失效重算。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    embedding_model: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -200,6 +260,9 @@ struct LoreChunk {
     priority: f32,
     chunk_index: usize,
     text: String,
+    /// 向量召回用的稠密向量缓存（按 embedding_model 失效）。None 表示尚未计算。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    embedding: Option<Vec<f32>>,
 }
 
 #[derive(Clone, Debug)]
@@ -223,12 +286,54 @@ struct MarkdownMeta {
 struct LoreHit {
     score: f32,
     chunk: LoreChunk,
+    /// 向量召回的余弦相似度（provider 可用时填充），供召回面板展示。
+    #[allow(dead_code)]
+    dense_score: Option<f32>,
 }
 
 struct LoreSearchStats {
     document_count: usize,
     average_len: f32,
     document_frequency: HashMap<String, usize>,
+}
+
+/// Lorebook 索引状态（供前端召回可视化面板）。
+#[derive(Serialize, Clone, Debug)]
+pub struct LoreIndexStatus {
+    pub pack_id: String,
+    pub cache_exists: bool,
+    pub version: Option<u32>,
+    pub file_count: usize,
+    pub chunk_count: usize,
+    /// 当前磁盘文件签名与缓存是否不一致（需要重建）。
+    pub files_stale: bool,
+    pub last_built_ms: u64,
+}
+
+/// 单条召回详情（含命中关键词）。
+#[derive(Serialize, Clone, Debug)]
+pub struct LoreHitDetail {
+    pub score: f32,
+    pub source: String,
+    pub title: String,
+    pub heading: Option<String>,
+    pub chunk_index: usize,
+    pub text: String,
+    pub tags: Vec<String>,
+    pub keywords: Vec<String>,
+    pub priority: f32,
+    pub matched_terms: Vec<String>,
+    /// 向量召回余弦相似度（provider 可用时填充）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dense_score: Option<f32>,
+}
+
+/// 召回详情结果。
+#[derive(Serialize, Clone, Debug)]
+pub struct LoreRecallDetail {
+    pub query: String,
+    pub total_chunks: usize,
+    pub hits: Vec<LoreHitDetail>,
 }
 
 /// 内置的通用人格（通用、不绑定任何特定角色）。首启动时落地为 packs/default。
@@ -393,19 +498,161 @@ pub fn skill_policy(packs_dir: &Path, id: &str) -> PackSkillPolicy {
         .unwrap_or_default()
 }
 
+/// 读取角色包声明的 memory namespace；返回 None 表示走默认（共享）路径。
+/// 非 default 的 namespace 会让 memory 模块把 user/project 记忆文件隔离到带后缀的路径。
+pub fn manifest_namespace(packs_dir: &Path, id: &str) -> Option<String> {
+    let manifest = read_manifest_no_avatar(&pack_dir(packs_dir, id)).ok()?;
+    let ns = manifest
+        .runtime
+        .and_then(|runtime| runtime.memory)
+        .and_then(|memory| memory.namespace)?;
+    let ns = ns.trim();
+    if ns.is_empty() || ns == "default" {
+        None
+    } else {
+        Some(ns.to_string())
+    }
+}
+
+/// 读取角色卡 runtime.permissions 偏好（tool → 偏好字符串，如 "allow"/"deny"/"ask_once"/"ask_every_time"）。
+/// 供 permission overlay 把角色卡偏好升级为可执行覆盖，而非仅提示词建议。
+pub fn permission_preferences(packs_dir: &Path, id: &str) -> BTreeMap<String, String> {
+    let Ok(manifest) = read_manifest_no_avatar(&pack_dir(packs_dir, id)) else {
+        return BTreeMap::new();
+    };
+    manifest
+        .runtime
+        .map(|runtime| runtime.permissions)
+        .unwrap_or_default()
+}
+
 pub fn lorebook_context(
     packs_dir: &Path,
     data_dir: &Path,
     id: &str,
     query: Option<&str>,
+    provider: Option<&dyn embed::EmbeddingProvider>,
+    hybrid_weight: f32,
 ) -> String {
     let Some(query) = query.map(str::trim).filter(|value| !value.is_empty()) else {
         return String::new();
     };
-    let Ok(chunks) = load_lore_index(packs_dir, data_dir, id) else {
+    let Ok((mut chunks, cache_path)) = load_lore_index_with_cache(packs_dir, data_dir, id) else {
         return String::new();
     };
-    render_lore_hits(select_lore_hits(&chunks, query))
+    if let Some(p) = provider {
+        let model_key = format!("{}:{}", p.name(), p.dims());
+        ensure_chunk_embeddings(&mut chunks, p, &model_key, &cache_path);
+        render_lore_hits(select_lore_hits(&chunks, query, Some(p), hybrid_weight))
+    } else {
+        render_lore_hits(select_lore_hits(&chunks, query, None, hybrid_weight))
+    }
+}
+
+/// Lorebook 索引状态：缓存是否存在、文件数、chunk 数、是否过期。
+pub fn lorebook_index_status(
+    packs_dir: &Path,
+    data_dir: &Path,
+    id: &str,
+) -> Result<LoreIndexStatus, String> {
+    let dir = pack_dir(packs_dir, id);
+    let manifest = read_manifest_no_avatar(&dir)?;
+    let cache_path = lore_index_cache_path(data_dir, id);
+    let mut status = LoreIndexStatus {
+        pack_id: id.to_string(),
+        cache_exists: cache_path.exists(),
+        version: None,
+        file_count: 0,
+        chunk_count: 0,
+        files_stale: false,
+        last_built_ms: 0,
+    };
+    if manifest.lorebook.is_empty() {
+        return Ok(status);
+    }
+    let current_files = lore_file_signatures(&dir, &manifest)?;
+    status.file_count = current_files.len();
+    let last_built_ms = || {
+        fs::metadata(&cache_path)
+            .ok()
+            .and_then(|m| m.modified().ok())
+            .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0)
+    };
+    if let Ok(text) = fs::read_to_string(&cache_path) {
+        if let Ok(cache) = serde_json::from_str::<LoreIndexCache>(&text) {
+            status.version = Some(cache.version);
+            status.chunk_count = cache.chunks.len();
+            status.files_stale = cache.version != LORE_INDEX_VERSION
+                || cache.pack_id != id
+                || cache.files != current_files;
+            status.last_built_ms = last_built_ms();
+        }
+    } else {
+        status.files_stale = !current_files.is_empty();
+    }
+    Ok(status)
+}
+
+/// 召回详情：全量打分（按 score 降序，截断到 limit），每条含命中关键词。
+pub fn lorebook_recall_detail(
+    packs_dir: &Path,
+    data_dir: &Path,
+    id: &str,
+    query: &str,
+    limit: usize,
+    provider: Option<&dyn embed::EmbeddingProvider>,
+    hybrid_weight: f32,
+) -> Result<LoreRecallDetail, String> {
+    let (mut chunks, cache_path) = load_lore_index_with_cache(packs_dir, data_dir, id)?;
+    let total = chunks.len();
+    if let Some(p) = provider {
+        let model_key = format!("{}:{}", p.name(), p.dims());
+        ensure_chunk_embeddings(&mut chunks, p, &model_key, &cache_path);
+    }
+    let terms = query_terms(query);
+    let norm = normalize_search_text(query);
+    let mut hits = score_all_lore_hits(&chunks, query, provider, hybrid_weight);
+    if limit > 0 {
+        hits.truncate(limit);
+    }
+    let details = hits
+        .iter()
+        .map(|hit| {
+            let matched = matched_terms_for(&hit.chunk, &norm, &terms);
+            LoreHitDetail {
+                score: hit.score,
+                source: hit.chunk.source.clone(),
+                title: hit.chunk.title.clone(),
+                heading: hit.chunk.heading.clone(),
+                chunk_index: hit.chunk.chunk_index,
+                text: hit.chunk.text.clone(),
+                tags: hit.chunk.tags.clone(),
+                keywords: hit.chunk.keywords.clone(),
+                priority: hit.chunk.priority,
+                matched_terms: matched,
+                dense_score: hit.dense_score,
+            }
+        })
+        .collect();
+    Ok(LoreRecallDetail {
+        query: query.to_string(),
+        total_chunks: total,
+        hits: details,
+    })
+}
+
+/// 删除缓存并重建索引，返回新状态。
+pub fn lorebook_rebuild_index(
+    packs_dir: &Path,
+    data_dir: &Path,
+    id: &str,
+) -> Result<LoreIndexStatus, String> {
+    let cache_path = lore_index_cache_path(data_dir, id);
+    let _ = fs::remove_file(&cache_path);
+    let _ = load_lore_index(packs_dir, data_dir, id)?;
+    lorebook_index_status(packs_dir, data_dir, id)
 }
 
 pub fn import_zip(
@@ -493,6 +740,483 @@ pub fn save_manifest_json(
     read_manifest_with_avatar(&dir)
 }
 
+/// 计算 manifest 的授权缺失警告（非阻塞）。avatar/persona/lore 无 credit 记录时提示。
+pub fn credit_warnings(manifest: &PackManifest) -> Vec<String> {
+    let mut warnings = Vec::new();
+    if manifest.credits.is_empty() && manifest.license.is_none() {
+        warnings
+            .push("角色包未声明任何素材 credits / license，请确认导入素材已获得授权。".to_string());
+    }
+    let credited: HashSet<&str> = manifest.credits.iter().map(|c| c.asset.as_str()).collect();
+    let mut check = |asset: Option<&str>, label: &str| {
+        if let Some(asset) = asset {
+            if !credited.contains(asset) {
+                warnings.push(format!("{label}（{asset}）缺少 credits 记录"));
+            }
+        }
+    };
+    check(manifest.avatar.as_deref(), "avatar");
+    check(Some(manifest.persona.as_str()), "persona");
+    for lore in &manifest.lorebook {
+        check(Some(&lore.path), "lorebook");
+    }
+    warnings
+}
+
+/// 批量导入 lore 文件到 <pack>/<lore_root>/。文件名取 bare file_name，扩展名按 lore entry 或默认。
+pub fn import_pack_lore_files(
+    packs_dir: &Path,
+    id: &str,
+    files: Vec<PackLoreFile>,
+) -> Result<PackManifest, String> {
+    let dir = pack_dir(packs_dir, id);
+    if !dir.is_dir() {
+        return Err(format!("角色包 `{id}` 不存在"));
+    }
+    let manifest = read_manifest_no_avatar(&dir)?;
+    if files.is_empty() {
+        return Err("没有可导入的 lore 文件".to_string());
+    }
+    if files.len() > MAX_LORE_INDEX_FILES {
+        return Err(format!("lore 文件过多：最多 {MAX_LORE_INDEX_FILES} 个"));
+    }
+    let lore_root = manifest
+        .lorebook
+        .first()
+        .and_then(|e| {
+            Path::new(&e.path)
+                .parent()
+                .filter(|p| !p.as_os_str().is_empty())
+                .map(Path::to_path_buf)
+        })
+        .unwrap_or_else(|| PathBuf::from("lore"));
+    let dest_root = resolve_pack_file(&dir, &lore_root.to_string_lossy(), "lorebook.path")?;
+    fs::create_dir_all(&dest_root).map_err(|e| format!("创建 lore 目录失败：{e}"))?;
+    for file in &files {
+        let name = Path::new(&file.name)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .ok_or_else(|| format!("lore 文件名非法：{}", file.name))?
+            .to_string();
+        let ext_ok = manifest
+            .lorebook
+            .iter()
+            .any(|e| validate_lore_file_extension(&name, e).is_ok())
+            || {
+                let ext = Path::new(&name)
+                    .extension()
+                    .and_then(|v| v.to_str())
+                    .map(|v| v.to_ascii_lowercase())
+                    .unwrap_or_default();
+                DEFAULT_LORE_EXTENSIONS.iter().any(|d| *d == ext)
+            };
+        if !ext_ok {
+            return Err(format!("lore 文件扩展名不在允许列表：{name}"));
+        }
+        if file.bytes.len() as u64 > MAX_LORE_FILE_BYTES {
+            return Err(format!(
+                "lore 文件过大（>{MAX_LORE_FILE_BYTES} 字节）：{name}"
+            ));
+        }
+        fs::write(dest_root.join(&name), &file.bytes)
+            .map_err(|e| format!("写入 lore 文件 {name} 失败：{e}"))?;
+    }
+    read_manifest_with_avatar(&dir)
+}
+
+/// 导入 Live2D 模型文件夹到 <pack>/live2d/。源目录顶层须有且仅有一个 .model3.json。
+/// 复制全部文件后更新 manifest.live2d 指向该 .model3.json（相对路径）。
+pub fn import_live2d_folder(
+    packs_dir: &Path,
+    pack_id: &str,
+    src_dir: &str,
+) -> Result<PackManifest, String> {
+    let pack_path = pack_dir(packs_dir, pack_id);
+    if !pack_path.is_dir() {
+        return Err(format!("角色包 `{pack_id}` 不存在"));
+    }
+    let src = Path::new(src_dir);
+    if !src.is_dir() {
+        return Err("Live2D 模型源目录不存在".to_string());
+    }
+
+    // 源目录顶层必须有且仅有一个 .model3.json
+    let mut model3_files: Vec<String> = Vec::new();
+    for entry in fs::read_dir(src).map_err(|e| format!("读取源目录失败：{e}"))? {
+        let entry = entry.map_err(|e| format!("读取目录条目失败：{e}"))?;
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name.ends_with(".model3.json") {
+            model3_files.push(name);
+        }
+    }
+    match model3_files.len() {
+        0 => return Err("源目录中没有 .model3.json 文件".to_string()),
+        1 => {}
+        _ => {
+            return Err(format!(
+                "源目录中有多个 .model3.json 文件：{}",
+                model3_files.join(", ")
+            ))
+        }
+    }
+    let model3_name = model3_files[0].clone();
+
+    // 清空并重建 <pack>/live2d/
+    let dest = pack_path.join("live2d");
+    if dest.exists() {
+        fs::remove_dir_all(&dest).map_err(|e| format!("清理旧 Live2D 目录失败：{e}"))?;
+    }
+    fs::create_dir_all(&dest).map_err(|e| format!("创建 Live2D 目录失败：{e}"))?;
+
+    let mut total_bytes = 0u64;
+    let mut file_count = 0usize;
+    copy_live2d_dir_recursive(src, &dest, &mut total_bytes, &mut file_count)?;
+
+    // 规范化文件名为 ASCII 并重写 model3.json 的 FileReferences。
+    // 规避 Tauri asset 协议对 CJK 路径的编码 bug（convertFileSrc 不正确 percent-encode 非 ASCII，
+    // 引擎 fetch sibling 时报 Network error）。
+    let model3_name = normalize_live2d_model_files(&dest, &model3_name)?;
+
+    // 更新 manifest
+    let mut manifest = read_manifest_no_avatar(&pack_path)?;
+    manifest.live2d = Some(format!("live2d/{model3_name}"));
+    manifest.avatar_data_url = None;
+    validate_manifest_paths(&manifest)?;
+    validate_pack_files(&pack_path, &manifest)?;
+    let text = serde_json::to_string_pretty(&manifest)
+        .map_err(|e| format!("序列化角色卡清单失败：{e}"))?;
+    fs::write(pack_path.join("manifest.json"), format!("{text}\n"))
+        .map_err(|e| format!("保存角色卡清单失败：{e}"))?;
+    read_manifest_with_avatar(&pack_path)
+}
+
+fn copy_live2d_dir_recursive(
+    src: &Path,
+    dest: &Path,
+    total_bytes: &mut u64,
+    file_count: &mut usize,
+) -> Result<(), String> {
+    for entry in fs::read_dir(src).map_err(|e| format!("读取目录失败：{e}"))? {
+        let entry = entry.map_err(|e| format!("读取条目失败：{e}"))?;
+        let file_type = entry
+            .file_type()
+            .map_err(|e| format!("读取文件类型失败：{e}"))?;
+        let dest_path = dest.join(entry.file_name());
+        if file_type.is_dir() {
+            fs::create_dir_all(&dest_path).map_err(|e| format!("创建子目录失败：{e}"))?;
+            copy_live2d_dir_recursive(&entry.path(), &dest_path, total_bytes, file_count)?;
+        } else if file_type.is_file() {
+            *file_count += 1;
+            if *file_count > MAX_LIVE2D_IMPORT_FILES {
+                return Err(format!(
+                    "Live2D 文件过多：最多 {MAX_LIVE2D_IMPORT_FILES} 个文件"
+                ));
+            }
+            let meta = entry
+                .metadata()
+                .map_err(|e| format!("读取文件元数据失败：{e}"))?;
+            *total_bytes = total_bytes.saturating_add(meta.len());
+            if *total_bytes > MAX_LIVE2D_IMPORT_BYTES {
+                return Err(format!(
+                    "Live2D 模型过大：最大允许 {} MB",
+                    MAX_LIVE2D_IMPORT_BYTES / 1024 / 1024
+                ));
+            }
+            fs::copy(entry.path(), &dest_path).map_err(|e| format!("复制文件失败：{e}"))?;
+        }
+    }
+    Ok(())
+}
+
+/// 把 Live2D 模型文件名规范化为 ASCII，并重写 model3.json 的 FileReferences。
+///
+/// 规避 Tauri asset 协议对 CJK 路径的编码 bug：`convertFileSrc` 不正确 percent-encode
+/// 非 ASCII 路径，导致 webview fetch sibling（.moc3 / 纹理 / 物理 / cdi）时报 Network error。
+/// 把 `三月七.moc3` 这类文件名改成 `model.moc3`，CJK 子目录改成 `textures_<n>`，
+/// 并同步重写 model3.json 里的引用，让 asset URL 全 ASCII。
+///
+/// 当前处理 FileReferences 的 Moc / Textures / Physics / DisplayInfo / UserData；
+/// Motions / Expressions 里的 CJK 文件名暂未处理（本模型无此情况，后续按需扩展）。
+/// 返回新的 model3.json 文件名（相对 dest）。
+fn normalize_live2d_model_files(dest: &Path, original_model3_name: &str) -> Result<String, String> {
+    let model3_path = dest.join(original_model3_name);
+    let raw = fs::read_to_string(&model3_path)
+        .map_err(|e| format!("读取 model3.json 失败：{e}"))?;
+    let mut json: serde_json::Value =
+        serde_json::from_str(&raw).map_err(|e| format!("解析 model3.json 失败：{e}"))?;
+
+    if let Some(refs) = json.get_mut("FileReferences").and_then(|v| v.as_object_mut()) {
+        // 单文件引用：Moc / Physics / DisplayInfo / UserData
+        for (key, ascii) in [
+            ("Moc", "model.moc3"),
+            ("Physics", "model.physics3.json"),
+            ("DisplayInfo", "model.cdi3.json"),
+            ("UserData", "model.userdata3.json"),
+        ] {
+            if let Some(v) = refs.get_mut(key) {
+                if let Some(p) = v.as_str().map(|s| s.to_string()) {
+                    let new = rename_file_ascii(dest, &p, ascii)?;
+                    *v = serde_json::Value::String(new);
+                }
+            }
+        }
+        // 纹理数组：路径可能含 CJK 子目录（如 "三月七.4096/texture_00.png"）
+        if let Some(texs) = refs.get_mut("Textures").and_then(|v| v.as_array_mut()) {
+            let mut tex_idx = 0usize;
+            for tex in texs.iter_mut() {
+                if let Some(p) = tex.as_str().map(|s| s.to_string()) {
+                    let new = rename_texture_path_ascii(dest, &p, &mut tex_idx)?;
+                    *tex = serde_json::Value::String(new);
+                }
+            }
+        }
+        // TODO: Motions / Expressions 里的 CJK 文件名未处理
+    }
+
+    // 重写 model3.json 到 ASCII 名 model.model3.json，删原文件
+    let new_name = "model.model3.json";
+    let new_path = dest.join(new_name);
+    let text = serde_json::to_string_pretty(&json)
+        .map_err(|e| format!("序列化 model3.json 失败：{e}"))?;
+    fs::write(&new_path, format!("{text}\n"))
+        .map_err(|e| format!("写入 model3.json 失败：{e}"))?;
+    if original_model3_name != new_name {
+        let _ = fs::remove_file(&model3_path);
+    }
+    Ok(new_name.to_string())
+}
+
+/// 把 dest 下的 rel 文件重命名为 ascii_name（仅当 rel 含非 ASCII）。返回新相对路径。
+fn rename_file_ascii(dest: &Path, rel: &str, ascii_name: &str) -> Result<String, String> {
+    if !rel.chars().any(|c| !c.is_ascii()) {
+        return Ok(rel.to_string());
+    }
+    let old_path = dest.join(rel);
+    let new_path = dest.join(ascii_name);
+    if old_path.exists() {
+        fs::rename(&old_path, &new_path).map_err(|e| format!("重命名 {rel} 失败：{e}"))?;
+    }
+    Ok(ascii_name.to_string())
+}
+
+/// 规范化纹理路径：CJK 目录段 → textures_<idx>，CJK 文件名 → texture_<idx>.<ext>。
+fn rename_texture_path_ascii(dest: &Path, rel: &str, idx: &mut usize) -> Result<String, String> {
+    if !rel.chars().any(|c| !c.is_ascii()) {
+        return Ok(rel.to_string());
+    }
+    let parts: Vec<&str> = rel.split('/').collect();
+    let mut new_parts: Vec<String> = Vec::new();
+    let mut cur = dest.to_path_buf();
+    for (i, part) in parts.iter().enumerate() {
+        if part.chars().any(|c| !c.is_ascii()) {
+            if i == parts.len() - 1 {
+                // 文件名 CJK
+                let ext = Path::new(part)
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .unwrap_or("png");
+                let new = format!("texture_{idx}.{ext}");
+                let old_f = cur.join(part);
+                let new_f = cur.join(&new);
+                if old_f.exists() {
+                    fs::rename(&old_f, &new_f)
+                        .map_err(|e| format!("重命名纹理 {rel} 失败：{e}"))?;
+                }
+                new_parts.push(new);
+            } else {
+                // 目录段 CJK
+                let new = format!("textures_{idx}");
+                let old_d = cur.join(part);
+                let new_d = cur.join(&new);
+                if old_d.exists() {
+                    fs::rename(&old_d, &new_d)
+                        .map_err(|e| format!("重命名目录 {part} 失败：{e}"))?;
+                }
+                cur = new_d;
+                new_parts.push(new);
+            }
+        } else {
+            cur = cur.join(part);
+            new_parts.push(part.to_string());
+        }
+    }
+    *idx += 1;
+    Ok(new_parts.join("/"))
+}
+
+/// 解析当前角色包 Live2D 模型的绝对路径（供前端 convertFileSrc）。未配置或缺失则报错。
+pub fn resolve_live2d_model_path(packs_dir: &Path, pack_id: &str) -> Result<String, String> {
+    let dir = pack_dir(packs_dir, pack_id);
+    if !dir.is_dir() {
+        return Err(format!("角色包 `{pack_id}` 不存在"));
+    }
+    let manifest = read_manifest_no_avatar(&dir)?;
+    let live2d = manifest
+        .live2d
+        .as_deref()
+        .ok_or_else(|| "当前角色包未配置 Live2D 模型".to_string())?;
+    let path = resolve_pack_file(&dir, live2d, "live2d")?;
+    if !path.exists() {
+        return Err(format!("Live2D 模型文件不存在：{live2d}"));
+    }
+    Ok(path.to_string_lossy().to_string())
+}
+
+/// 移除角色包的 Live2D 模型：删 <pack>/live2d/ 目录并清空 manifest.live2d。
+pub fn remove_live2d(packs_dir: &Path, pack_id: &str) -> Result<PackManifest, String> {
+    let dir = pack_dir(packs_dir, pack_id);
+    if !dir.is_dir() {
+        return Err(format!("角色包 `{pack_id}` 不存在"));
+    }
+    let mut manifest = read_manifest_no_avatar(&dir)?;
+    if manifest.live2d.is_none() {
+        return read_manifest_with_avatar(&dir);
+    }
+    let live2d_dir = dir.join("live2d");
+    if live2d_dir.exists() {
+        fs::remove_dir_all(&live2d_dir).map_err(|e| format!("删除 Live2D 目录失败：{e}"))?;
+    }
+    manifest.live2d = None;
+    manifest.avatar_data_url = None;
+    validate_manifest_paths(&manifest)?;
+    let text = serde_json::to_string_pretty(&manifest)
+        .map_err(|e| format!("序列化角色卡清单失败：{e}"))?;
+    fs::write(dir.join("manifest.json"), format!("{text}\n"))
+        .map_err(|e| format!("保存角色卡清单失败：{e}"))?;
+    read_manifest_with_avatar(&dir)
+}
+
+/// 列出包内某子目录的文件树（一层）。sub_dir 为 None 时列包根。canonicalize 前缀校验防逃逸。
+pub fn list_pack_files(
+    packs_dir: &Path,
+    id: &str,
+    sub_dir: Option<&str>,
+) -> Result<Vec<PackFileEntry>, String> {
+    let dir = pack_dir(packs_dir, id);
+    if !dir.is_dir() {
+        return Err(format!("角色包 `{id}` 不存在"));
+    }
+    let base = dir
+        .canonicalize()
+        .map_err(|e| format!("路径校验失败：{e}"))?;
+    let target = match sub_dir {
+        Some(sub) => {
+            validate_relative_file(sub, "sub_dir")?;
+            let joined = dir.join(sub);
+            let canon = joined
+                .canonicalize()
+                .map_err(|e| format!("路径校验失败：{e}"))?;
+            if !canon.starts_with(&base) {
+                return Err("子目录路径越界".to_string());
+            }
+            canon
+        }
+        None => base,
+    };
+    let entries = fs::read_dir(&target).map_err(|e| format!("读取目录失败：{e}"))?;
+    let mut out = Vec::new();
+    for entry in entries.flatten() {
+        let p = entry.path();
+        let meta = match entry.metadata() {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+        let rel = p
+            .strip_prefix(&dir)
+            .ok()
+            .and_then(|r| r.to_str())
+            .map(|s| s.replace('\\', "/"))
+            .unwrap_or_default();
+        if rel.is_empty() {
+            continue;
+        }
+        let modified_ms = meta
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+        out.push(PackFileEntry {
+            path: rel,
+            is_dir: meta.is_dir(),
+            size: meta.len(),
+            modified_ms,
+        });
+        if out.len() >= MAX_PACK_LIST_ENTRIES {
+            break;
+        }
+    }
+    out.sort_by(|a, b| b.is_dir.cmp(&a.is_dir).then(a.path.cmp(&b.path)));
+    Ok(out)
+}
+
+/// 读取包内单个文件：md/txt/json 返 text，图片返 base64 data URL，其余仅返大小。
+pub fn read_pack_file(packs_dir: &Path, id: &str, path: &str) -> Result<PackFileContent, String> {
+    let dir = pack_dir(packs_dir, id);
+    if !dir.is_dir() {
+        return Err(format!("角色包 `{id}` 不存在"));
+    }
+    validate_relative_file(path, "path")?;
+    let joined = dir.join(path);
+    let canon = joined
+        .canonicalize()
+        .map_err(|e| format!("路径校验失败：{e}"))?;
+    let base = dir
+        .canonicalize()
+        .map_err(|e| format!("路径校验失败：{e}"))?;
+    if !canon.starts_with(&base) {
+        return Err("文件路径越界".to_string());
+    }
+    if !canon.is_file() {
+        return Err(format!("不是文件：{path}"));
+    }
+    let meta = fs::metadata(&canon).map_err(|e| format!("读取文件信息失败：{e}"))?;
+    let size = meta.len();
+    let truncated = size > MAX_PACK_READ_BYTES;
+    let ext = canon
+        .extension()
+        .and_then(|v| v.to_str())
+        .map(|v| v.to_ascii_lowercase())
+        .unwrap_or_default();
+    let text_ext = matches!(ext.as_str(), "md" | "markdown" | "txt" | "json");
+    let image_mime = avatar_mime(&canon.to_string_lossy());
+    if text_ext {
+        let mut bytes = fs::read(&canon).map_err(|e| format!("读取文件失败：{e}"))?;
+        if truncated {
+            bytes.truncate(MAX_PACK_READ_BYTES as usize);
+        }
+        let text = String::from_utf8_lossy(&bytes).into_owned();
+        Ok(PackFileContent {
+            path: path.to_string(),
+            text: Some(text),
+            data_url: None,
+            truncated,
+        })
+    } else if let Some(mime) = image_mime {
+        if size > MAX_PACK_READ_BYTES {
+            return Err(format!("图片过大（>{MAX_PACK_READ_BYTES} 字节）"));
+        }
+        let bytes = fs::read(&canon).map_err(|e| format!("读取图片失败：{e}"))?;
+        let data_url = format!(
+            "data:{mime};base64,{}",
+            general_purpose::STANDARD.encode(&bytes)
+        );
+        Ok(PackFileContent {
+            path: path.to_string(),
+            text: None,
+            data_url: Some(data_url),
+            truncated: false,
+        })
+    } else {
+        Ok(PackFileContent {
+            path: path.to_string(),
+            text: None,
+            data_url: None,
+            truncated,
+        })
+    }
+}
+
 fn read_manifest_with_avatar(dir: &Path) -> Result<PackManifest, String> {
     let mut manifest = read_manifest_no_avatar(dir)?;
     if let Some(avatar) = manifest.avatar.as_deref() {
@@ -549,10 +1273,21 @@ fn validate_manifest_paths(manifest: &PackManifest) -> Result<(), String> {
             return Err("manifest.avatar 只支持 png、jpg、jpeg、webp 或 gif".to_string());
         }
     }
+    if let Some(live2d) = manifest.live2d.as_deref() {
+        validate_relative_file(live2d, "live2d")?;
+        if !live2d.ends_with(".model3.json") {
+            return Err("manifest.live2d 必须指向 .model3.json 文件".to_string());
+        }
+    }
     for lore in &manifest.lorebook {
         validate_relative_file(&lore.path, "lorebook.path")?;
         for extension in &lore.extensions {
             validate_lore_extension(extension)?;
+        }
+    }
+    for credit in &manifest.credits {
+        if !credit.asset.trim().is_empty() {
+            validate_relative_file(&credit.asset, "credits.asset")?;
         }
     }
     validate_runtime(&manifest.runtime)?;
@@ -800,6 +1535,12 @@ fn validate_pack_files(dir: &Path, manifest: &PackManifest) -> Result<(), String
             return Err(format!("导入后缺少 avatar 文件：{avatar}"));
         }
     }
+    if let Some(live2d) = manifest.live2d.as_deref() {
+        let live2d_path = resolve_pack_file(dir, live2d, "live2d")?;
+        if !live2d_path.exists() {
+            return Err(format!("导入后缺少 live2d 文件：{live2d}"));
+        }
+    }
     for lore in &manifest.lorebook {
         let lore_path = resolve_pack_file(dir, &lore.path, "lorebook.path")?;
         if !lore_path.exists() {
@@ -927,7 +1668,7 @@ fn render_runtime_policy(manifest: &PackManifest) -> String {
     }
     if !runtime.permissions.is_empty() {
         lines.push(
-            "Tool permission preferences (advisory; system permission rules still apply):"
+            "Tool permission preferences (enforced as an overlay between user rules and tool defaults; explicit user rules still override):"
                 .to_string(),
         );
         for (tool, policy) in &runtime.permissions {
@@ -979,17 +1720,26 @@ fn render_lorebook_index(dir: &Path, manifest: &PackManifest) -> String {
 }
 
 fn load_lore_index(packs_dir: &Path, data_dir: &Path, id: &str) -> Result<Vec<LoreChunk>, String> {
+    Ok(load_lore_index_with_cache(packs_dir, data_dir, id)?.0)
+}
+
+/// 加载 lorebook 索引，返回 chunks 与缓存文件路径（供 embedding 持久化使用）。
+fn load_lore_index_with_cache(
+    packs_dir: &Path,
+    data_dir: &Path,
+    id: &str,
+) -> Result<(Vec<LoreChunk>, PathBuf), String> {
     let dir = pack_dir(packs_dir, id);
     let manifest = read_manifest_no_avatar(&dir)?;
+    let cache_path = lore_index_cache_path(data_dir, id);
     if manifest.lorebook.is_empty() {
-        return Ok(Vec::new());
+        return Ok((Vec::new(), cache_path));
     }
     let files = lore_file_signatures(&dir, &manifest)?;
-    let cache_path = lore_index_cache_path(data_dir, id);
     if let Ok(text) = fs::read_to_string(&cache_path) {
         if let Ok(cache) = serde_json::from_str::<LoreIndexCache>(&text) {
             if cache.version == LORE_INDEX_VERSION && cache.pack_id == id && cache.files == files {
-                return Ok(cache.chunks);
+                return Ok((cache.chunks, cache_path));
             }
         }
     }
@@ -1000,6 +1750,60 @@ fn load_lore_index(packs_dir: &Path, data_dir: &Path, id: &str) -> Result<Vec<Lo
         pack_id: id.to_string(),
         files,
         chunks: chunks.clone(),
+        embedding_model: None,
+    };
+    if let Some(parent) = cache_path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    if let Ok(text) = serde_json::to_string_pretty(&cache) {
+        let _ = fs::write(&cache_path, format!("{text}\n"));
+    }
+    Ok((chunks, cache_path))
+}
+
+/// 为缺 embedding 的 chunk 批量计算向量并回写缓存。provider/model 变化时整体重算。
+fn ensure_chunk_embeddings(
+    chunks: &mut [LoreChunk],
+    provider: &dyn embed::EmbeddingProvider,
+    model_key: &str,
+    cache_path: &Path,
+) {
+    let existing: Option<LoreIndexCache> = fs::read_to_string(cache_path)
+        .ok()
+        .and_then(|text| serde_json::from_str(&text).ok());
+    let model_changed =
+        existing.as_ref().and_then(|c| c.embedding_model.as_deref()) != Some(model_key);
+    if model_changed {
+        for chunk in chunks.iter_mut() {
+            chunk.embedding = None;
+        }
+    }
+    let to_embed: Vec<usize> = chunks
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| c.embedding.is_none())
+        .map(|(i, _)| i)
+        .collect();
+    if to_embed.is_empty() {
+        return;
+    }
+    let texts: Vec<&str> = to_embed.iter().map(|&i| chunks[i].text.as_str()).collect();
+    if let Ok(vectors) = provider.embed(&texts) {
+        for (idx, vec) in to_embed.into_iter().zip(vectors.into_iter()) {
+            chunks[idx].embedding = Some(vec);
+        }
+    }
+    // 回写缓存（保留原 metadata，更新 chunks 与 embedding_model）
+    let (version, pack_id, files) = existing
+        .as_ref()
+        .map(|c| (c.version, c.pack_id.clone(), c.files.clone()))
+        .unwrap_or((LORE_INDEX_VERSION, String::new(), Vec::new()));
+    let cache = LoreIndexCache {
+        version,
+        pack_id,
+        files,
+        chunks: chunks.to_vec(),
+        embedding_model: Some(model_key.to_string()),
     };
     if let Some(parent) = cache_path.parent() {
         let _ = fs::create_dir_all(parent);
@@ -1007,7 +1811,6 @@ fn load_lore_index(packs_dir: &Path, data_dir: &Path, id: &str) -> Result<Vec<Lo
     if let Ok(text) = serde_json::to_string_pretty(&cache) {
         let _ = fs::write(cache_path, format!("{text}\n"));
     }
-    Ok(chunks)
 }
 
 fn lore_index_cache_path(data_dir: &Path, id: &str) -> PathBuf {
@@ -1333,39 +2136,169 @@ fn flush_lore_text(
         priority,
         chunk_index,
         text: text.to_string(),
+        embedding: None,
     });
 }
 
-fn select_lore_hits(chunks: &[LoreChunk], query: &str) -> Vec<LoreHit> {
+fn score_all_lore_hits(
+    chunks: &[LoreChunk],
+    query: &str,
+    provider: Option<&dyn embed::EmbeddingProvider>,
+    hybrid_weight: f32,
+) -> Vec<LoreHit> {
     let terms = query_terms(query);
     if terms.is_empty() {
         return Vec::new();
     }
-    let query = normalize_search_text(query);
+    let norm = normalize_search_text(query);
     let stats = lore_search_stats(chunks);
-    let mut hits = chunks
+
+    // 稀疏分（BM25 + 短语/元数据加权）
+    let sparse: Vec<f32> = chunks
         .iter()
-        .filter_map(|chunk| {
-            let score = score_lore_chunk(chunk, &query, &terms, &stats);
-            (score > 0.0).then(|| LoreHit {
-                score,
+        .map(|chunk| score_lore_chunk(chunk, &norm, &terms, &stats))
+        .collect();
+
+    // 稠密分（余弦相似度）。provider 不可用或 chunk 缺 embedding 时为 None。
+    let dense: Vec<Option<f32>> = if let Some(p) = provider {
+        match p.embed(&[query]) {
+            Ok(vectors) => {
+                let q = vectors.into_iter().next().unwrap_or_default();
+                chunks
+                    .iter()
+                    .map(|chunk| chunk.embedding.as_ref().map(|e| embed::cosine(e, &q)))
+                    .collect()
+            }
+            Err(_) => chunks.iter().map(|_| None).collect(),
+        }
+    } else {
+        chunks.iter().map(|_| None).collect()
+    };
+
+    let has_dense = dense.iter().any(|d| d.is_some());
+    if !has_dense {
+        // 纯稀疏路径：保持原语义，仅 score>0 入选
+        let mut hits: Vec<LoreHit> = chunks
+            .iter()
+            .zip(sparse.iter())
+            .filter_map(|(chunk, &score)| {
+                (score > 0.0).then(|| LoreHit {
+                    score,
+                    chunk: chunk.clone(),
+                    dense_score: None,
+                })
+            })
+            .collect();
+        hits.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| {
+                    b.chunk
+                        .priority
+                        .partial_cmp(&a.chunk.priority)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
+                .then_with(|| a.chunk.source.cmp(&b.chunk.source))
+                .then_with(|| a.chunk.chunk_index.cmp(&b.chunk.chunk_index))
+        });
+        return hits;
+    }
+
+    // 混合路径：RRF 融合 sparse/dense 排名，按 hybrid_weight 加权
+    let n = chunks.len();
+    let mut sparse_order = (0..n).collect::<Vec<_>>();
+    sparse_order.sort_by(|&a, &b| {
+        sparse[b]
+            .partial_cmp(&sparse[a])
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    let mut dense_order = (0..n).collect::<Vec<_>>();
+    dense_order.sort_by(|&a, &b| {
+        dense[b]
+            .unwrap_or(-1.0)
+            .partial_cmp(&dense[a].unwrap_or(-1.0))
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    let sparse_rank = {
+        let mut r = vec![usize::MAX; n];
+        for (i, &idx) in sparse_order.iter().enumerate() {
+            r[idx] = i;
+        }
+        r
+    };
+    let dense_rank = {
+        let mut r = vec![usize::MAX; n];
+        for (i, &idx) in dense_order.iter().enumerate() {
+            r[idx] = i;
+        }
+        r
+    };
+    let w = hybrid_weight.clamp(0.0, 1.0);
+    let fused = embed::rrf_fuse(&sparse_rank, &dense_rank, 60, w);
+    let mut hits: Vec<LoreHit> = chunks
+        .iter()
+        .enumerate()
+        .filter_map(|(i, chunk)| {
+            // 至少一路上榜，或稀疏分>0，才算命中
+            let has_signal =
+                sparse_rank[i] != usize::MAX || dense_rank[i] != usize::MAX || sparse[i] > 0.0;
+            if !has_signal {
+                return None;
+            }
+            Some(LoreHit {
+                score: fused[i],
                 chunk: chunk.clone(),
+                dense_score: dense[i],
             })
         })
-        .collect::<Vec<_>>();
+        .collect();
     hits.sort_by(|a, b| {
         b.score
             .partial_cmp(&a.score)
             .unwrap_or(std::cmp::Ordering::Equal)
             .then_with(|| {
-                b.chunk
-                    .priority
-                    .partial_cmp(&a.chunk.priority)
+                b.dense_score
+                    .unwrap_or(-1.0)
+                    .partial_cmp(&a.dense_score.unwrap_or(-1.0))
                     .unwrap_or(std::cmp::Ordering::Equal)
             })
             .then_with(|| a.chunk.source.cmp(&b.chunk.source))
             .then_with(|| a.chunk.chunk_index.cmp(&b.chunk.chunk_index))
     });
+    hits
+}
+
+fn matched_terms_for(chunk: &LoreChunk, query: &str, terms: &[String]) -> Vec<String> {
+    let title = normalize_search_text(&chunk.title);
+    let heading = normalize_search_text(chunk.heading.as_deref().unwrap_or_default());
+    let tags = normalize_search_text(&chunk.tags.join(" "));
+    let keywords = normalize_search_text(&chunk.keywords.join(" "));
+    let text = normalize_search_text(&chunk.text);
+    let mut matched = Vec::new();
+    if !query.is_empty() && text.contains(query) {
+        matched.push(query.to_string());
+    }
+    for term in terms {
+        if title.contains(term)
+            || heading.contains(term)
+            || tags.contains(term)
+            || keywords.contains(term)
+            || text.contains(term)
+        {
+            matched.push(term.clone());
+        }
+    }
+    matched
+}
+
+fn select_lore_hits(
+    chunks: &[LoreChunk],
+    query: &str,
+    provider: Option<&dyn embed::EmbeddingProvider>,
+    hybrid_weight: f32,
+) -> Vec<LoreHit> {
+    let mut hits = score_all_lore_hits(chunks, query, provider, hybrid_weight);
     hits.truncate(MAX_LORE_CONTEXT_CHUNKS);
     hits
 }
@@ -1718,9 +2651,12 @@ mod tests {
             persona: "persona.md".to_string(),
             avatar: Some("avatar.png".to_string()),
             avatar_data_url: None,
+            live2d: None,
             character: None,
             runtime: None,
             lorebook: Vec::new(),
+            credits: Vec::new(),
+            license: None,
         };
         validate_manifest_identity(&manifest).unwrap();
         validate_manifest_paths(&manifest).unwrap();
@@ -1872,14 +2808,14 @@ priority: 0.8
         )
         .unwrap();
 
-        let context = lorebook_context(&packs, &data, "demo", Some("银钟塔后来怎么了"));
+        let context = lorebook_context(&packs, &data, "demo", Some("银钟塔后来怎么了"), None, 0.5);
         assert!(context.contains("retrieved lore snippets"));
         assert!(context.contains("月亮城年表"));
         assert!(context.contains("银钟塔在雨夜停摆"));
         assert!(!context.contains("甜点摊"));
         assert!(lore_index_cache_path(&data, "demo").exists());
 
-        let nested = lorebook_context(&packs, &data, "demo", Some("赤桥战役在哪一章"));
+        let nested = lorebook_context(&packs, &data, "demo", Some("赤桥战役在哪一章"), None, 0.5);
         assert!(nested.contains("赤桥战役发生在第三章"));
 
         let _ = fs::remove_dir_all(packs);

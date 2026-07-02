@@ -28,6 +28,8 @@ pub enum PermissionDecisionSource {
     ToolDefault,
     UserOverride,
     UnknownTool,
+    /// 角色卡 runtime.permissions 偏好覆盖（介于 user 规则与 tool 默认之间）。
+    CardOverlay,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -89,6 +91,9 @@ pub struct PermissionToolView {
     pub default_effect: PermissionEffect,
     pub default_scope: PermissionScope,
     pub default_reason: String,
+    /// 角色卡对该工具声明的偏好（如 "allow"/"deny"/"ask_once"/"ask_every_time"），None 表示无覆盖。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub card_preference: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -172,6 +177,12 @@ pub fn decide(
         return decision_from_rule(rule);
     }
 
+    // 角色卡 runtime.permissions 偏好覆盖：介于 user 规则与 tool 默认之间。
+    // 显式 user/project/session 规则已在上面命中并返回，这里只在没有用户规则时生效。
+    if let Some(decision) = card_overlay(state, tool) {
+        return decision;
+    }
+
     PermissionDecision::from_policy(default_policy)
 }
 
@@ -239,12 +250,70 @@ pub fn decide_for_mode(
     decision
 }
 
+/// 角色卡 permission 偏好类型（从 runtime.permissions 的字符串值解析）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CardPreference {
+    Allow,
+    Deny,
+    AskOnce,
+    AskEveryTime,
+}
+
+fn parse_card_preference(value: &str) -> Option<CardPreference> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "allow" | "always_allow" => Some(CardPreference::Allow),
+        "deny" | "always_deny" => Some(CardPreference::Deny),
+        "ask_once" | "ask" => Some(CardPreference::AskOnce),
+        "ask_every_time" | "ask_everytime" => Some(CardPreference::AskEveryTime),
+        // "default" / 空 / 未知值：不覆盖，回落到 tool 默认策略。
+        _ => None,
+    }
+}
+
+fn card_preference_effect(pref: CardPreference) -> PermissionEffect {
+    match pref {
+        CardPreference::Allow => PermissionEffect::Allow,
+        CardPreference::Deny => PermissionEffect::Deny,
+        CardPreference::AskOnce | CardPreference::AskEveryTime => PermissionEffect::Ask,
+    }
+}
+
+fn load_card_prefs(state: &crate::AppState) -> std::collections::BTreeMap<String, String> {
+    let packs_dir = state.packs_dir.lock().unwrap().clone();
+    let pack_id = state.settings.lock().unwrap().current_pack.clone();
+    crate::pack::permission_preferences(&packs_dir, &pack_id)
+}
+
+/// 把角色卡偏好解析成可执行的 PermissionDecision。None 表示无偏好或为 default。
+fn card_overlay(state: &crate::AppState, tool: &str) -> Option<PermissionDecision> {
+    let prefs = load_card_prefs(state);
+    let raw = prefs.get(tool)?;
+    let pref = parse_card_preference(raw)?;
+    let reason = format!("角色卡权限偏好：{raw}");
+    Some(PermissionDecision {
+        effect: card_preference_effect(pref),
+        scope: PermissionScope::Once,
+        reason,
+        source: PermissionDecisionSource::CardOverlay,
+        mode: None,
+    })
+}
+
 pub fn remember_response(
     state: &crate::AppState,
     tool: &str,
     response: &PermissionResponse,
 ) -> Result<(), String> {
     if response.scope == PermissionScope::Once {
+        return Ok(());
+    }
+
+    // 角色卡 ask_every_time 偏好：禁止持久化 remember，确保每次都弹确认。
+    if load_card_prefs(state)
+        .get(tool)
+        .and_then(|v| parse_card_preference(v))
+        == Some(CardPreference::AskEveryTime)
+    {
         return Ok(());
     }
 
@@ -363,7 +432,7 @@ pub fn panel_state(state: &crate::AppState) -> PermissionPanelState {
     PermissionPanelState {
         rules,
         audit: load_recent_audit(&data_dir, 80),
-        tools: tool_views(),
+        tools: tool_views(&load_card_prefs(state)),
     }
 }
 
@@ -450,16 +519,20 @@ fn rule_view(rule: &PermissionRule) -> PermissionRuleView {
     }
 }
 
-fn tool_views() -> Vec<PermissionToolView> {
+fn tool_views(card_prefs: &std::collections::BTreeMap<String, String>) -> Vec<PermissionToolView> {
     let mut tools = crate::tools::registry()
         .into_iter()
-        .map(|tool| PermissionToolView {
-            tool: tool.name.to_string(),
-            description: tool.description.to_string(),
-            risk: tool.risk,
-            default_effect: tool.permission.effect,
-            default_scope: tool.permission.scope,
-            default_reason: tool.permission.reason.to_string(),
+        .map(|tool| {
+            let card_preference = card_prefs.get(tool.name).cloned();
+            PermissionToolView {
+                tool: tool.name.to_string(),
+                description: tool.description.to_string(),
+                risk: tool.risk,
+                default_effect: tool.permission.effect,
+                default_scope: tool.permission.scope,
+                default_reason: tool.permission.reason.to_string(),
+                card_preference,
+            }
         })
         .collect::<Vec<_>>();
     tools.sort_by(|a, b| a.tool.cmp(&b.tool));
@@ -532,4 +605,69 @@ fn append_audit(dir: &Path, entry: &PermissionAuditEntry) -> Result<(), String> 
         .map_err(|e| e.to_string())?;
     let json = serde_json::to_string(entry).map_err(|e| e.to_string())?;
     writeln!(f, "{json}").map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_card_preference_strings() {
+        // allow / always_allow → Allow
+        assert_eq!(parse_card_preference("allow"), Some(CardPreference::Allow));
+        assert_eq!(
+            parse_card_preference("Always_Allow"),
+            Some(CardPreference::Allow)
+        );
+        // deny / always_deny → Deny
+        assert_eq!(parse_card_preference("deny"), Some(CardPreference::Deny));
+        assert_eq!(
+            parse_card_preference("always_deny"),
+            Some(CardPreference::Deny)
+        );
+        // ask_once / ask → AskOnce
+        assert_eq!(
+            parse_card_preference("ask_once"),
+            Some(CardPreference::AskOnce)
+        );
+        assert_eq!(parse_card_preference("ask"), Some(CardPreference::AskOnce));
+        // ask_every_time / ask_everytime → AskEveryTime
+        assert_eq!(
+            parse_card_preference("ask_every_time"),
+            Some(CardPreference::AskEveryTime)
+        );
+        assert_eq!(
+            parse_card_preference("ask_everytime"),
+            Some(CardPreference::AskEveryTime)
+        );
+        // default / 空 / 未知 → None（回落到 tool 默认）
+        assert_eq!(parse_card_preference("default"), None);
+        assert_eq!(parse_card_preference(""), None);
+        assert_eq!(parse_card_preference("unknown_value"), None);
+        // 大小写与首尾空白不敏感
+        assert_eq!(
+            parse_card_preference("  ALLOW  "),
+            Some(CardPreference::Allow)
+        );
+    }
+
+    #[test]
+    fn card_preference_maps_to_effect() {
+        assert_eq!(
+            card_preference_effect(CardPreference::Allow),
+            PermissionEffect::Allow
+        );
+        assert_eq!(
+            card_preference_effect(CardPreference::Deny),
+            PermissionEffect::Deny
+        );
+        assert_eq!(
+            card_preference_effect(CardPreference::AskOnce),
+            PermissionEffect::Ask
+        );
+        assert_eq!(
+            card_preference_effect(CardPreference::AskEveryTime),
+            PermissionEffect::Ask
+        );
+    }
 }
