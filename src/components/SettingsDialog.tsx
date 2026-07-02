@@ -795,7 +795,7 @@ export default function SettingsDialog({
     }).then((fn) => {
       if (disposed) fn();
       else unlisten = fn;
-    });
+    }).catch((e) => console.warn("subscribe failed", e));
     return () => {
       disposed = true;
       unlisten?.();
@@ -811,7 +811,7 @@ export default function SettingsDialog({
     }).then((fn) => {
       if (disposed) fn();
       else unlisten = fn;
-    });
+    }).catch((e) => console.warn("subscribe failed", e));
     return () => {
       disposed = true;
       unlisten?.();

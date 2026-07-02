@@ -32,11 +32,21 @@ import SkillsPanel from "./components/SkillsPanel";
 import FortuneDialog from "./components/FortuneDialog";
 import CompanionCard from "./components/CompanionCard";
 import PomodoroCard from "./components/PomodoroCard";
-import { CheckIcon, ChevronDownIcon, PanelLeftIcon, SettingsIcon, SparklesIcon } from "./components/Icons";
+import {
+  CheckIcon,
+  ChevronDownIcon,
+  CloseIcon,
+  MaximizeIcon,
+  MinimizeIcon,
+  PanelLeftIcon,
+  SettingsIcon,
+  SparklesIcon,
+} from "./components/Icons";
 import { attachmentKindLabel, buildAttachmentPrompt, formatAttachmentSize, type ProcessedAttachment } from "./lib/fileProcessing";
 import { autoContextBudget } from "./lib/providers";
 import { canDrawToday, isAutoPromptEnabled, isDismissedToday } from "./lib/fortune";
 import { useI18n } from "./lib/i18n";
+import { useClickOutside } from "./lib/hooks";
 
 const Live2DPanel = lazy(() => import("./components/Live2DPanel"));
 
@@ -207,7 +217,7 @@ export default function App() {
   const [packMenuOpen, setPackMenuOpen] = useState(false);
   const [agentMenuOpen, setAgentMenuOpen] = useState(false);
   const [toyMenuOpen, setToyMenuOpen] = useState(false);
-  const [headerMenuOpen, setHeaderMenuOpen] = useState<"file" | "view" | "help" | null>(null);
+  const [titleMenuOpen, setTitleMenuOpen] = useState<"file" | "edit" | "view" | "persona" | "help" | null>(null);
   const [confirmReq, setConfirmReq] = useState<ConfirmRequestEvent | null>(null);
   const [planState, setPlanState] = useState<PlanState>({ active: false, approved: false });
   const [fortuneOpen, setFortuneOpen] = useState(false);
@@ -228,7 +238,7 @@ export default function App() {
   const packMenuRef = useRef<HTMLDivElement | null>(null);
   const agentMenuRef = useRef<HTMLDivElement | null>(null);
   const toyMenuRef = useRef<HTMLDivElement | null>(null);
-  const headerMenuRef = useRef<HTMLDivElement | null>(null);
+  const titleMenuRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 
   const activeSession = useMemo(() => sessions.find((s) => s.id === activeId) ?? null, [activeId, sessions]);
@@ -512,7 +522,8 @@ export default function App() {
       .then((u) => {
         if (disposed) u();
         else un = u;
-      });
+      })
+      .catch((e) => console.warn("subscribe failed", e));
 
     let unPlan: UnlistenFn | undefined;
     let unMode: UnlistenFn | undefined;
@@ -521,27 +532,27 @@ export default function App() {
     api.listenPlanUpdated(setPlanState).then((u) => {
       if (disposed) u();
       else unPlan = u;
-    });
+    }).catch((e) => console.warn("subscribe failed", e));
     api.listenPermissionModeUpdated((mode) => {
       setSettings((prev) => (prev ? { ...prev, permission_mode: mode } : prev));
     }).then((u) => {
       if (disposed) u();
       else unMode = u;
-    });
+    }).catch((e) => console.warn("subscribe failed", e));
     api.listenSettingsUpdated((s) => {
       setSettings(s);
       if (s.language === "zh" || s.language === "en") setLang(s.language);
     }).then((u) => {
       if (disposed) u();
       else unSettings = u;
-    });
+    }).catch((e) => console.warn("subscribe failed", e));
     api.listenSessionEngineUpdated((next) => {
       setSessionEngine(next);
       setBusy(next.busy);
     }).then((u) => {
       if (disposed) u();
       else unSessionEngine = u;
-    });
+    }).catch((e) => console.warn("subscribe failed", e));
 
     return () => {
       disposed = true;
@@ -557,55 +568,11 @@ export default function App() {
     };
   }, []);
 
-  useEffect(() => {
-    if (!packMenuOpen) return;
-    const onDown = (e: MouseEvent) => {
-      if (!packMenuRef.current?.contains(e.target as Node)) setPackMenuOpen(false);
-    };
-    document.addEventListener("mousedown", onDown);
-    return () => document.removeEventListener("mousedown", onDown);
-  }, [packMenuOpen]);
-
-  useEffect(() => {
-    if (!headerMenuOpen) return;
-    const onDown = (e: MouseEvent) => {
-      if (!headerMenuRef.current?.contains(e.target as Node)) setHeaderMenuOpen(null);
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setHeaderMenuOpen(null);
-    };
-    document.addEventListener("mousedown", onDown);
-    document.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("mousedown", onDown);
-      document.removeEventListener("keydown", onKey);
-    };
-  }, [headerMenuOpen]);
-
-  useEffect(() => {
-    if (!agentMenuOpen) return;
-    const onDown = (e: MouseEvent) => {
-      if (!agentMenuRef.current?.contains(e.target as Node)) setAgentMenuOpen(false);
-    };
-    document.addEventListener("mousedown", onDown);
-    return () => document.removeEventListener("mousedown", onDown);
-  }, [agentMenuOpen]);
-
-  useEffect(() => {
-    if (!toyMenuOpen) return;
-    const onDown = (e: MouseEvent) => {
-      if (!toyMenuRef.current?.contains(e.target as Node)) setToyMenuOpen(false);
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setToyMenuOpen(false);
-    };
-    document.addEventListener("mousedown", onDown);
-    document.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("mousedown", onDown);
-      document.removeEventListener("keydown", onKey);
-    };
-  }, [toyMenuOpen]);
+  // 顶部菜单 / pack 菜单 / agent 菜单 / 玩具菜单的「外点 + Escape 关闭」逻辑统一收敛到 useClickOutside。
+  useClickOutside(packMenuRef, () => setPackMenuOpen(false), { enabled: packMenuOpen });
+  useClickOutside(titleMenuRef, () => setTitleMenuOpen(null), { escape: true, enabled: !!titleMenuOpen });
+  useClickOutside(agentMenuRef, () => setAgentMenuOpen(false), { enabled: agentMenuOpen });
+  useClickOutside(toyMenuRef, () => setToyMenuOpen(false), { escape: true, enabled: toyMenuOpen });
 
   async function handleSend(textArg?: string, attachments: ProcessedAttachment[] = []) {
     const text = (textArg ?? input).trim();
@@ -865,27 +832,284 @@ export default function App() {
   const tailToolRunning = last?.kind === "tool" && last.status === "running";
   const thinking = appBusy && !tailStreaming && !tailToolRunning;
   const canSend = input.trim().length > 0 && !appBusy;
+  const titleMenuButtonClass = (menu: typeof titleMenuOpen) =>
+    `app-title-menu-button ${titleMenuOpen === menu ? "is-active" : ""}`;
+
+  async function handleWindowMinimize() {
+    if (!("__TAURI_INTERNALS__" in window)) return;
+    await getCurrentWindow().minimize();
+  }
+
+  async function handleWindowToggleMaximize() {
+    if (!("__TAURI_INTERNALS__" in window)) return;
+    await getCurrentWindow().toggleMaximize();
+  }
+
+  async function handleWindowClose() {
+    if (!("__TAURI_INTERNALS__" in window)) return;
+    await getCurrentWindow().close();
+  }
 
   return (
-    <main className="flex h-[100dvh] overflow-hidden bg-[#eef1f5] text-[#202124]">
-      <Sidebar
-        open={sidebarOpen}
-        activeView={activeView}
-        packName={packName}
-        packAvatar={packAvatar}
-        sessions={sessions}
-        activeId={activeId}
-        busy={appBusy}
-        onToggle={() => setSidebarOpen((v) => !v)}
-        onViewChange={setActiveView}
-        onNewChat={handleNewChat}
-        onSelectSession={handleSelectSession}
-        onRenameSession={handleRenameSession}
-        onDeleteSession={handleDeleteSession}
-        onOpenSettings={() => openSettings("general")}
-      />
+    <main className="flex h-[100dvh] flex-col overflow-hidden bg-[#eef1f5] text-[#202124]">
+      <div ref={titleMenuRef} className="app-titlebar">
+        <div
+          className="app-titlebar-brand app-titlebar-drag"
+          data-tauri-drag-region
+          onDoubleClick={() => void handleWindowToggleMaximize()}
+        >
+          <img src="/demiurge.png" alt="" className="size-4 rounded-[4px]" />
+          <span>Demiurge</span>
+        </div>
 
-      <section className="flex min-h-0 min-w-0 flex-1 flex-col p-2 pl-0">
+        <nav className="app-titlebar-menus" aria-label="Application menu">
+          <div className="relative">
+            <button
+              type="button"
+              onClick={() => setTitleMenuOpen((v) => (v === "file" ? null : "file"))}
+              className={titleMenuButtonClass("file")}
+            >
+              {t("header.menu.file")}
+            </button>
+            {titleMenuOpen === "file" && (
+              <div className="cf-pop cf-pop-down cf-dropdown app-titlebar-menu w-52 overflow-hidden p-1">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setTitleMenuOpen(null);
+                    setActiveView("chat");
+                    void handleNewChat();
+                  }}
+                  className="cf-menu-item flex w-full items-center gap-2"
+                >
+                  {t("sidebar.newChat")}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setTitleMenuOpen(null);
+                    void api.openSandbox();
+                  }}
+                  className="cf-menu-item flex w-full items-center gap-2"
+                >
+                  {t("header.openLocation")}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setTitleMenuOpen(null);
+                    openSettings("general");
+                  }}
+                  className="cf-menu-item flex w-full items-center gap-2"
+                >
+                  {t("sidebar.settings")}
+                </button>
+              </div>
+            )}
+          </div>
+
+          <div className="relative">
+            <button
+              type="button"
+              onClick={() => setTitleMenuOpen((v) => (v === "edit" ? null : "edit"))}
+              className={titleMenuButtonClass("edit")}
+            >
+              {t("header.menu.edit")}
+            </button>
+            {titleMenuOpen === "edit" && (
+              <div className="cf-pop cf-pop-down cf-dropdown app-titlebar-menu w-56 overflow-hidden p-1">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setTitleMenuOpen(null);
+                    void api.interrupt();
+                    setConfirmReq(null);
+                  }}
+                  className="cf-menu-item flex w-full items-center justify-between gap-2 disabled:cursor-default disabled:opacity-45"
+                  disabled={!appBusy}
+                >
+                  <span>{t("header.menu.stop")}</span>
+                  {appBusy && <span className="text-[11px] text-[#8a9099]">{runtimeStatus}</span>}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setTitleMenuOpen(null);
+                    setSelectedAgentNames([]);
+                  }}
+                  className="cf-menu-item flex w-full items-center gap-2 disabled:cursor-default disabled:opacity-45"
+                  disabled={selectedAgentNames.length === 0}
+                >
+                  {t("header.clearSelection")}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setTitleMenuOpen(null);
+                    openSettings("context");
+                  }}
+                  className="cf-menu-item flex w-full items-center gap-2"
+                >
+                  {t("settings.nav.context")}
+                </button>
+              </div>
+            )}
+          </div>
+
+          <div className="relative">
+            <button
+              type="button"
+              onClick={() => setTitleMenuOpen((v) => (v === "view" ? null : "view"))}
+              className={titleMenuButtonClass("view")}
+            >
+              {t("header.menu.view")}
+            </button>
+            {titleMenuOpen === "view" && (
+              <div className="cf-pop cf-pop-down cf-dropdown app-titlebar-menu w-44 overflow-hidden p-1">
+                {[
+                  ["chat", t("nav.chat")],
+                  ["media", t("nav.images")],
+                  ["skills", t("nav.skills")],
+                  ["live2d", t("nav.live2d")],
+                ].map(([view, label]) => (
+                  <button
+                    key={view}
+                    type="button"
+                    onClick={() => {
+                      setTitleMenuOpen(null);
+                      setActiveView(view as AppView);
+                    }}
+                    className={`cf-menu-item flex w-full items-center justify-between gap-2 ${
+                      activeView === view ? "is-active" : ""
+                    }`}
+                  >
+                    <span>{label}</span>
+                    {activeView === view && <CheckIcon size={14} />}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="relative">
+            <button
+              type="button"
+              onClick={() => setTitleMenuOpen((v) => (v === "persona" ? null : "persona"))}
+              className={titleMenuButtonClass("persona")}
+            >
+              {t("header.menu.persona")}
+            </button>
+            {titleMenuOpen === "persona" && (
+              <div className="cf-pop cf-pop-down cf-dropdown app-titlebar-menu max-h-[70vh] w-64 overflow-y-auto p-1.5">
+                {packs.length === 0 && <div className="px-3 py-2 text-sm text-[#9a9a9a]">No persona packs found</div>}
+                {packs.map((p) => (
+                  <button
+                    key={p.id}
+                    onClick={() => {
+                      setTitleMenuOpen(null);
+                      void handleSelectPack(p.id);
+                    }}
+                    className={`cf-menu-item flex w-full items-center justify-between gap-2 ${
+                      settings?.current_pack === p.id ? "is-active" : ""
+                    }`}
+                  >
+                    <span className="flex min-w-0 items-center gap-2">
+                      <img
+                        src={p.avatarDataUrl || "/demiurge.png"}
+                        alt=""
+                        className="size-7 shrink-0 rounded-md border border-[#dfe3e8] bg-white object-cover"
+                      />
+                      <span className="min-w-0 truncate">{p.name}</span>
+                    </span>
+                    {settings?.current_pack === p.id && <CheckIcon size={15} className="shrink-0 text-[#171717]" />}
+                  </button>
+                ))}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setTitleMenuOpen(null);
+                    openSettings("persona");
+                  }}
+                  className="mt-1 w-full rounded-md px-2.5 py-2 text-left text-xs text-[#8a8a8a] transition hover:bg-[#f6f7f9]"
+                >
+                  {t("settings.nav.persona")}
+                </button>
+              </div>
+            )}
+          </div>
+
+          <div className="relative">
+            <button
+              type="button"
+              onClick={() => setTitleMenuOpen((v) => (v === "help" ? null : "help"))}
+              className={titleMenuButtonClass("help")}
+            >
+              {t("header.menu.help")}
+            </button>
+            {titleMenuOpen === "help" && (
+              <div className="cf-pop cf-pop-down cf-dropdown app-titlebar-menu w-48 overflow-hidden p-1">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setTitleMenuOpen(null);
+                    openSettings("advanced");
+                  }}
+                  className="cf-menu-item flex w-full items-center gap-2"
+                >
+                  {t("settings.nav.advanced")}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setTitleMenuOpen(null);
+                    openSettings("context");
+                  }}
+                  className="cf-menu-item flex w-full items-center gap-2"
+                >
+                  {t("settings.nav.context")}
+                </button>
+              </div>
+            )}
+          </div>
+        </nav>
+
+        <div
+          className="app-titlebar-spacer app-titlebar-drag"
+          data-tauri-drag-region
+          onDoubleClick={() => void handleWindowToggleMaximize()}
+        />
+        <div className="app-window-controls">
+          <button type="button" onClick={() => void handleWindowMinimize()} title={t("window.minimize")}>
+            <MinimizeIcon size={14} />
+          </button>
+          <button type="button" onClick={() => void handleWindowToggleMaximize()} title={t("window.maximize")}>
+            <MaximizeIcon size={13} />
+          </button>
+          <button type="button" className="app-window-close" onClick={() => void handleWindowClose()} title={t("window.close")}>
+            <CloseIcon size={14} />
+          </button>
+        </div>
+      </div>
+
+      <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
+        <Sidebar
+          open={sidebarOpen}
+          activeView={activeView}
+          packName={packName}
+          packAvatar={packAvatar}
+          sessions={sessions}
+          activeId={activeId}
+          busy={appBusy}
+          onToggle={() => setSidebarOpen((v) => !v)}
+          onViewChange={setActiveView}
+          onNewChat={handleNewChat}
+          onSelectSession={handleSelectSession}
+          onRenameSession={handleRenameSession}
+          onDeleteSession={handleDeleteSession}
+          onOpenSettings={() => openSettings("general")}
+        />
+
+        <section className="flex min-h-0 min-w-0 flex-1 flex-col p-2 pl-0">
         <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-lg border border-[#dfe3e8] bg-white shadow-[0_1px_2px_rgba(15,23,42,0.06)]">
           {activeView === "chat" ? (
             <>
@@ -998,7 +1222,7 @@ export default function App() {
                           onClick={() => setSelectedAgentNames([])}
                           className="mt-1 w-full rounded-md px-2.5 py-2 text-left text-xs text-[#8a8a8a] transition hover:bg-[#f6f7f9]"
                         >
-                          Clear selection
+                          {t("header.clearSelection")}
                         </button>
                       )}
                     </div>
@@ -1162,6 +1386,7 @@ export default function App() {
           ) : null}
         </div>
       </section>
+      </div>
 
       <ConfirmDialog req={confirmReq} mode={settings?.permission_mode ?? "default"} onRespond={handleRespondConfirm} />
       <FortuneDialog open={fortuneOpen} onClose={() => setFortuneOpen(false)} />

@@ -72,7 +72,6 @@ export default function PomodoroCard({ activeSessionId, activeSessionTitle, goal
       setWorkflowRuns(panel.runs);
       setWorkflowRunId((current) => current || panel.runs[0]?.run_id || "");
     });
-    const timer = window.setInterval(() => void refresh(), 1000);
     let unlistenUpdated: UnlistenFn | undefined;
     let unlistenCompleted: UnlistenFn | undefined;
     void api.listenPomodoroUpdated(setState).then((fn) => {
@@ -85,7 +84,6 @@ export default function PomodoroCard({ activeSessionId, activeSessionTitle, goal
       unlistenCompleted = fn;
     });
     return () => {
-      window.clearInterval(timer);
       unlistenUpdated?.();
       unlistenCompleted?.();
     };
@@ -97,6 +95,14 @@ export default function PomodoroCard({ activeSessionId, activeSessionTitle, goal
   const active = running || paused;
   const remaining = state?.remaining_secs ?? 0;
   const duration = timer?.duration_secs ?? 0;
+
+  // 轮询仅在 running 时启用（1s 兜底同步剩余秒数）；idle/paused 时由
+  // listenPomodoroUpdated / listenPomodoroCompleted 事件驱动刷新，避免无谓 IPC。
+  useEffect(() => {
+    if (!running) return;
+    const poll = window.setInterval(() => void refresh(), 1000);
+    return () => window.clearInterval(poll);
+  }, [running]);
   const progress = useMemo(() => {
     if (!duration) return 0;
     return Math.min(100, Math.max(0, ((duration - remaining) / duration) * 100));

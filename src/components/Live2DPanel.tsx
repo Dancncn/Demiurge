@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import * as api from "../lib/api";
-import { loadLive2DModel } from "../lib/live2d";
+import { loadLive2DModel, type Live2DModelLike, type Live2DPixiApp } from "../lib/live2d";
 import { useI18n } from "../lib/i18n";
 import { RotateCwIcon } from "./Icons";
 
@@ -15,10 +15,8 @@ interface Props {
 export default function Live2DPanel({ packId, onOpenSettings }: Props) {
   const { t } = useI18n();
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const appRef = useRef<any>(null);
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const modelRef = useRef<any>(null);
+  const appRef = useRef<Live2DPixiApp | null>(null);
+  const modelRef = useRef<Live2DModelLike | null>(null);
 
   const [status, setStatus] = useState<Status>("idle");
   const [error, setError] = useState("");

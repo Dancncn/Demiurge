@@ -144,6 +144,22 @@ export function CloseIcon(props: IconProps) {
   );
 }
 
+export function MinimizeIcon(props: IconProps) {
+  return (
+    <Icon strokeWidth={2} {...props}>
+      <path d="M5 12h14" />
+    </Icon>
+  );
+}
+
+export function MaximizeIcon(props: IconProps) {
+  return (
+    <Icon strokeWidth={1.8} {...props}>
+      <rect x="5" y="5" width="14" height="14" rx="2" />
+    </Icon>
+  );
+}
+
 export function SettingsIcon(props: IconProps) {
   return (
     <Icon strokeWidth={1.7} {...props}>

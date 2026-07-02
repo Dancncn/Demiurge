@@ -846,12 +846,6 @@ pub fn execute_open(target: &str) -> Result<String, String> {
     open_path::run(serde_json::json!({ "target": target }))
 }
 
-pub fn permission_policy_for(name: &str) -> PermissionPolicy {
-    definition_for(name)
-        .map(|t| t.permission)
-        .unwrap_or_else(|| PermissionPolicy::ask("未知工具默认按最高安全级别询问。"))
-}
-
 pub fn permission_policy_for_state(state: &crate::AppState, name: &str) -> PermissionPolicy {
     definition_for_state(state, name)
         .map(|t| t.permission)

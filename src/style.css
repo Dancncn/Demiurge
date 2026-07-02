@@ -187,6 +187,29 @@ html[data-resolved-theme="dark"] .cf-menu-item.is-active {
   background: #222936;
 }
 
+html[data-resolved-theme="dark"] .app-titlebar {
+  border-bottom-color: #2a303a;
+  background: rgba(16, 19, 24, 0.96);
+}
+
+html[data-resolved-theme="dark"] .app-titlebar-brand,
+html[data-resolved-theme="dark"] .app-title-menu-button,
+html[data-resolved-theme="dark"] .app-window-controls button {
+  color: #a0a8b5;
+}
+
+html[data-resolved-theme="dark"] .app-title-menu-button:hover,
+html[data-resolved-theme="dark"] .app-title-menu-button.is-active,
+html[data-resolved-theme="dark"] .app-window-controls button:hover {
+  background: #222936;
+  color: #e8ebf0;
+}
+
+html[data-resolved-theme="dark"] .app-window-controls .app-window-close:hover {
+  background: #e81123;
+  color: white;
+}
+
 html[data-resolved-theme="dark"] ::placeholder {
   color: #788292 !important;
 }
@@ -218,6 +241,106 @@ body {
   /* Inter 的 OpenType 特性：cv11=单层 a、ss01=更友好的 g、cv05/cv08 优化标点数字，calt=上下文替换 */
   font-feature-settings: "cv11" 1, "ss01" 1, "cv05" 1, "cv08" 1, "calt" 1;
   font-optical-sizing: auto;
+}
+
+.app-titlebar {
+  display: flex;
+  height: 34px;
+  flex: 0 0 34px;
+  align-items: center;
+  border-bottom: 1px solid rgba(207, 213, 221, 0.72);
+  background: rgba(238, 241, 245, 0.96);
+  user-select: none;
+}
+
+.app-titlebar-drag {
+  -webkit-app-region: drag;
+}
+
+.app-titlebar-brand {
+  display: flex;
+  height: 100%;
+  min-width: 128px;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px;
+  color: #4f5661;
+  font-size: 12px;
+  font-weight: 650;
+  letter-spacing: 0;
+}
+
+.app-titlebar-menus {
+  display: flex;
+  height: 100%;
+  align-items: center;
+  gap: 2px;
+}
+
+.app-titlebar-menus,
+.app-titlebar-menus *,
+.app-window-controls,
+.app-window-controls * {
+  -webkit-app-region: no-drag;
+}
+
+.app-title-menu-button {
+  height: 26px;
+  border-radius: 6px;
+  padding: 0 9px;
+  color: #4f5661;
+  font-size: 12px;
+  font-weight: 520;
+  letter-spacing: 0;
+  transition:
+    background-color 0.14s ease,
+    color 0.14s ease;
+}
+
+.app-title-menu-button:hover,
+.app-title-menu-button.is-active {
+  background: rgba(223, 228, 234, 0.78);
+  color: #111827;
+}
+
+.app-titlebar-menu {
+  position: absolute;
+  left: 0;
+  top: 31px;
+  z-index: 60;
+}
+
+.app-titlebar-spacer {
+  height: 100%;
+  min-width: 24px;
+  flex: 1 1 auto;
+}
+
+.app-window-controls {
+  display: flex;
+  height: 100%;
+  margin-left: auto;
+}
+
+.app-window-controls button {
+  display: grid;
+  width: 44px;
+  height: 34px;
+  place-items: center;
+  color: #59616d;
+  transition:
+    background-color 0.14s ease,
+    color 0.14s ease;
+}
+
+.app-window-controls button:hover {
+  background: rgba(223, 228, 234, 0.86);
+  color: #202124;
+}
+
+.app-window-controls .app-window-close:hover {
+  background: #e81123;
+  color: white;
 }
 
 button,
@@ -273,6 +396,34 @@ select:focus {
   background-clip: padding-box;
 }
 ::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.capsule-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(138, 144, 153, 0.36) transparent;
+}
+
+.capsule-scrollbar::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+}
+
+.capsule-scrollbar::-webkit-scrollbar-thumb {
+  min-height: 48px;
+  border: 4px solid transparent;
+  border-radius: 999px;
+  background: rgba(138, 144, 153, 0.32);
+  background-clip: padding-box;
+}
+
+.capsule-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: rgba(111, 119, 130, 0.5);
+  background-clip: padding-box;
+}
+
+.capsule-scrollbar::-webkit-scrollbar-track {
+  border-radius: 999px;
   background: transparent;
 }
 
@@ -347,6 +498,15 @@ select:focus {
 
 .cf-menu-item:hover {
   background: #f5f6f8;
+}
+
+/* 键盘 ↑↓ 高亮项（与 hover 同色，保证键盘可达性与鼠标一致） */
+.cf-menu-item.is-highlighted {
+  background: #f5f6f8;
+}
+
+html[data-resolved-theme="dark"] .cf-menu-item.is-highlighted {
+  background: #222936;
 }
 
 .cf-menu-item.is-active {

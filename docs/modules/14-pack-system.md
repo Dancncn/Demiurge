@@ -20,7 +20,7 @@
 
 这种拆分的设计意图是：角色包是可被用户替换、可被第三方制作分发的「皮」，而引擎规则是不可被角色包覆盖的「骨」。两者在 `agent/prompt.rs` 中以不同优先级合成，保证再花哨的角色设定也无法改写工具/安全约束。
 
-模块顶部注释明确把当前定位写成「MVP 文本版清单，格式预留可成长字段（Live2D / TTS / 表情等）」（`src-tauri/src/pack/mod.rs:1`）。清单结构本身为扩展预留，现阶段已落地 `id` / `name` / `persona` / `avatar` / `live2d` 等字段（`live2d` 指向 `.model3.json` 相对路径，经 Tauri asset 协议加载），TTS / 表情等仍是预留方向。
+模块顶部注释明确把当前定位写成「MVP 文本版清单，格式预留可成长字段（Live2D / TTS / 表情等）」（`src-tauri/src/pack/mod.rs:1`）。清单结构本身为扩展预留，现阶段已落地 `id` / `name` / `persona` / `avatar` / `live2d` 等字段（`live2d` 指向 `.model3.json` 相对路径，经 Tauri asset 协议加载）。注意区分：清单里的 TTS **字段**（角色 voice 偏好）仍是预留方向；voice 模块的 TTS **后端**已接通 dashscope + gpt-sovits 双后端（`voice.rs:193-249`），见 §6。
 
 ---
 
@@ -236,8 +236,8 @@ extract_archive(prefix → temp)                           pack/mod.rs:141 / 289
 
 ## 6. 已知限制与扩展点
 
-- **清单是 MVP 文本版，部分「成长字段」已落地**。`live2d`（指向 `.model3.json` 的相对路径，经 Tauri asset 协议加载，非 data URL）已在 `PackManifest` 中落地并通过 `import_live2d_folder` / `resolve_pack_live2d_path` / `remove_live2d` 命令暴露。源码注释列出的 TTS / 表情等仍是预留方向而非已实现能力，请勿在文档中把它们描述为已支持。
-- **语音（TTS/ASR）后端未接通**。角色包当前无法携带语音配置；`voice.rs` 的语音命令面板在设置中可见但后端未接入（与 `docs/IMPLEMENTATION.md:101` 的现状一致）。角色包与语音的衔接是未来扩展点，现状为空。
+- **清单是 MVP 文本版，部分「成长字段」已落地**。`live2d`（指向 `.model3.json` 的相对路径，经 Tauri asset 协议加载，非 data URL）已在 `PackManifest` 中落地并通过 `import_live2d_folder` / `resolve_pack_live2d_path` / `remove_live2d` 命令暴露。源码注释列出的清单级 TTS / 表情等**字段**仍是预留方向（角色包 manifest 的 voice 偏好字段），但 voice 模块的 TTS **后端**已接通（见本节上一条），请勿把"清单字段未落地"误写成"TTS 后端未接通"。
+- **语音后端已接通**。角色包 manifest 的 `runtime.voice` 作为 system prompt hint 渲染（角色偏好音色/语气），不承载后端逻辑；`voice.rs` 的 STT/TTS 三命令（`voice_transcribe`/`voice_synthesize`/`voice_status`）已实现——TTS 走 dashscope + gpt-sovits 双后端（`voice.rs:193-249`）。角色包 voice 偏好与实际播放队列/打断/流式合成的衔接是未来扩展点。
 - **头像无大小上限**。`MAX_IMPORT_BYTES` 只约束 zip 导入；对一个已落地包，`avatar_data_url` 会把整张图 base64 进内存/panel 状态，超大头像可能放大 IPC 负载。
 - **`manifest.id` 与目录名强绑定**。导入后 id 不可改名（改名等于新包），且大小写/同名冲突依赖文件系统语义。
 - **`Pack.manifest` 字段当前未被消费**（`#[allow(dead_code)]`，`pack/mod.rs:29`），上游只取 `persona_text`；将来若 prompt 要用 `name`/`avatar` 需打通这条路径。

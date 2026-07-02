@@ -1,11 +1,11 @@
 # 多模态与 Computer Use 底层能力
 
-> 存档级技术原理文档。覆盖本地 OCR（PP-OCRv5 mobile + oar-ocr 推理）、屏幕感知工具（窗口列表 / 截图 / 区域或窗口 OCR）、语音（云端 ASR 已接通、TTS 预留）以及云端多模态生成（图像 / TTS）四块底层能力。
+> 存档级技术原理文档。覆盖本地 OCR（PP-OCRv5 mobile + oar-ocr 推理）、屏幕感知工具（窗口列表 / 截图 / 区域或窗口 OCR）、语音（云端 ASR + TTS 均已接通）以及云端多模态生成（图像 / TTS）四块底层能力。
 >
 > 主要源文件：
 > - `src-tauri/src/ocr.rs` — OCR 模型管理与推理
 > - `src-tauri/src/tools/screen.rs` — 屏幕感知工具
-> - `src-tauri/src/voice.rs` — WebView 录音 → 云端 ASR 转写、TTS 占位
+> - `src-tauri/src/voice.rs` — WebView 录音 → 云端 ASR 转写、TTS 合成（dashscope / gpt-sovits 双后端，`voice.rs:193-249`）
 > - `src-tauri/src/media.rs` — DashScope 云端图像生成 / 语音合成
 
 ---
@@ -17,7 +17,7 @@
 1. **本地优先、按需下载、不内置重资产。** OCR 模型不随安装包分发，由用户在设置里按需从 ModelScope 或 Hugging Face 下载到 app data 目录（`ocr.rs:1` 注释明确这一点）。这避免了把上百 MB 的 ONNX 权重塞进安装包。
 2. **截图不入上下文。** 屏幕工具把截图落盘到沙盒，只把**文件路径 + 尺寸**返回给模型，而不是把图片二进制灌进对话上下文（`screen.rs:1` 与 `save_capture` 的 `note` 字段）。OCR 工具则进一步把像素就地转成文本再返回，仍然不返回图像本体。
 3. **能力门控 + 默认关闭。** 屏幕工具受 `settings.computer_use_enabled` 统一门控（默认 `false`），语音受 `settings.voice_enabled` 门控（默认 `false`）。所有屏幕工具在注册表里都是 `ToolRisk::Privileged` 且 `PermissionPolicy::ask`，必须经过确认门。
-4. **如实标注接通状态。** 当前已接通：本地 OCR 推理、屏幕截图/窗口列表/区域与窗口 OCR、云端 ASR 转写（DashScope `qwen3-asr-flash` 或 OpenAI 兼容 Whisper）、云端图像生成、云端 TTS（`media::synthesize_speech`）。**预留未接通**：`voice::voice_synthesize`（本地 voice 模块的 TTS 入口仍是占位，见 §5）。
+4. **如实标注接通状态。** 当前已接通：本地 OCR 推理、屏幕截图/窗口列表/区域与窗口 OCR、云端 ASR 转写（DashScope `qwen3-asr-flash` 或 OpenAI 兼容 Whisper）、云端图像生成、云端 TTS（`media::synthesize_speech`）、voice 模块 TTS（`voice::voice_synthesize`，dashscope + gpt-sovits 双后端，见 §4.3）。**未实现**：TTS 的流式合成、播放队列、打断、语速/情感参数、连接测试与失败降级。
 
 ### 当前接通状态一览
 
@@ -29,7 +29,7 @@
 | 区域 / 窗口截图 | `screen::capture_region` / `capture_window` | 已接通 | xcap |
 | 区域 / 窗口 OCR | `screen::ocr_region` / `ocr_window` | 已接通 | xcap + 本地 OCR |
 | 语音 ASR（转写） | `voice::voice_transcribe` | 已接通 | DashScope `qwen3-asr-flash` / OpenAI 兼容 `whisper-1` |
-| 语音 TTS（voice 模块） | `voice::voice_synthesize` | **预留占位**（恒返回错误） | 无 |
+| 语音 TTS（voice 模块） | `voice::voice_synthesize` | 已接通 | DashScope `qwen3-tts-flash` / GPT-SoVITS（`http://127.0.0.1:9880`） |
 | 云端图像生成 | `media::generate_image` | 已接通 | DashScope `qwen-image-2.0` |
 | 云端语音合成 | `media::synthesize_speech` | 已接通 | DashScope `qwen3-tts-flash` |
 
@@ -241,11 +241,31 @@ voice_transcribe(audio: Vec<u8>, mime_type?, language?)
 
 `voice_status` / `stt_ready`（`voice.rs:27-66`）给前端返回"是否真正可用"：要求 `voice_enabled` + 选了支持的后端 + 对应凭据可解析，并返回中文 `reason` 说明为什么不可用。
 
-### 4.3 TTS 占位（`voice_synthesize`）
+### 4.3 TTS 合成（`voice_synthesize`）
 
-`voice_synthesize`（`voice.rs:174-189`）目前是**纯占位**：检查 `voice_enabled` 后**恒返回错误**`"语音合成 API 已预留，但尚未接入 TTS 后端：{voice_tts_backend}"`。它丢弃了 `text/voice_id` 参数（`let _ = (text, voice_id)`）。
+`voice_synthesize`（`voice.rs:193-249`）是 voice 模块的 TTS 入口，按 `settings.voice_tts_backend` 分发到双后端：
 
-> 注意区分两个 TTS 入口：`voice::voice_synthesize` 是**未接通的占位**；而 `media::synthesize_speech`（§5）是**已接通**的云端 TTS。前端的实际语音合成应走 media 通道，voice 模块的 TTS 仍在等待本地/外部后端（TODO 里提到的 GPT-SoVITS、CosyVoice 方向，`docs/TODO.md:86`）。
+```
+voice_synthesize(text, voice_id?, state)
+  ├─ if !voice_enabled → Err
+  ├─ text = trim(text); 空 → Err
+  └─ match voice_tts_backend (小写):
+        ├─ "dashscope"/"aliyun"/"bailian"/"media"
+        │     voice 回落链: requested_voice_id → settings.voice_id
+        │                    → settings.tts_voice → "Cherry"
+        │     → media::synthesize_speech(SpeechSynthesisRequest{
+        │           text, model=settings.tts_model, voice, language_type="Chinese"
+        │        }) → 返回 result.url（DashScope 音频 URL）
+        ├─ "gpt-sovits"/"gpt_sovits"/"gptsovits"
+        │     → synthesize_with_gpt_sovits(http, settings, text, requested_voice_id)
+        │        默认 base http://127.0.0.1:9880 → 返回 base64 data URI
+        ├─ "none"/"" → Err（未选后端）
+        └─ other → Err（未知后端，仅支持 dashscope / gpt-sovits）
+```
+
+dashscope 分支复用 §5 的 `media::synthesize_speech`，模型默认 `qwen3-tts-flash`、音色默认 `Cherry`；gpt-sovits 分支走本地/外部 HTTP 服务，返回 base64 data URI，可直接喂给前端 `<audio>`。流式合成、播放队列、打断、语速/情感参数、连接测试与失败降级尚未实现（见 `docs/TODO.md`）。
+
+> 两个 TTS 入口的分工：`voice::voice_synthesize` 是 voice 模块面向 Composer/角色包 voice 偏好的统一入口，dashscope 分支复用 `media::synthesize_speech`；`media::synthesize_speech`（§5）则是 media 面板独立调用 DashScope 云端 TTS 的薄封装。两者 dashscope 路径同源。
 
 相关默认值（`store/mod.rs`）：`voice_enabled` 默认 `false`，`voice_stt_backend`/`voice_tts_backend` 默认 `"none"`，`voice_id` 默认空串。
 
@@ -287,7 +307,7 @@ voice_transcribe(audio: Vec<u8>, mime_type?, language?)
    └───┬───────────────┬───────────────┬───────────────────┬───────┘
        ▼               ▼               ▼                   ▼
    voice.rs   ──key──► media.rs     ocr.rs            tools/screen.rs
-   (ASR/TTS占位)       (DashScope)   (OAROCR缓存)      (xcap截图/窗口)
+   (ASR/TTS wired)    (DashScope)   (OAROCR缓存)      (xcap截图/窗口)
                                         ▲                   │
                                         └──recognize_rgba───┘   (ocr_region/ocr_window)
 
@@ -314,7 +334,7 @@ voice_transcribe(audio: Vec<u8>, mime_type?, language?)
 
 ## 八、已知限制与扩展点
 
-- **voice TTS 未接通**：`voice::voice_synthesize` 仍是占位；本地/外部 TTS（如 GPT-SoVITS、CosyVoice 等外部 HTTP 服务）是计划中的扩展方向（`docs/TODO.md:86`）。当前可用的 TTS 仅是 media 模块的 DashScope 云端 `qwen3-tts-flash`。
+- **voice TTS 仍缺流式/队列/打断**：`voice::voice_synthesize` 已接通 dashscope + gpt-sovits 双后端（`voice.rs:193-249`）；尚未实现的是流式合成、播放队列、打断、语速/情感参数、连接测试与失败降级（`docs/TODO.md`）。
 - **ASR 无流式/无热键**：当前是"录完整段再上传转写"的一次性请求，尚无流式转写或热键触发（`docs/TODO.md:87`）。
 - **窗口匹配为精确相等**：`find_window` 不支持模糊/包含匹配；窗口标题动态变化（如带页码、未读数）时需先 `list_windows` 取准确标题。
 - **截图不跨屏**：单次截图只能落在一块显示器内。
@@ -326,5 +346,5 @@ voice_transcribe(audio: Vec<u8>, mime_type?, language?)
 
 ## 九、现有文档与代码不符之处（顺手发现）
 
-1. **`docs/IMPLEMENTATION.md:101`** 把 `voice.rs` 描述为"TTS/ASR command surface 预留，设置可见但后端未接入"。实际上 **ASR 已接通**（`voice_transcribe` 走 DashScope `qwen3-asr-flash` 或 OpenAI 兼容 Whisper），仅 voice 模块的 TTS（`voice_synthesize`）仍是占位。该行应更新为"ASR 已接通，TTS 占位"。`docs/TODO.md:87` 已正确标注 ASR 为 `[x]`，两份文档口径不一致。
+1. **`docs/IMPLEMENTATION.md:101`** 旧描述把 `voice.rs` 写成"TTS/ASR command surface 预留，设置可见但后端未接入"。实际 ASR 与 TTS 均已接通：`voice_transcribe` 走 DashScope `qwen3-asr-flash` 或 OpenAI 兼容 Whisper；`voice_synthesize`（`voice.rs:193-249`）走 dashscope + gpt-sovits 双后端。该行已订正为"STT + TTS 已接通"。`docs/TODO.md` 已相应把 TTS 标 `[x]`、剩余流式/队列/打断拆为 `[ ]`。
 2. **`docs/IMPLEMENTATION.md:163` 的目录布局**写作 `ocr-models/`（沙盒 `.demiurge/` 树下），与实际 OCR 模型路径 `<app_data>/models/ocr/pp-ocrv5-mobile/`（`ocr.rs:143-145`）不一致：OCR 模型存在 **app data** 而非沙盒 `.demiurge/`，且目录名是 `models/ocr/...` 而非 `ocr-models/`。`IMPLEMENTATION.md:86` 另处又写 `ocr-models.md`（文档名），与模型目录名易混淆。

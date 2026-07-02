@@ -76,6 +76,9 @@ Demiurge/
 │     ├─ media.rs
 │     ├─ voice.rs
 │     ├─ pomodoro.rs
+│     ├─ companion.rs
+│     ├─ embed/
+│     ├─ startup.rs
 │     ├─ agent/
 │     ├─ llm/
 │     ├─ mcp/
@@ -103,7 +106,7 @@ Demiurge/
 | `connection_tests.rs` | Settings 连接测试；用当前表单设置验证 LLM Provider、Web Search 和 WebDAV 以外的网络 key，不要求先保存密钥 | `test_provider()` / `test_web_search()` |
 | `credentials.rs` | keyring 凭据读写，避免 LLM/Web Search/WebDAV/MCP env 密钥落入 settings 明文 | `hydrate_or_migrate_settings()` / `save_mcp_env_secrets()` |
 | `ocr.rs` | OCR 模型路径、ModelScope/Hugging Face 源、下载进度事件、缺模型检查、手动安装提示和 OCR 推理入口 | `model_status()` / `download_models()` / `recognize_rgba()` |
-| `voice.rs` | STT(ASR) 已接入云端转写后端（DashScope `qwen3-asr-flash` / OpenAI 兼容 Whisper，由 `voice_stt_backend` 选择并校验凭据）；TTS 仍为预留占位 | `voice_transcribe()` / `voice_synthesize()` / `voice_status()` |
+| `voice.rs` | STT(ASR) 已接入云端转写后端（DashScope `qwen3-asr-flash` / OpenAI 兼容 Whisper，由 `voice_stt_backend` 选择并校验凭据）；TTS 已接通双后端——DashScope（默认音色 Cherry、模型 `qwen3-tts-flash`，返回音频 URL）与 GPT-SoVITS（默认 base `http://127.0.0.1:9880`，返回 base64 data URI），由 `voice_tts_backend` 选择；流式合成、播放队列、打断、语速/情感参数等待办 | `voice_transcribe()` / `voice_synthesize()` / `voice_status()` |
 | `media.rs` | DashScope 媒体后端（图像生成）与 voice 用的 dashscope 凭据 / base_url 辅助 | `generate_image()` / `dashscope_api_key()` |
 | `pomodoro.rs` | 番茄钟运行时、持久化状态、完成事件、节奏记忆和勿扰联动所需的面板状态 | `pomodoro_state()` / `pomodoro_start()` / `pomodoro_pause()` / `pomodoro_resume()` / `pomodoro_skip()` |
 | `agent/session_engine.rs` | turn runtime state、入口互斥、中断标记、统一 agent event envelope 和会话写入封装 | `begin_turn()` / `finish_turn()` / `TurnEventEmitter` / `SessionTurnStore` |

@@ -52,7 +52,7 @@ export const respondConfirm = (id, allow, scope) =>
   invoke<void>("respond_confirm", { id, allow, scope });
 ```
 
-命令覆盖：对话（`send`/`send_with_agents`/`interrupt`）、会话引擎（`session_engine_state`）、设置与连接测试、权限/计划（`set_permission_mode`/`plan_state`/`approve_plan`/`reject_plan`/`permission_*`/`shell_policy_state`）、MCP、人格包、自定义 agent、目标（`goal_*`）、历史与上下文统计、技能/记忆、会话 CRUD、媒体生成、WebDAV、OCR、工作流（`workflow_*`），以及语音占位命令。
+命令覆盖：对话（`send`/`send_with_agents`/`interrupt`）、会话引擎（`session_engine_state`）、设置与连接测试、权限/计划（`set_permission_mode`/`plan_state`/`approve_plan`/`reject_plan`/`permission_*`/`shell_policy_state`）、MCP、人格包、自定义 agent、目标（`goal_*`）、历史与上下文统计、技能/记忆、会话 CRUD、媒体生成、WebDAV、OCR、工作流（`workflow_*`），以及语音命令（STT/TTS 已接通）。
 
 事件订阅分两类：
 1. **零散单事件 listener**：`listenPlanUpdated`、`listenPermissionModeUpdated`、`listenSettingsUpdated`、`listenSessionEngineUpdated`、`listenWorkflowUpdated`、`listenMcpUpdated`、`listenOcrDownloadProgress`、`listenUnifiedAgentEvents`（统一信封 `agent-event`）。
@@ -217,7 +217,7 @@ handleSend(text?, attachments=[])
 
 - **Slash 命令面板**：仅当输入以 `/` 开头且不含空格时激活（`Composer.tsx:120`），按前缀过滤 `SLASH_COMMANDS`（`/goal /effort /compact /ultracode /workflows /workflow /skills /dream`，这些命令实际由后端 `send` dispatcher 处理）。支持 ↑↓ 选择、Tab/Enter 应用、Esc 关闭。**命令本身不在前端执行**，只是把 `"/cmd "` 填入输入框，最终随 `send` 提交给后端。
 - **发送/停止合一**：右下角主按钮在 `loading` 时变为 Stop（调 `onStop` → `api.interrupt()`），否则为提交（`Composer.tsx:631`）。`readyToSend = (canSend || 有就绪附件) && !processingFiles`。
-- **语音输入**：用浏览器 `MediaRecorder` 录音，停止后把 Blob 转字节数组交给后端 `voiceTranscribe`。但调用前先 `voiceStatus()` 检查 `ready`，**当前后端 STT/TTS 是占位实现**（见 `api.ts:118` 注释"backend not implemented"），所以正常路径会弹出 toast 提示"语音转写后端尚未接入"。设备选择 id 仅前端 localStorage 持久化（`demiurge.voiceInputDeviceId`），不进 Settings。
+- **语音输入**：用浏览器 `MediaRecorder` 录音，停止后把 Blob 转字节数组交给后端 `voiceTranscribe`。但调用前先 `voiceStatus()` 检查 `ready`，**后端 voice 三命令（`voice_transcribe`/`voice_synthesize`/`voice_status`）已实现**——STT 走 DashScope `qwen3-asr-flash` / OpenAI 兼容 Whisper，TTS 走 dashscope + gpt-sovits 双后端；若用户未在 Settings 选定具体后端，`voiceStatus().ready` 为 false 并给出 reason，前端据此提示先配置后端。设备选择 id 仅前端 localStorage 持久化（`demiurge.voiceInputDeviceId`），不进 Settings。
 
 ### 7.2 ToolCard 的语义增强（`src/components/ToolCard.tsx`）
 
@@ -260,7 +260,7 @@ handleSend(text?, attachments=[])
 
 1. **`WorkflowsPanel.tsx` 未接入 UI**。经全仓检索，除其自身与 `docs/IMPLEMENTATION.md` 外，没有任何源文件 `import` 它；工作流目前只能通过 Composer 的 `/workflows`、`/workflow resume <run_id>` slash 命令交由后端处理。该组件（含 `workflow-updated` 实时订阅、run 详情/重试/恢复 UI）是已完成但未挂载的扩展点。
 2. **统一事件信封未消费**。`agent-event` / `AgentEventEnvelope` / `listenUnifiedAgentEvents` 已在 `api.ts` 定义，但 `App.tsx` 实际消费的是 legacy 命名事件（`assistant-*`/`tool-*`/`goal-progress`）。迁移到统一信封是预留方向。
-3. **语音 STT/TTS 为占位后端**。`voice_transcribe`/`voice_synthesize`/`voice_status` 命令在 `api.ts:118` 明确标注"intentionally return a clear backend-not-implemented error"；Composer 的录音 UI 完整可用，但转写在选定具体 provider 前不会产出文本。Settings 的语音标签文案亦称"后端接口已预留"。
+3. **语音 STT/TTS 已接通但缺流式/队列**。`voice_transcribe`/`voice_synthesize`/`voice_status` 三命令后端已实现（STT：DashScope `qwen3-asr-flash` / OpenAI 兼容 Whisper；TTS：dashscope + gpt-sovits 双后端）。Composer 的录音 UI 完整可用，转写在选定具体后端后即可产出文本；未实现的是 TTS 流式合成、播放队列、打断、语速/情感参数与连接测试。
 4. **上下文窗口表是前端硬编码**。`MODEL_CONTEXT_WINDOWS` 需随模型迭代手工维护，且与后端 provider 档案的实际上限是两套来源；不一致时以后端为准（前端仅用于自动建议输入预算数值）。
 5. **附件上限/截断**：单次最多 8 个文件、每文件 28000 字符、PDF 前 80 页——超限静默截断并加提示，没有 UI 让用户调整这些上限。
 6. **i18n 覆盖不完整**：聊天区与若干对话框仍有硬编码英文（见第六节提示），是最直接的可扩展点。

@@ -40,10 +40,34 @@ export function ensureCubismCore(): Promise<void> {
 }
 
 export interface Live2DLoadResult {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  app: any;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  model: any;
+  app: Live2DPixiApp;
+  model: Live2DModelLike;
+}
+
+/**
+ * Live2D 面板实际调用的 Pixi Application 子集（动态 import 的真实类型较重，
+ * 这里只声明用到的方法/字段，以获得基本类型安全而不引入全量类型依赖）。
+ * destroy / addChild 采用宽松入参，确保 pixi 的 Application / Container
+ * 可结构化赋值到本接口而不触发严格函数类型冲突。
+ */
+export interface Live2DPixiApp {
+  // 方法语法 → 参数按双变比较，pixi Application 的 destroy / Container.addChild
+  // 可结构化赋值到本接口（否则 strictFunctionTypes 下严格逆变会失败）。
+  destroy(...args: unknown[]): void;
+  stage: { addChild(child: unknown): unknown };
+  screen: { width: number; height: number };
+}
+
+/**
+ * Live2D 模型实际调用的成员子集。anchor / position / scale 都是 Pixi 的
+ * ObservablePoint，这里只暴露用到的 set(...)；x / y 为可读写坐标。
+ */
+export interface Live2DModelLike {
+  anchor: { set(x: number, y?: number): void };
+  position: { set(x: number, y?: number): void };
+  scale: { set(x: number, y?: number): void };
+  x: number;
+  y: number;
 }
 
 /**

@@ -21,7 +21,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, LazyLock, Mutex, OnceLock};
 use std::time::Duration;
 
 use regex::Regex;
@@ -32,7 +32,7 @@ use tokio::sync::oneshot;
 
 use agent::conversation::Message;
 use permission::{PermissionResponse, PermissionRule};
-use store::{PermissionMode, ReasoningEffort, Session, SessionMeta, SessionStore, Settings};
+use store::{PermissionMode, Session, SessionMeta, SessionStore, Settings};
 
 const DEFAULT_WINDOW_WIDTH: u32 = 1811;
 const DEFAULT_WINDOW_HEIGHT: u32 = 1213;
@@ -121,7 +121,9 @@ impl AppState {
         let dir = self.data_dir.lock().unwrap().clone();
         let store = self.sessions.lock().unwrap().clone();
         let seq = SEQ.fetch_add(1, Ordering::SeqCst) + 1;
-        std::thread::spawn(move || {
+        // spawn_blocking 复用 Tauri/tokio 阻塞线程池，避免每次落盘新建 OS 线程；
+        // 仍在 async 关键路径之外执行同步磁盘写。
+        tauri::async_runtime::spawn_blocking(move || {
             let written = WRITTEN.get_or_init(|| Mutex::new(HashMap::new()));
             let mut map = written.lock().unwrap_or_else(|e| e.into_inner());
             let last = map.entry(dir.clone()).or_insert(0);
@@ -245,141 +247,8 @@ fn session_list(store: &SessionStore) -> SessionList {
     }
 }
 
-fn effort_usage() -> String {
-    let levels = ReasoningEffort::LEVELS
-        .iter()
-        .map(|level| level.as_str())
-        .collect::<Vec<_>>()
-        .join("|");
-    format!(
-        "Usage: /effort [{levels}|auto]\n\n\
-         Current levels:\n\
-         - low: {}\n\
-         - medium: {}\n\
-         - high: {}\n\
-         - xhigh: {}\n\
-         - max: {}\n\
-         - auto: {}",
-        ReasoningEffort::Low.description(),
-        ReasoningEffort::Medium.description(),
-        ReasoningEffort::High.description(),
-        ReasoningEffort::Xhigh.description(),
-        ReasoningEffort::Max.description(),
-        ReasoningEffort::Auto.description()
-    )
-}
-
-fn effort_status(settings: &Settings) -> String {
-    let profile = llm::ProviderProfile::for_kind(settings.provider);
-    if !profile.supports_reasoning_effort_for_model(&settings.model) {
-        return format!(
-            "Configured effort: `{}`.\nProvider/model `{}` does not support Demiurge effort parameters yet, so no request field will be sent.",
-            settings.reasoning_effort.as_str(),
-            settings.model
-        );
-    }
-    let applied = profile
-        .effective_reasoning_effort(settings)
-        .map(|effort| format!("`{}`", effort.as_str()))
-        .unwrap_or_else(|| "provider default".to_string());
-    format!(
-        "Configured effort: `{}`.\nApplied on next supported request: {applied}.",
-        settings.reasoning_effort.as_str()
-    )
-}
-
-fn emit_settings_updated(app: &AppHandle, settings: &Settings) {
+pub(crate) fn emit_settings_updated(app: &AppHandle, settings: &Settings) {
     let _ = app.emit("settings-updated", settings.clone());
-}
-
-fn handle_recall_slash(state: &AppState, query: &str) -> Result<String, String> {
-    if query.is_empty() {
-        return Ok(
-            "用法：/recall <查询> — 用当前角色包 Lorebook 做召回，返回 chunk 列表与分数。"
-                .to_string(),
-        );
-    }
-    let settings = state.settings.lock().unwrap().clone();
-    let pack_id = settings.current_pack.clone();
-    if pack_id.is_empty() {
-        return Err("未选择角色包".to_string());
-    }
-    let packs_dir = state.packs_dir.lock().unwrap().clone();
-    let data_dir = state.data_dir.lock().unwrap().clone();
-    let embed = crate::embed::provider_from_settings(&state.http, &settings);
-    let detail = pack::lorebook_recall_detail(
-        &packs_dir,
-        &data_dir,
-        &pack_id,
-        query,
-        10,
-        embed.as_deref(),
-        settings.hybrid_weight,
-    )?;
-    Ok(format_recall_detail(&detail))
-}
-
-fn format_recall_detail(detail: &pack::LoreRecallDetail) -> String {
-    let mut out = format!(
-        "Lorebook recall: `{}` ({} chunks indexed, {} hits)\n",
-        detail.query,
-        detail.total_chunks,
-        detail.hits.len()
-    );
-    if detail.hits.is_empty() {
-        out.push_str("无命中。");
-        return out;
-    }
-    for (i, hit) in detail.hits.iter().enumerate() {
-        let heading = hit
-            .heading
-            .as_deref()
-            .filter(|h| !h.is_empty())
-            .unwrap_or(&hit.title);
-        out.push_str(&format!(
-            "\n{}. score={:.1} — {}#{} / {}\n",
-            i + 1,
-            hit.score,
-            hit.source,
-            hit.chunk_index,
-            heading
-        ));
-        if !hit.matched_terms.is_empty() {
-            out.push_str(&format!("   matched: {}\n", hit.matched_terms.join(", ")));
-        }
-        let preview: String = hit.text.chars().take(200).collect();
-        out.push_str(&format!("   {preview}…\n"));
-    }
-    out
-}
-
-fn handle_effort_slash(app: &AppHandle, state: &AppState, text: &str) -> Result<String, String> {
-    let arg = text.trim().strip_prefix("/effort").unwrap_or("").trim();
-    if arg.is_empty() {
-        let settings = state.settings.lock().unwrap().clone();
-        return Ok(format!(
-            "{}\n\n{}",
-            effort_status(&settings),
-            effort_usage()
-        ));
-    }
-    let Some(effort) = ReasoningEffort::parse(arg) else {
-        return Ok(effort_usage());
-    };
-    let next = {
-        let mut settings = state.settings.lock().unwrap();
-        settings.reasoning_effort = effort;
-        settings.clone()
-    };
-    let dir = state.data_dir.lock().unwrap().clone();
-    store::save_settings(&dir, &next)?;
-    emit_settings_updated(app, &next);
-    Ok(format!(
-        "Set effort to `{}`: {}\n\n{}",
-        effort.as_str(),
-        effort.description(),
-        effort_status(&next)
-    ))
 }
 
 fn persist_direct_reply(
@@ -421,145 +290,17 @@ async fn send(app: AppHandle, state: State<'_, AppState>, text: String) -> Resul
     )?;
     let events = agent::session_engine::TurnEventEmitter::new(&app, st);
     let trimmed = text.trim();
-    let mut should_drive_goal = false;
-    let res = if trimmed == "/dream" || trimmed.starts_with("/dream ") {
-        should_drive_goal = true;
-        agent::dream::run_manual_dream(&app, st, text).await
-    } else if trimmed == "/compact" || trimmed.starts_with("/compact ") {
-        should_drive_goal = true;
-        agent::collapse::run_manual_compact(&app, st, text).await
-    } else if trimmed == "/goal" || trimmed.starts_with("/goal ") {
-        match agent::goal::handle_slash(st, trimmed) {
-            Ok(agent::goal::GoalSlashOutcome::Respond(body)) => {
-                events.assistant_done(body);
-                Ok(())
+    let (res, should_drive_goal) = match agent::slash::dispatch(&app, st, text.clone(), &events).await {
+        Some(outcome) => outcome,
+        None => {
+            if let Some(risk) = companion::detect_high_risk_expression(trimmed) {
+                persist_direct_reply(st, &session_id, text.clone(), risk.support_message.clone());
+                events.assistant_done(risk.support_message);
+                (Ok(()), false)
+            } else {
+                (agent::run_turn(&app, st, text).await, true)
             }
-            Ok(agent::goal::GoalSlashOutcome::Query {
-                stored_user_text,
-                system_overlay,
-                ..
-            }) => {
-                should_drive_goal = true;
-                agent::run_turn_with_options(
-                    &app,
-                    st,
-                    text,
-                    agent::TurnOptions {
-                        system_overlay: Some(system_overlay),
-                        stored_user_text: Some(stored_user_text),
-                        workflow_run_id: None,
-                        agent_names: Vec::new(),
-                        token_budget: None,
-                    },
-                )
-                .await
-            }
-            Err(e) => Err(e),
         }
-    } else if trimmed == "/skills"
-        || trimmed.starts_with("/skills ")
-        || trimmed == "/skill"
-        || trimmed.starts_with("/skill ")
-    {
-        let body = agent::skills::slash_response(st, trimmed)?;
-        events.assistant_done(body);
-        Ok(())
-    } else if trimmed == "/effort" || trimmed.starts_with("/effort ") {
-        let body = handle_effort_slash(&app, st, trimmed)?;
-        events.assistant_done(body);
-        Ok(())
-    } else if trimmed == "/recall" || trimmed.starts_with("/recall ") {
-        let query = trimmed.trim_start_matches("/recall").trim();
-        let body = handle_recall_slash(st, query)?;
-        events.assistant_done(body);
-        Ok(())
-    } else if trimmed == "/workflows" {
-        should_drive_goal = true;
-        let runs = agent::workflow_runtime::panel_state(st).runs;
-        let body = if runs.is_empty() {
-            "暂无 workflow run。使用 /ultracode <任务> 或 Workflows 面板会自动创建 run。"
-                .to_string()
-        } else {
-            let mut out = String::from("Workflow runs:\n");
-            for run in runs.iter().take(20) {
-                let status = match run.status {
-                    agent::workflow_runtime::WorkflowStatus::Running => "running",
-                    agent::workflow_runtime::WorkflowStatus::StaleRunning => "stale_running",
-                    agent::workflow_runtime::WorkflowStatus::Done => "done",
-                    agent::workflow_runtime::WorkflowStatus::Failed => "failed",
-                    agent::workflow_runtime::WorkflowStatus::Killed => "killed",
-                    agent::workflow_runtime::WorkflowStatus::Journaled => "journaled",
-                };
-                let budget = run
-                    .budget
-                    .total
-                    .map(|total| format!(" budget={}/{}", run.budget.used_total(), total))
-                    .unwrap_or_default();
-                out.push_str(&format!(
-                    "- `{}` status={} steps={}/{} agents={}{} updated_at={} journal={}\n",
-                    run.run_id,
-                    status,
-                    run.steps_done,
-                    run.steps_total,
-                    run.agents.len(),
-                    budget,
-                    run.updated_at,
-                    run.journal_path
-                ));
-            }
-            out
-        };
-        events.assistant_done(body);
-        Ok(())
-    } else if trimmed.starts_with("/workflow resume ") {
-        let run_id = trimmed
-            .trim_start_matches("/workflow resume ")
-            .trim()
-            .to_string();
-        let overlay = agent::workflow_runtime::resume_overlay(st, &run_id)?;
-        should_drive_goal = true;
-        agent::run_turn_with_options(
-            &app,
-            st,
-            text,
-            agent::TurnOptions {
-                system_overlay: Some(overlay),
-                stored_user_text: None,
-                workflow_run_id: Some(run_id),
-                agent_names: Vec::new(),
-                token_budget: None,
-            },
-        )
-        .await
-    } else if trimmed == "/ultracode" || trimmed.starts_with("/ultracode ") {
-        should_drive_goal = true;
-        let task = trimmed
-            .strip_prefix("/ultracode")
-            .unwrap_or("")
-            .trim()
-            .to_string();
-        let run_id = agent::workflow_journal::new_run_id();
-        let overlay = agent::ultracode::overlay(&task);
-        agent::run_turn_with_options(
-            &app,
-            st,
-            text,
-            agent::TurnOptions {
-                system_overlay: Some(overlay),
-                stored_user_text: None,
-                workflow_run_id: Some(run_id),
-                agent_names: Vec::new(),
-                token_budget: None,
-            },
-        )
-        .await
-    } else if let Some(risk) = companion::detect_high_risk_expression(trimmed) {
-        persist_direct_reply(st, &session_id, text.clone(), risk.support_message.clone());
-        events.assistant_done(risk.support_message);
-        Ok(())
-    } else {
-        should_drive_goal = true;
-        agent::run_turn(&app, st, text).await
     };
     let res = if res.is_ok() && should_drive_goal && !st.cancel.load(Ordering::Relaxed) {
         agent::goal::drive_after_turn(&app, st).await
@@ -684,6 +425,7 @@ fn save_settings(
     credentials::save_web_search_api_keys(&settings)?;
     credentials::save_webdav_password(&settings.webdav_password)?;
     credentials::save_media_api_key(&settings.media_api_key)?;
+    credentials::save_embedding_api_key(&settings.embedding_api_key)?;
     credentials::save_mcp_env_secrets(&settings)?;
     *state.settings.lock().unwrap() = settings.clone();
     let dir = state.data_dir.lock().unwrap().clone();
@@ -2207,17 +1949,27 @@ async fn webdav_ensure_collection(
     }
 }
 
+static WEBDAV_RESPONSE_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?is)<[^:>/]*:?response\b[^>]*>.*?</[^:>/]*:?response>")
+        .expect("valid WebDAV response regex")
+});
+static WEBDAV_HREF_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?is)<[^:>/]*:?href[^>]*>(.*?)</[^:>/]*:?href>").expect("valid href regex")
+});
+static WEBDAV_MODIFIED_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?is)<[^:>/]*:?getlastmodified[^>]*>(.*?)</[^:>/]*:?getlastmodified>")
+        .expect("valid modified regex")
+});
+static WEBDAV_SIZE_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?is)<[^:>/]*:?getcontentlength[^>]*>(.*?)</[^:>/]*:?getcontentlength>")
+        .expect("valid size regex")
+});
+
 fn parse_webdav_backup_files(body: &str) -> Vec<WebDavBackupFile> {
-    let response_re = Regex::new(r"(?is)<[^:>/]*:?response\b[^>]*>.*?</[^:>/]*:?response>")
-        .expect("valid WebDAV response regex");
-    let href_re =
-        Regex::new(r"(?is)<[^:>/]*:?href[^>]*>(.*?)</[^:>/]*:?href>").expect("valid href regex");
-    let modified_re =
-        Regex::new(r"(?is)<[^:>/]*:?getlastmodified[^>]*>(.*?)</[^:>/]*:?getlastmodified>")
-            .expect("valid modified regex");
-    let size_re =
-        Regex::new(r"(?is)<[^:>/]*:?getcontentlength[^>]*>(.*?)</[^:>/]*:?getcontentlength>")
-            .expect("valid size regex");
+    let response_re = &*WEBDAV_RESPONSE_RE;
+    let href_re = &*WEBDAV_HREF_RE;
+    let modified_re = &*WEBDAV_MODIFIED_RE;
+    let size_re = &*WEBDAV_SIZE_RE;
 
     let mut files = Vec::new();
     for response in response_re.find_iter(body).map(|m| m.as_str()) {

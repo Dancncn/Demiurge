@@ -176,6 +176,8 @@ struct McpServerRuntime {
     error: Option<String>,
     server_info: Option<String>,
     instructions: Option<String>,
+    /// MCP server capabilities（initialize 响应）。当前仅存储供未来 capability 感知过滤使用，暂不读取。
+    #[allow(dead_code)]
     capabilities: Value,
     tools: Vec<McpTool>,
     resources: Vec<McpResource>,

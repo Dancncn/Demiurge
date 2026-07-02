@@ -317,7 +317,7 @@ ConnectionTestResult { ok, target, detail, latency_ms }   ← 不落盘、不写
 
 ## ⑥ 已知限制与扩展点
 
-- **无 RAG / 无向量检索**：记忆完全靠 `sessions.json` 全量保存 + rolling summary 摘要替身（`store/mod.rs:2` 明确声明 MVP 不做向量 RAG）。会话越长，`sessions.json` 越大；摘要是唯一的「压缩」手段。
+- **向量 RAG 已实现**：lorebook/记忆检索走 BM25 + dense + RRF 混合召回，dense 向量由 `src-tauri/src/embed/mod.rs` 的 `RemoteEmbeddingProvider`（OpenAI 兼容 `/v1/embeddings`）提供，详见 [modules/20](./20-lorebook-vector-rag.md)。`sessions.json` 仍全量保存会话，rolling summary 是对话层的「压缩」手段；向量索引独立维护，不与 `sessions.json` 混写。`store/mod.rs:2` 头注释的历史口径（"MVP 不做向量 RAG"）已被 modules/20 的实现覆盖，以 modules/20 为准。
 - **整文件覆盖写**：`save_sessions` / `save_settings` 都是 `fs::write` 全量覆盖（`store/mod.rs:487`、`:449`），非原子写、无 WAL。进程在写盘中途崩溃可能损坏文件；但 `load_*` 解析失败会回退默认/空，不会崩。
 - **goal token 预算为软约束**：`token_budget` 仅切换状态到 `BudgetLimited`（`goal.rs:486`），不硬性熔断进行中的请求。若需硬约束需在 runner 侧增加拦截。
 - **voice 相关字段为占位**：`voice_stt_backend` / `voice_tts_backend` 默认 `"none"`（`store/mod.rs:63`、`:67`），`voice_enabled` 默认 `false`（`:16`）；这些字段已能持久化，但其后端能力本篇范围内仅作为配置项存在，实际语音链路状态见对应模块文档，不应视为已完整接通。

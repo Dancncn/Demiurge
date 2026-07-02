@@ -26,6 +26,10 @@ public/core/live2dcubismcore.min.js
 .env
 .env.local
 
+# 本地 GPT-SoVITS 启动脚本与音色配置（含本机绝对路径与个人训练模型引用，仅本机有效，不入库）
+scripts/gpt-sovits-dan-tts.yaml
+scripts/start-gpt-sovits-dan.ps1
+
 # 编辑器
 .vscode/
 .idea/

@@ -318,7 +318,8 @@ pub struct Settings {
     /// 远程 embedding base URL（OpenAI 兼容，如 DashScope / OpenAI）。
     #[serde(default)]
     pub embedding_base_url: String,
-    /// 远程 embedding API Key。TODO: 后续接入凭据管理器，避免明文存 settings。
+    /// 远程 embedding API Key。运行时由 `credentials::hydrate_or_migrate_settings` 从系统凭据管理器填充；
+    /// 落盘时由 `redacted_settings` 清空，明文不写入 `settings.json`。
     #[serde(default)]
     pub embedding_api_key: String,
     /// embedding 模型名（如 text-embedding-v3 / text-embedding-3-small）。
@@ -560,6 +561,7 @@ pub fn redacted_settings(s: &Settings) -> Settings {
     safe.exa_api_key.clear();
     safe.webdav_password.clear();
     safe.media_api_key.clear();
+    safe.embedding_api_key.clear();
     for server in &mut safe.mcp_servers {
         for env in &mut server.env {
             if env.secret {
@@ -678,6 +680,7 @@ mod tests {
             brave_search_api_key: "brave-secret".to_string(),
             exa_api_key: "exa-secret".to_string(),
             media_api_key: "media-secret".to_string(),
+            embedding_api_key: "embed-secret".to_string(),
             ..Settings::default()
         };
         save_settings(&dir, &settings).unwrap();
@@ -688,6 +691,7 @@ mod tests {
         assert!(!raw.contains("brave-secret"));
         assert!(!raw.contains("exa-secret"));
         assert!(!raw.contains("media-secret"));
+        assert!(!raw.contains("embed-secret"));
         let saved = serde_json::from_str::<Settings>(&raw).unwrap();
         assert!(saved.api_key.is_empty());
         assert!(saved.tavily_api_key.is_empty());
@@ -695,6 +699,7 @@ mod tests {
         assert!(saved.exa_api_key.is_empty());
         assert!(saved.webdav_password.is_empty());
         assert!(saved.media_api_key.is_empty());
+        assert!(saved.embedding_api_key.is_empty());
 
         let _ = std::fs::remove_dir_all(&dir);
     }

@@ -28,7 +28,7 @@ function usageSummary(result?: ImageGenerationResult | SpeechSynthesisResult | n
 }
 
 export default function MediaStudio({ settings, onOpenSettings }: Props) {
-  const [prompt, setPrompt] = useState("A clean native desktop app screenshot, refined layout, soft neutral UI.");
+  const [prompt, setPrompt] = useState("");
   const [negativePrompt, setNegativePrompt] = useState("");
   const [model, setModel] = useState(settings?.image_model || "qwen-image-2.0");
   const [size, setSize] = useState(settings?.image_size || "1024*1024");

@@ -118,7 +118,7 @@ Pixi v8 + 引擎 + `@pixi/sound` 体积大（构建后 `vendor-live2d` chunk 约
 
 ### 6.1 当前 MVP 不做
 - **透明置顶桌宠窗口**：独立 OS 窗口、`transparent` + `alwaysOnTop` + `set_ignore_cursor_events` 点击穿透、可收起/展开。技术上 Tauri 2 在 Win11 完全可行（无需额外 Cargo feature），但需要第二个 Vite 入口 + 独立 capability + 透明窗口配置，工作量另开一轮。见 TODO P4「Live2D 桌宠方案」。
-- **口型同步**：`model3.json` 的 `LipSync` 组为空（`Ids: []`），且本项目 TTS adapter 尚未接通。等 TTS 落地后，要么给 `LipSync` 组补 `ParamMouthOpen` 让 `model.speak(audioUrl)` 自动驱动，要么每帧 `model.internalModel.coreModel.setParameterValueById("ParamMouthOpen", v)` 手动驱动。
+- **口型同步**：`model3.json` 的 `LipSync` 组为空（`Ids: []`），且本项目 TTS adapter 已接通但 Live2D lip-sync 尚未接入。lip-sync 待接入时，要么给 `LipSync` 组补 `ParamMouthOpen` 让 `model.speak(audioUrl)` 自动驱动，要么每帧 `model.internalModel.coreModel.setParameterValueById("ParamMouthOpen", v)` 手动驱动。
 - **动作播放**：`model3.json` 无 `Motions` 字段，引擎不合成 idle 动作。当前靠 CubismBreath + 自动眨眼 + `physics3.json` 让模型「活着」，但没有全身 idle 动画。要真动作需作者 `.motion3.json` 并在 model3.json 加 `Idle` 组。
 - **眨眼/呼吸开关**：面板只有缩放和重载，没暴露眨眼/呼吸 toggle（引擎 API 不支持 factory option 级开关，要在 `internalModel` 上改，留到下一轮）。
 
@@ -135,6 +135,6 @@ Pixi v8 + 引擎 + `@pixi/sound` 体积大（构建后 `vendor-live2d` chunk 约
 
 ## 7. 扩展指引
 
-- **接 TTS 口型同步**：TTS adapter 落地后，在 `Live2DPanel` 里订阅 TTS 音频事件，用 `model.internalModel.coreModel.setParameterValueById("ParamMouthOpen", rms)` 每帧驱动；或给 model3.json 的 `LipSync` 组补 `ParamMouthOpen` 后调 `model.speak(audioUrl)`。
+- **接 TTS 口型同步**：TTS adapter 已就绪（dashscope + gpt-sovits 双后端），lip-sync 待接入。在 `Live2DPanel` 里订阅 TTS 音频事件，用 `model.internalModel.coreModel.setParameterValueById("ParamMouthOpen", rms)` 每帧驱动；或给 model3.json 的 `LipSync` 组补 `ParamMouthOpen` 后调 `model.speak(audioUrl)`。
 - **桌宠窗口**：在 `tauri.conf.json` 加第二个 window（`label: "pet"`，`transparent/decorations:false/alwaysOnTop:true/skipTaskbar:true`），新建 `src/pet.tsx` 只挂 Pixi+Live2D，加 `capabilities/pet.json`，用 `app.emit_to("pet", ...)` 从 agent 循环驱动表情。主窗口保持普通装饰窗口不变。
 - **状态映射**：Companion 的 `focus`/`mood` 状态变化时，通过 `model.internalModel` 调参数或播动作，低频触发，避免干扰工作。
