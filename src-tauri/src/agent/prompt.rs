@@ -97,6 +97,7 @@ pub fn build_with_report_for_input(
     let packs_dir = state.packs_dir.lock().unwrap().clone();
     let session_id = state.sessions.lock().unwrap().active.clone();
     let goal_block = super::goal::build_goal_context_block(state);
+    let embed = crate::embed::provider_from_settings(&state.http, settings);
     let drafts = build_ordered_sections(
         &sandbox,
         &data_dir,
@@ -107,6 +108,8 @@ pub fn build_with_report_for_input(
         session_summary,
         goal_block,
         user_text,
+        embed.as_deref(),
+        settings.hybrid_weight,
     );
     assemble_drafts(
         super::persona::engine_base(),
@@ -125,6 +128,8 @@ fn build_ordered_sections(
     session_summary: Option<&str>,
     goal_block: String,
     user_text: Option<&str>,
+    embed: Option<&dyn crate::embed::EmbeddingProvider>,
+    hybrid_weight: f32,
 ) -> Vec<SectionDraft> {
     vec![
         section(
@@ -143,7 +148,14 @@ fn build_ordered_sections(
             "lorebook",
             "Retrieved Lorebook",
             78,
-            lorebook_section(data_dir, packs_dir, &settings.current_pack, user_text),
+            lorebook_section(
+                data_dir,
+                packs_dir,
+                &settings.current_pack,
+                user_text,
+                embed,
+                hybrid_weight,
+            ),
         ),
         section(
             "project_instructions",
@@ -317,8 +329,17 @@ fn lorebook_section(
     packs_dir: &Path,
     pack_id: &str,
     user_text: Option<&str>,
+    embed: Option<&dyn crate::embed::EmbeddingProvider>,
+    hybrid_weight: f32,
 ) -> String {
-    crate::pack::lorebook_context(packs_dir, data_dir, pack_id, user_text)
+    crate::pack::lorebook_context(
+        packs_dir,
+        data_dir,
+        pack_id,
+        user_text,
+        embed,
+        hybrid_weight,
+    )
 }
 
 fn project_section(root: &Path) -> String {

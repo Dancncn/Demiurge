@@ -141,7 +141,7 @@ run()
 | OCR | `ocr_image_bytes`(:1409)、`ocr_model_status`(:1602)、`ocr_download_models`(:1607) | 转调 `ocr` 模块 |
 | 媒体 | `media_generate_image`(:1417)、`media_synthesize_speech`(:1425) | 转调 `media` 模块 |
 | Workflow | `workflow_panel_state`(:1616)、`workflow_run`(:1621)、`workflow_stop`(:1636) | run 在 `async_runtime::spawn` 后台执行 |
-| 语音 | `voice::voice_status`、`voice::voice_transcribe`、`voice::voice_synthesize` | STT 已接通云端，TTS 为占位（见 ⑤） |
+| 语音 | `voice::voice_status`、`voice::voice_transcribe`、`voice::voice_synthesize` | STT 已接通云端；TTS 已接通 dashscope + gpt-sovits 双后端（见 ⑤） |
 
 设计共性：**绝大多数命令是薄转调**，把 `state.inner()` 与若干锁里克隆出的值传给对应模块函数；壳层只负责取锁、克隆、emit 事件。写类命令的通用尾声是「改内存 → `store::save_*` 落盘 → `app.emit(...)` 通知前端」。
 
@@ -281,7 +281,7 @@ context_panel_state:
 
 ## ⑥ 已知限制与扩展点
 
-- **TTS 为占位**。`voice_synthesize`（`voice.rs:174`）忽略入参，直接返回「语音合成 API 已预留，但尚未接入 TTS 后端」。`VoiceStatus.tts_backend` 字段照常上报，但无实际后端。STT（`voice_transcribe`）则**已接通**云端 Whisper 形态接口（DashScope `qwen3-asr-flash` 或当前 provider 的 OpenAI 兼容 `whisper-1`，`voice.rs:97-117`）。
+- **TTS 双后端已接通，缺流式/队列/打断**。`voice_synthesize`（`voice.rs:193-249`）按 `voice_tts_backend` 分派：dashscope 分支复用 `media::synthesize_speech`（默认音色 Cherry、模型 `qwen3-tts-flash`，返回音频 URL），gpt-sovits 分支走 `synthesize_with_gpt_sovits`（默认 base `http://127.0.0.1:9880`，返回 base64 data URI）；未实现流式合成、播放队列、打断、语速/情感参数、连接测试与失败降级。STT（`voice_transcribe`）已接通云端 Whisper 形态接口（DashScope `qwen3-asr-flash` 或当前 provider 的 OpenAI 兼容 `whisper-1`）。
 - **WebDAV 无恢复命令**。只有备份/列举/删除，缺 `restore`（见 3.5）。
 - **token 预算为估算**，非真实 tokenizer，面板数值仅供参考（见 3.6）。`context_panel_state` 里 `history_over_budget_tokens` 仅作展示，**裁剪/硬约束**的实际生效逻辑在 `agent::budget`/agent 循环侧，本壳层只读不裁。
 - **窗口尺寸双写**。conf 逻辑像素与 `setup` 物理像素并存（见 3.1），改默认尺寸需同时改常量与 conf。

@@ -11,6 +11,7 @@ pub mod persona;
 pub mod prompt;
 pub mod session_engine;
 pub mod skills;
+pub mod slash;
 pub mod subagent;
 pub mod summary;
 pub mod ultracode;

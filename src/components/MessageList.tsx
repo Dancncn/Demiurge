@@ -4,6 +4,7 @@ import { Markdown } from "./Markdown";
 import ToolCard from "./ToolCard";
 import { Dashboard } from "./Dashboard";
 import { CheckIcon, CopyIcon, RotateCwIcon } from "./Icons";
+import { useCopyToClipboard } from "../lib/hooks";
 
 const AVATAR = "/demiurge.png";
 
@@ -87,16 +88,7 @@ const AssistantMessage = memo(function AssistantMessage({
   retryText?: string;
   onRetry?: (text: string) => void;
 }) {
-  const [copied, setCopied] = useState(false);
-  async function copy() {
-    try {
-      await navigator.clipboard.writeText(text);
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 1600);
-    } catch {
-      /* 忽略剪贴板错误 */
-    }
-  }
+  const { copied, copy } = useCopyToClipboard();
 
   return (
     <article className="cf-message-in group flex justify-start">
@@ -129,7 +121,7 @@ const AssistantMessage = memo(function AssistantMessage({
             <div className="mt-1.5 flex items-center gap-0.5 text-[#8a8a8a] opacity-0 transition duration-200 group-hover:opacity-100">
               <button
                 type="button"
-                onClick={copy}
+                onClick={() => void copy(text)}
                 title="Copy"
                 className="grid h-8 w-8 place-items-center rounded-md transition hover:bg-[#eef1f5] hover:text-[#202124]"
               >
@@ -148,9 +140,10 @@ type Props = {
   thinking: boolean;
   greeting: string;
   onRetry: (text: string) => void;
+  onOpenFortune?: () => void;
 };
 
-export function MessageList({ items, thinking, greeting, onRetry }: Props) {
+export function MessageList({ items, thinking, greeting, onRetry, onOpenFortune }: Props) {
   const bottomRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
@@ -161,7 +154,7 @@ export function MessageList({ items, thinking, greeting, onRetry }: Props) {
       <div className="mx-auto flex w-full max-w-3xl flex-col px-4 pb-40 pt-5">
         {items.length === 0 && !thinking ? (
           <div className="cf-message-in">
-            <Dashboard greeting={greeting} />
+            <Dashboard greeting={greeting} onOpenFortune={onOpenFortune} />
           </div>
         ) : (
           <div className="space-y-5">

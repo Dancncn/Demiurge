@@ -16,6 +16,7 @@ const BRAVE_SEARCH_API_KEY_ACCOUNT: &str = "web_search_brave_api_key";
 const EXA_API_KEY_ACCOUNT: &str = "web_search_exa_api_key";
 const WEBDAV_PASSWORD_ACCOUNT: &str = "webdav_password";
 const MEDIA_API_KEY_ACCOUNT: &str = "media_api_key";
+const EMBEDDING_API_KEY_ACCOUNT: &str = "embedding_api_key";
 
 #[derive(Clone, Copy)]
 enum SecretKind {
@@ -25,6 +26,7 @@ enum SecretKind {
     Exa,
     WebDav,
     Media,
+    Embedding,
 }
 
 impl SecretKind {
@@ -36,6 +38,7 @@ impl SecretKind {
             SecretKind::Exa => EXA_API_KEY_ACCOUNT,
             SecretKind::WebDav => WEBDAV_PASSWORD_ACCOUNT,
             SecretKind::Media => MEDIA_API_KEY_ACCOUNT,
+            SecretKind::Embedding => EMBEDDING_API_KEY_ACCOUNT,
         }
     }
 
@@ -47,6 +50,7 @@ impl SecretKind {
             SecretKind::Exa => "Exa API Key",
             SecretKind::WebDav => "WebDAV Password",
             SecretKind::Media => "Media API Key",
+            SecretKind::Embedding => "Embedding API Key",
         }
     }
 }
@@ -194,6 +198,14 @@ pub fn save_media_api_key(secret: &str) -> Result<(), String> {
     save_secret(SecretKind::Media, secret)
 }
 
+pub fn load_embedding_api_key() -> Result<Option<String>, String> {
+    load_secret(SecretKind::Embedding)
+}
+
+pub fn save_embedding_api_key(secret: &str) -> Result<(), String> {
+    save_secret(SecretKind::Embedding, secret)
+}
+
 pub fn save_mcp_env_secrets(settings: &Settings) -> Result<(), String> {
     for server in &settings.mcp_servers {
         for env in &server.env {
@@ -213,12 +225,14 @@ pub fn hydrate_or_migrate_settings(dir: &Path, settings: &mut Settings) -> Resul
     let legacy_exa = settings.exa_api_key.trim().to_string();
     let legacy_webdav_password = settings.webdav_password.trim().to_string();
     let legacy_media = settings.media_api_key.trim().to_string();
+    let legacy_embedding = settings.embedding_api_key.trim().to_string();
     let mut has_legacy_mcp_env = false;
     let has_legacy_plaintext = !legacy_plaintext.is_empty();
     let has_legacy_web_key =
         !legacy_tavily.is_empty() || !legacy_brave.is_empty() || !legacy_exa.is_empty();
     let has_legacy_webdav_password = !legacy_webdav_password.is_empty();
     let has_legacy_media = !legacy_media.is_empty();
+    let has_legacy_embedding = !legacy_embedding.is_empty();
 
     if has_legacy_plaintext {
         save_api_key(&legacy_plaintext)?;
@@ -262,6 +276,13 @@ pub fn hydrate_or_migrate_settings(dir: &Path, settings: &mut Settings) -> Resul
         settings.media_api_key = secret;
     }
 
+    if has_legacy_embedding {
+        save_secret(SecretKind::Embedding, &legacy_embedding)?;
+        settings.embedding_api_key = legacy_embedding;
+    } else if let Some(secret) = load_embedding_api_key()? {
+        settings.embedding_api_key = secret;
+    }
+
     for server in &mut settings.mcp_servers {
         for env in &mut server.env {
             if !env.secret {
@@ -282,6 +303,7 @@ pub fn hydrate_or_migrate_settings(dir: &Path, settings: &mut Settings) -> Resul
         || has_legacy_web_key
         || has_legacy_webdav_password
         || has_legacy_media
+        || has_legacy_embedding
         || has_legacy_mcp_env
     {
         store::save_settings(dir, settings)?;

@@ -346,7 +346,7 @@ fn professional_boundary_message() -> String {
 }
 
 pub fn memory_queue_state(data_dir: &Path) -> CompanionMemoryQueueState {
-    let mut items = read_memory_queue(data_dir);
+    let mut items = read_memory_queue(data_dir).unwrap_or_default();
     items.sort_by(|a, b| b.created_at.cmp(&a.created_at));
     let pending_count = items.iter().filter(|item| item.status == "pending").count();
     CompanionMemoryQueueState {
@@ -386,7 +386,7 @@ pub fn enqueue_memory_queue_item(
         return Ok(memory_queue_state(data_dir));
     }
     let reason = sanitize_memory_text(reason, 180);
-    let mut items = read_memory_queue(data_dir);
+    let mut items = read_memory_queue(data_dir)?;
     let dedupe_key = memory_queue_dedupe_key(&scope, &kind, &text);
     if let Some(existing) = items.iter_mut().find(|item| {
         item.status == "pending"
@@ -425,7 +425,7 @@ pub fn mark_memory_queue_item(
         "pending" | "saved" | "ignored" => status,
         _ => return Err(format!("Unknown companion memory queue status: {status}")),
     };
-    let mut items = read_memory_queue(data_dir);
+    let mut items = read_memory_queue(data_dir)?;
     let item = items
         .iter_mut()
         .find(|item| item.id == id)
@@ -438,6 +438,7 @@ pub fn mark_memory_queue_item(
 
 pub fn pending_memory_queue_item(data_dir: &Path, id: &str) -> Option<CompanionMemoryQueueItem> {
     read_memory_queue(data_dir)
+        .unwrap_or_default()
         .into_iter()
         .find(|item| item.id == id && item.status == "pending")
 }
@@ -516,11 +517,17 @@ fn memory_queue_path(data_dir: &Path) -> PathBuf {
     data_dir.join("companion-memory-queue.json")
 }
 
-fn read_memory_queue(data_dir: &Path) -> Vec<CompanionMemoryQueueItem> {
-    fs::read_to_string(memory_queue_path(data_dir))
-        .ok()
-        .and_then(|raw| serde_json::from_str::<Vec<CompanionMemoryQueueItem>>(&raw).ok())
-        .unwrap_or_default()
+/// 读取陪伴记忆队列。文件不存在视为合法空队列（返回空 Vec）；
+/// 文件存在但解析失败视为损坏，返回 Err，调用方据此避免用单项覆盖原队列。
+fn read_memory_queue(data_dir: &Path) -> Result<Vec<CompanionMemoryQueueItem>, String> {
+    let path = memory_queue_path(data_dir);
+    let raw = match fs::read_to_string(&path) {
+        Ok(raw) => raw,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(format!("读取陪伴记忆队列失败：{e}")),
+    };
+    serde_json::from_str::<Vec<CompanionMemoryQueueItem>>(&raw)
+        .map_err(|e| format!("陪伴记忆队列已损坏（{path:?}），无法解析：{e}"))
 }
 
 fn write_memory_queue(data_dir: &Path, items: &[CompanionMemoryQueueItem]) -> Result<(), String> {

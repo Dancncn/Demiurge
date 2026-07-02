@@ -96,7 +96,7 @@ export function ContextMeter({
         </svg>
       </button>
       {open && (
-        <div className="cf-menu-in absolute bottom-[calc(100%+8px)] right-0 z-30 w-64 overflow-hidden rounded-lg border border-[#e2e5ea] bg-white shadow-[0_12px_36px_rgba(15,23,42,0.16)]">
+        <div className="cf-menu-in cf-dropdown absolute bottom-[calc(100%+8px)] right-0 z-30 w-64 overflow-hidden">
           <div className="border-b border-[#eef1f4] px-3 py-2.5">
             <div className="flex items-baseline justify-between">
               <span className="text-[12px] font-semibold text-[#202124]">Context</span>
@@ -104,7 +104,7 @@ export function ContextMeter({
                 {fmt(used)} / {fmt(budget)} · {pct}%
               </span>
             </div>
-            <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-[#eef1f5]">
+            <div className="mt-2 h-1 overflow-hidden rounded-full bg-[#eef1f5]">
               <div className="h-full rounded-full transition-[width]" style={{ width: `${pct}%`, background: stroke }} />
             </div>
           </div>

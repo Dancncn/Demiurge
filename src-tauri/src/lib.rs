@@ -3,6 +3,7 @@ mod agent;
 mod companion;
 mod connection_tests;
 mod credentials;
+mod embed;
 mod llm;
 pub mod mcp;
 mod media;
@@ -18,8 +19,9 @@ mod voice;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, LazyLock, Mutex, OnceLock};
 use std::time::Duration;
 
 use regex::Regex;
@@ -30,7 +32,7 @@ use tokio::sync::oneshot;
 
 use agent::conversation::Message;
 use permission::{PermissionResponse, PermissionRule};
-use store::{PermissionMode, ReasoningEffort, Session, SessionMeta, SessionStore, Settings};
+use store::{PermissionMode, Session, SessionMeta, SessionStore, Settings};
 
 const DEFAULT_WINDOW_WIDTH: u32 = 1811;
 const DEFAULT_WINDOW_HEIGHT: u32 = 1213;
@@ -119,7 +121,9 @@ impl AppState {
         let dir = self.data_dir.lock().unwrap().clone();
         let store = self.sessions.lock().unwrap().clone();
         let seq = SEQ.fetch_add(1, Ordering::SeqCst) + 1;
-        std::thread::spawn(move || {
+        // spawn_blocking 复用 Tauri/tokio 阻塞线程池，避免每次落盘新建 OS 线程；
+        // 仍在 async 关键路径之外执行同步磁盘写。
+        tauri::async_runtime::spawn_blocking(move || {
             let written = WRITTEN.get_or_init(|| Mutex::new(HashMap::new()));
             let mut map = written.lock().unwrap_or_else(|e| e.into_inner());
             let last = map.entry(dir.clone()).or_insert(0);
@@ -208,6 +212,15 @@ struct WebDavBackupFile {
     size: u64,
 }
 
+#[derive(Serialize)]
+struct WorkspaceState {
+    path: String,
+    name: String,
+    is_git: bool,
+    branch: Option<String>,
+    dirty: bool,
+}
+
 fn memory_context(state: &AppState) -> (PathBuf, PathBuf, PathBuf, String, String) {
     let data_dir = state.data_dir.lock().unwrap().clone();
     let sandbox_dir = state.sandbox_dir.lock().unwrap().clone();
@@ -234,80 +247,8 @@ fn session_list(store: &SessionStore) -> SessionList {
     }
 }
 
-fn effort_usage() -> String {
-    let levels = ReasoningEffort::LEVELS
-        .iter()
-        .map(|level| level.as_str())
-        .collect::<Vec<_>>()
-        .join("|");
-    format!(
-        "Usage: /effort [{levels}|auto]\n\n\
-         Current levels:\n\
-         - low: {}\n\
-         - medium: {}\n\
-         - high: {}\n\
-         - xhigh: {}\n\
-         - max: {}\n\
-         - auto: {}",
-        ReasoningEffort::Low.description(),
-        ReasoningEffort::Medium.description(),
-        ReasoningEffort::High.description(),
-        ReasoningEffort::Xhigh.description(),
-        ReasoningEffort::Max.description(),
-        ReasoningEffort::Auto.description()
-    )
-}
-
-fn effort_status(settings: &Settings) -> String {
-    let profile = llm::ProviderProfile::for_kind(settings.provider);
-    if !profile.supports_reasoning_effort_for_model(&settings.model) {
-        return format!(
-            "Configured effort: `{}`.\nProvider/model `{}` does not support Demiurge effort parameters yet, so no request field will be sent.",
-            settings.reasoning_effort.as_str(),
-            settings.model
-        );
-    }
-    let applied = profile
-        .effective_reasoning_effort(settings)
-        .map(|effort| format!("`{}`", effort.as_str()))
-        .unwrap_or_else(|| "provider default".to_string());
-    format!(
-        "Configured effort: `{}`.\nApplied on next supported request: {applied}.",
-        settings.reasoning_effort.as_str()
-    )
-}
-
-fn emit_settings_updated(app: &AppHandle, settings: &Settings) {
+pub(crate) fn emit_settings_updated(app: &AppHandle, settings: &Settings) {
     let _ = app.emit("settings-updated", settings.clone());
-}
-
-fn handle_effort_slash(app: &AppHandle, state: &AppState, text: &str) -> Result<String, String> {
-    let arg = text.trim().strip_prefix("/effort").unwrap_or("").trim();
-    if arg.is_empty() {
-        let settings = state.settings.lock().unwrap().clone();
-        return Ok(format!(
-            "{}\n\n{}",
-            effort_status(&settings),
-            effort_usage()
-        ));
-    }
-    let Some(effort) = ReasoningEffort::parse(arg) else {
-        return Ok(effort_usage());
-    };
-    let next = {
-        let mut settings = state.settings.lock().unwrap();
-        settings.reasoning_effort = effort;
-        settings.clone()
-    };
-    let dir = state.data_dir.lock().unwrap().clone();
-    store::save_settings(&dir, &next)?;
-    emit_settings_updated(app, &next);
-    Ok(format!(
-        "Set effort to `{}`: {}\n\n{}",
-        effort.as_str(),
-        effort.description(),
-        effort_status(&next)
-    ))
 }
 
 fn persist_direct_reply(
@@ -349,140 +290,17 @@ async fn send(app: AppHandle, state: State<'_, AppState>, text: String) -> Resul
     )?;
     let events = agent::session_engine::TurnEventEmitter::new(&app, st);
     let trimmed = text.trim();
-    let mut should_drive_goal = false;
-    let res = if trimmed == "/dream" || trimmed.starts_with("/dream ") {
-        should_drive_goal = true;
-        agent::dream::run_manual_dream(&app, st, text).await
-    } else if trimmed == "/compact" || trimmed.starts_with("/compact ") {
-        should_drive_goal = true;
-        agent::collapse::run_manual_compact(&app, st, text).await
-    } else if trimmed == "/goal" || trimmed.starts_with("/goal ") {
-        match agent::goal::handle_slash(st, trimmed) {
-            Ok(agent::goal::GoalSlashOutcome::Respond(body)) => {
-                events.assistant_done(body);
-                Ok(())
+    let (res, should_drive_goal) = match agent::slash::dispatch(&app, st, text.clone(), &events).await {
+        Some(outcome) => outcome,
+        None => {
+            if let Some(risk) = companion::detect_high_risk_expression(trimmed) {
+                persist_direct_reply(st, &session_id, text.clone(), risk.support_message.clone());
+                events.assistant_done(risk.support_message);
+                (Ok(()), false)
+            } else {
+                (agent::run_turn(&app, st, text).await, true)
             }
-            Ok(agent::goal::GoalSlashOutcome::Query {
-                stored_user_text,
-                system_overlay,
-                ..
-            }) => {
-                should_drive_goal = true;
-                agent::run_turn_with_options(
-                    &app,
-                    st,
-                    text,
-                    agent::TurnOptions {
-                        system_overlay: Some(system_overlay),
-                        stored_user_text: Some(stored_user_text),
-                        workflow_run_id: None,
-                        agent_names: Vec::new(),
-                        token_budget: None,
-                    },
-                )
-                .await
-            }
-            Err(e) => Err(e),
         }
-    } else if trimmed == "/skills"
-        || trimmed.starts_with("/skills ")
-        || trimmed == "/skill"
-        || trimmed.starts_with("/skill ")
-    {
-        let body = agent::skills::slash_response(st, trimmed)?;
-        events.assistant_done(body);
-        Ok(())
-    } else if trimmed == "/effort" || trimmed.starts_with("/effort ") {
-        let body = handle_effort_slash(&app, st, trimmed)?;
-        events.assistant_done(body);
-        Ok(())
-    } else if trimmed == "/workflows" {
-        should_drive_goal = true;
-        let runs = agent::workflow_runtime::panel_state(st).runs;
-        let body = if runs.is_empty() {
-            "暂无 workflow run。使用 /ultracode <任务> 或 Workflows 面板会自动创建 run。"
-                .to_string()
-        } else {
-            let mut out = String::from("Workflow runs:\n");
-            for run in runs.iter().take(20) {
-                let status = match run.status {
-                    agent::workflow_runtime::WorkflowStatus::Running => "running",
-                    agent::workflow_runtime::WorkflowStatus::StaleRunning => "stale_running",
-                    agent::workflow_runtime::WorkflowStatus::Done => "done",
-                    agent::workflow_runtime::WorkflowStatus::Failed => "failed",
-                    agent::workflow_runtime::WorkflowStatus::Killed => "killed",
-                    agent::workflow_runtime::WorkflowStatus::Journaled => "journaled",
-                };
-                let budget = run
-                    .budget
-                    .total
-                    .map(|total| format!(" budget={}/{}", run.budget.used_total(), total))
-                    .unwrap_or_default();
-                out.push_str(&format!(
-                    "- `{}` status={} steps={}/{} agents={}{} updated_at={} journal={}\n",
-                    run.run_id,
-                    status,
-                    run.steps_done,
-                    run.steps_total,
-                    run.agents.len(),
-                    budget,
-                    run.updated_at,
-                    run.journal_path
-                ));
-            }
-            out
-        };
-        events.assistant_done(body);
-        Ok(())
-    } else if trimmed.starts_with("/workflow resume ") {
-        let run_id = trimmed
-            .trim_start_matches("/workflow resume ")
-            .trim()
-            .to_string();
-        let overlay = agent::workflow_runtime::resume_overlay(st, &run_id)?;
-        should_drive_goal = true;
-        agent::run_turn_with_options(
-            &app,
-            st,
-            text,
-            agent::TurnOptions {
-                system_overlay: Some(overlay),
-                stored_user_text: None,
-                workflow_run_id: Some(run_id),
-                agent_names: Vec::new(),
-                token_budget: None,
-            },
-        )
-        .await
-    } else if trimmed == "/ultracode" || trimmed.starts_with("/ultracode ") {
-        should_drive_goal = true;
-        let task = trimmed
-            .strip_prefix("/ultracode")
-            .unwrap_or("")
-            .trim()
-            .to_string();
-        let run_id = agent::workflow_journal::new_run_id();
-        let overlay = agent::ultracode::overlay(&task);
-        agent::run_turn_with_options(
-            &app,
-            st,
-            text,
-            agent::TurnOptions {
-                system_overlay: Some(overlay),
-                stored_user_text: None,
-                workflow_run_id: Some(run_id),
-                agent_names: Vec::new(),
-                token_budget: None,
-            },
-        )
-        .await
-    } else if let Some(risk) = companion::detect_high_risk_expression(trimmed) {
-        persist_direct_reply(st, &session_id, text.clone(), risk.support_message.clone());
-        events.assistant_done(risk.support_message);
-        Ok(())
-    } else {
-        should_drive_goal = true;
-        agent::run_turn(&app, st, text).await
     };
     let res = if res.is_ok() && should_drive_goal && !st.cancel.load(Ordering::Relaxed) {
         agent::goal::drive_after_turn(&app, st).await
@@ -607,6 +425,7 @@ fn save_settings(
     credentials::save_web_search_api_keys(&settings)?;
     credentials::save_webdav_password(&settings.webdav_password)?;
     credentials::save_media_api_key(&settings.media_api_key)?;
+    credentials::save_embedding_api_key(&settings.embedding_api_key)?;
     credentials::save_mcp_env_secrets(&settings)?;
     *state.settings.lock().unwrap() = settings.clone();
     let dir = state.data_dir.lock().unwrap().clone();
@@ -844,9 +663,11 @@ fn import_pack_zip(
     state: State<'_, AppState>,
     file_name: String,
     bytes: Vec<u8>,
-) -> Result<pack::PackManifest, String> {
+) -> Result<pack::PackImportResult, String> {
     let dir = state.packs_dir.lock().unwrap().clone();
-    pack::import_zip(&dir, &file_name, bytes)
+    let manifest = pack::import_zip(&dir, &file_name, bytes)?;
+    let warnings = pack::credit_warnings(&manifest);
+    Ok(pack::PackImportResult { manifest, warnings })
 }
 
 #[tauri::command]
@@ -873,12 +694,126 @@ fn preview_pack_lorebook(
 ) -> Result<String, String> {
     let packs_dir = state.packs_dir.lock().unwrap().clone();
     let data_dir = state.data_dir.lock().unwrap().clone();
+    let settings = state.settings.lock().unwrap().clone();
+    let embed = crate::embed::provider_from_settings(&state.http, &settings);
     Ok(pack::lorebook_context(
         &packs_dir,
         &data_dir,
         &id,
         Some(&query),
+        embed.as_deref(),
+        settings.hybrid_weight,
     ))
+}
+
+/// 导入 Live2D 模型文件夹到当前角色包的 live2d/ 子目录，并更新 manifest.live2d。
+#[tauri::command]
+fn import_pack_live2d_folder(
+    state: State<'_, AppState>,
+    pack_id: String,
+    src_dir: String,
+) -> Result<pack::PackManifest, String> {
+    let dir = state.packs_dir.lock().unwrap().clone();
+    pack::import_live2d_folder(&dir, &pack_id, &src_dir)
+}
+
+/// 解析当前角色包 Live2D 模型的绝对路径（前端用 convertFileSrc 转 asset URL）。
+#[tauri::command]
+fn resolve_pack_live2d_path(state: State<'_, AppState>, pack_id: String) -> Result<String, String> {
+    let dir = state.packs_dir.lock().unwrap().clone();
+    pack::resolve_live2d_model_path(&dir, &pack_id)
+}
+
+/// 移除角色包的 Live2D 模型（删 live2d/ 目录并清空 manifest.live2d）。
+#[tauri::command]
+fn remove_pack_live2d(
+    state: State<'_, AppState>,
+    pack_id: String,
+) -> Result<pack::PackManifest, String> {
+    let dir = state.packs_dir.lock().unwrap().clone();
+    pack::remove_live2d(&dir, &pack_id)
+}
+
+/// 在系统文件管理器中打开指定角色包目录。
+#[tauri::command]
+fn open_pack_dir(state: State<'_, AppState>, id: String) -> Result<(), String> {
+    let dir = state.packs_dir.lock().unwrap().clone().join(&id);
+    if !dir.is_dir() {
+        return Err(format!("角色包 `{id}` 不存在"));
+    }
+    tools::execute_open(&dir.to_string_lossy()).map(|_| ())
+}
+
+#[tauri::command]
+fn import_pack_lore_files(
+    state: State<'_, AppState>,
+    id: String,
+    files: Vec<pack::PackLoreFile>,
+) -> Result<pack::PackManifest, String> {
+    let dir = state.packs_dir.lock().unwrap().clone();
+    pack::import_pack_lore_files(&dir, &id, files)
+}
+
+#[tauri::command]
+fn list_pack_files(
+    state: State<'_, AppState>,
+    id: String,
+    sub_dir: Option<String>,
+) -> Result<Vec<pack::PackFileEntry>, String> {
+    let dir = state.packs_dir.lock().unwrap().clone();
+    pack::list_pack_files(&dir, &id, sub_dir.as_deref())
+}
+
+#[tauri::command]
+fn read_pack_file(
+    state: State<'_, AppState>,
+    id: String,
+    path: String,
+) -> Result<pack::PackFileContent, String> {
+    let dir = state.packs_dir.lock().unwrap().clone();
+    pack::read_pack_file(&dir, &id, &path)
+}
+
+#[tauri::command]
+fn lorebook_index_status(
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<pack::LoreIndexStatus, String> {
+    let packs_dir = state.packs_dir.lock().unwrap().clone();
+    let data_dir = state.data_dir.lock().unwrap().clone();
+    pack::lorebook_index_status(&packs_dir, &data_dir, &id)
+}
+
+#[tauri::command]
+fn lorebook_recall_detail(
+    state: State<'_, AppState>,
+    id: String,
+    query: String,
+    limit: Option<usize>,
+) -> Result<pack::LoreRecallDetail, String> {
+    let packs_dir = state.packs_dir.lock().unwrap().clone();
+    let data_dir = state.data_dir.lock().unwrap().clone();
+    let settings = state.settings.lock().unwrap().clone();
+    let embed = crate::embed::provider_from_settings(&state.http, &settings);
+    pack::lorebook_recall_detail(
+        &packs_dir,
+        &data_dir,
+        &id,
+        &query,
+        limit.unwrap_or(50),
+        embed.as_deref(),
+        settings.hybrid_weight,
+    )
+}
+
+#[tauri::command]
+fn lorebook_rebuild_index(
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<pack::LoreIndexStatus, String> {
+    let packs_dir = state.packs_dir.lock().unwrap().clone();
+    let data_dir = state.data_dir.lock().unwrap().clone();
+    pack::lorebook_rebuild_index(&packs_dir, &data_dir, &id)
 }
 
 #[tauri::command]
@@ -1073,6 +1008,23 @@ fn memory_dedupe_apply(
 ) -> Result<agent::memory::MemoryPanelState, String> {
     let (data, sandbox, packs, pack_id, session_id) = memory_context(state.inner());
     agent::memory::apply_dedupe(&data, &sandbox, &packs, &pack_id, &session_id)
+}
+
+#[tauri::command]
+fn memory_migrate_namespace(
+    state: State<'_, AppState>,
+    from_ns: String,
+    to_ns: String,
+) -> Result<agent::memory::MemoryPanelState, String> {
+    let (data, sandbox, packs, pack_id, session_id) = memory_context(state.inner());
+    agent::memory::migrate_namespace(&data, &sandbox, &from_ns, &to_ns)?;
+    Ok(agent::memory::panel_state(
+        &data,
+        &sandbox,
+        &packs,
+        &pack_id,
+        &session_id,
+    ))
 }
 
 // ---- 会话管理 ----
@@ -1496,6 +1448,45 @@ fn rename_session(state: State<'_, AppState>, id: String, title: String) -> Resu
 fn open_sandbox(state: State<'_, AppState>) -> Result<(), String> {
     let dir = state.sandbox_dir.lock().unwrap().clone();
     tools::execute_open(&dir.to_string_lossy()).map(|_| ())
+}
+
+#[tauri::command]
+fn workspace_state(state: State<'_, AppState>) -> WorkspaceState {
+    let dir = state.sandbox_dir.lock().unwrap().clone();
+    let name = dir
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("Workspace")
+        .to_string();
+
+    let branch_output = Command::new("git")
+        .args(["rev-parse", "--abbrev-ref", "HEAD"])
+        .current_dir(&dir)
+        .output();
+    let branch = branch_output.ok().and_then(|output| {
+        if !output.status.success() {
+            return None;
+        }
+        let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if text.is_empty() { None } else { Some(text) }
+    });
+
+    let dirty = Command::new("git")
+        .args(["status", "--porcelain"])
+        .current_dir(&dir)
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .map(|output| !String::from_utf8_lossy(&output.stdout).trim().is_empty())
+        .unwrap_or(false);
+
+    WorkspaceState {
+        path: dir.to_string_lossy().to_string(),
+        name,
+        is_git: branch.is_some(),
+        branch,
+        dirty,
+    }
 }
 
 #[tauri::command]
@@ -1958,17 +1949,27 @@ async fn webdav_ensure_collection(
     }
 }
 
+static WEBDAV_RESPONSE_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?is)<[^:>/]*:?response\b[^>]*>.*?</[^:>/]*:?response>")
+        .expect("valid WebDAV response regex")
+});
+static WEBDAV_HREF_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?is)<[^:>/]*:?href[^>]*>(.*?)</[^:>/]*:?href>").expect("valid href regex")
+});
+static WEBDAV_MODIFIED_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?is)<[^:>/]*:?getlastmodified[^>]*>(.*?)</[^:>/]*:?getlastmodified>")
+        .expect("valid modified regex")
+});
+static WEBDAV_SIZE_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?is)<[^:>/]*:?getcontentlength[^>]*>(.*?)</[^:>/]*:?getcontentlength>")
+        .expect("valid size regex")
+});
+
 fn parse_webdav_backup_files(body: &str) -> Vec<WebDavBackupFile> {
-    let response_re = Regex::new(r"(?is)<[^:>/]*:?response\b[^>]*>.*?</[^:>/]*:?response>")
-        .expect("valid WebDAV response regex");
-    let href_re =
-        Regex::new(r"(?is)<[^:>/]*:?href[^>]*>(.*?)</[^:>/]*:?href>").expect("valid href regex");
-    let modified_re =
-        Regex::new(r"(?is)<[^:>/]*:?getlastmodified[^>]*>(.*?)</[^:>/]*:?getlastmodified>")
-            .expect("valid modified regex");
-    let size_re =
-        Regex::new(r"(?is)<[^:>/]*:?getcontentlength[^>]*>(.*?)</[^:>/]*:?getcontentlength>")
-            .expect("valid size regex");
+    let response_re = &*WEBDAV_RESPONSE_RE;
+    let href_re = &*WEBDAV_HREF_RE;
+    let modified_re = &*WEBDAV_MODIFIED_RE;
+    let size_re = &*WEBDAV_SIZE_RE;
 
     let mut files = Vec::new();
     for response in response_re.find_iter(body).map(|m| m.as_str()) {
@@ -2077,6 +2078,7 @@ pub fn run() {
         .expect("failed to build reqwest::Client");
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .manage(AppState::new(http))
         .setup(|app| {
             if let Some(window) = app.get_webview_window("main") {
@@ -2143,9 +2145,19 @@ pub fn run() {
             mcp_set_server_enabled,
             list_packs,
             import_pack_zip,
+            open_pack_dir,
+            import_pack_lore_files,
+            list_pack_files,
+            read_pack_file,
+            lorebook_index_status,
+            lorebook_recall_detail,
+            lorebook_rebuild_index,
             read_pack_manifest_json,
             save_pack_manifest_json,
             preview_pack_lorebook,
+            import_pack_live2d_folder,
+            resolve_pack_live2d_path,
+            remove_pack_live2d,
             agent_panel_state,
             agent_template_json,
             agent_validate_json,
@@ -2162,6 +2174,7 @@ pub fn run() {
             memory_update_entry,
             memory_delete_entry,
             memory_dedupe_apply,
+            memory_migrate_namespace,
             list_sessions,
             session_stats,
             get_history,
@@ -2173,6 +2186,7 @@ pub fn run() {
             delete_session,
             rename_session,
             open_sandbox,
+            workspace_state,
             ocr_image_bytes,
             media_generate_image,
             media_synthesize_speech,

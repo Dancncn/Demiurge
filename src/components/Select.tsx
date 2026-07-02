@@ -6,6 +6,7 @@ export interface SelectOption {
   label: string;
   hint?: string;
   icon?: ReactNode;
+  disabled?: boolean;
 }
 
 /**
@@ -34,6 +35,8 @@ export function Select({
   disabled?: boolean;
 }) {
   const [open, setOpen] = useState(false);
+  // 键盘导航的高亮索引（↑↓ 移动、Enter 选择）。打开时默认指向当前选中项。
+  const [highlight, setHighlight] = useState(-1);
   const ref = useRef<HTMLDivElement | null>(null);
   const selected = options.find((o) => o.value === value);
 
@@ -53,15 +56,59 @@ export function Select({
     };
   }, [open]);
 
+  // 打开时把高亮重置到当前选中项；关闭时复位。
+  useEffect(() => {
+    if (open) {
+      const idx = options.findIndex((o) => o.value === value);
+      setHighlight(idx >= 0 ? idx : 0);
+    } else {
+      setHighlight(-1);
+    }
+  }, [open, options, value]);
+
+  function onKeyDown(e: React.KeyboardEvent<HTMLButtonElement>) {
+    if (disabled) return;
+    if (!open) {
+      if (e.key === "ArrowDown" || e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        setOpen(true);
+      }
+      return;
+    }
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      setHighlight((h) => {
+        for (let i = h + 1; i < options.length; i++) if (!options[i].disabled) return i;
+        return h < 0 && options.length ? options.findIndex((o) => !o.disabled) : h;
+      });
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      setHighlight((h) => {
+        for (let i = h - 1; i >= 0; i--) if (!options[i].disabled) return i;
+        return h;
+      });
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      const opt = highlight >= 0 ? options[highlight] : undefined;
+      if (opt && !opt.disabled) {
+        onChange(opt.value);
+        setOpen(false);
+      }
+    }
+  }
+
   return (
     <div ref={ref} className="relative">
       <button
         type="button"
         disabled={disabled}
+        aria-haspopup="listbox"
+        aria-expanded={open}
         onClick={() => setOpen((v) => !v)}
+        onKeyDown={onKeyDown}
         className={`cf-press ${
           triggerClassName ??
-          "flex h-9 w-full items-center gap-2 rounded-md border border-[#d9d9d9] bg-white px-3 text-[13px] text-[#202124] outline-none transition hover:border-[#bcc2cb] focus:border-[#7a7f87] focus:ring-1 focus:ring-[#202124]/10 disabled:cursor-not-allowed disabled:opacity-50"
+          "flex h-8 w-full items-center gap-1.5 rounded-lg border border-[#e4e7ec] bg-[#fbfcfd] px-2.5 text-[13px] text-[#202124] outline-none transition hover:border-[#cfd5dd] hover:bg-white focus:border-[#bcc2cb] focus:bg-white focus:shadow-[0_0_0_3px_rgba(17,24,39,0.06)] disabled:cursor-not-allowed disabled:opacity-50"
         }`}
       >
         {selected?.icon && <span className="shrink-0">{selected.icon}</span>}
@@ -75,23 +122,32 @@ export function Select({
       </button>
       {open && (
         <div
-          className={`cf-menu-in absolute z-30 max-h-[300px] min-w-full overflow-y-auto rounded-lg border border-[#e2e5ea] bg-white p-1 shadow-[0_12px_36px_rgba(15,23,42,0.16)] ${
+          role="listbox"
+          aria-activedescendant={highlight >= 0 ? `sel-opt-${highlight}` : undefined}
+          className={`cf-menu-in cf-dropdown absolute z-30 max-h-[300px] min-w-full overflow-y-auto p-1 ${
             align === "right" ? "right-0" : "left-0"
           } ${direction === "up" ? "bottom-[calc(100%+4px)]" : "top-[calc(100%+4px)]"}`}
         >
-          {options.map((o) => {
+          {options.map((o, i) => {
             const active = o.value === value;
+            const highlighted = i === highlight;
             return (
               <button
                 key={o.value}
+                id={`sel-opt-${i}`}
                 type="button"
+                role="option"
+                aria-selected={active}
+                disabled={o.disabled}
+                onMouseEnter={() => !o.disabled && setHighlight(i)}
                 onClick={() => {
+                  if (o.disabled) return;
                   onChange(o.value);
                   setOpen(false);
                 }}
-                className={`flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left transition ${
-                  active ? "bg-[#eef1f5] text-[#111827]" : "text-[#3f444c] hover:bg-[#f3f4f7]"
-                }`}
+                className={`cf-menu-item flex w-full items-center gap-2 ${active ? "is-active" : ""} ${
+                  highlighted ? "is-highlighted" : ""
+                } ${o.disabled ? "cursor-not-allowed opacity-45" : ""}`}
               >
                 {o.icon && <span className="shrink-0">{o.icon}</span>}
                 <span className="min-w-0 flex-1">

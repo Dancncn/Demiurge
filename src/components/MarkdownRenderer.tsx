@@ -1,4 +1,4 @@
-import { ComponentPropsWithoutRef, ReactNode, isValidElement, useState } from "react";
+import { ComponentPropsWithoutRef, ReactNode, isValidElement } from "react";
 import ReactMarkdown from "react-markdown";
 import rehypeKatex from "rehype-katex";
 import rehypeHighlight from "rehype-highlight";
@@ -8,6 +8,7 @@ import "katex/dist/katex.min.css";
 import "highlight.js/styles/github.css";
 import { CheckIcon, CopyIcon } from "./Icons";
 import { MermaidBlock } from "./MermaidBlock";
+import { useCopyToClipboard } from "../lib/hooks";
 
 function extractText(node: ReactNode): string {
   if (typeof node === "string" || typeof node === "number") return String(node);
@@ -22,7 +23,7 @@ function extractText(node: ReactNode): string {
 // 代码块外框渲染在 <pre> 这一层：被解析为「块级代码」就套同一个框（与是否有语言标记无关），
 // 行内代码保持行内样式。这样流式过程中代码不会在「行内 / 块级」之间反复横跳。
 function CodeBlock({ children }: ComponentPropsWithoutRef<"pre">) {
-  const [copied, setCopied] = useState(false);
+  const { copied, copy } = useCopyToClipboard();
   const codeElement = Array.isArray(children) ? children[0] : children;
   const codeProps = isValidElement(codeElement)
     ? (codeElement.props as { className?: string; children?: ReactNode })
@@ -38,13 +39,7 @@ function CodeBlock({ children }: ComponentPropsWithoutRef<"pre">) {
   }
 
   async function copyCode() {
-    try {
-      await navigator.clipboard.writeText(code);
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 1600);
-    } catch {
-      // 无剪贴板权限等情况下静默失败。
-    }
+    await copy(code);
   }
 
   return (

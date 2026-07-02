@@ -76,7 +76,7 @@ export default function WorkflowsPanel({ open, busy, onClose, onResume }: Props)
     }).then((un) => {
       if (disposed) un();
       else unlisten = un;
-    });
+    }).catch((e) => setError(String(e)));
     return () => {
       disposed = true;
       unlisten?.();

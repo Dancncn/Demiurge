@@ -24,15 +24,17 @@
 | 12 | [权限模型与安全边界](12-permission-security.md) | `PermissionMode` 决策、确认往返与 scope、Plan Mode、沙盒、审计、capabilities |
 | 13 | [持久化、凭据与连接测试](13-persistence-config.md) | Settings/Session 落盘、keyring 凭据与明文迁移、不落盘的连接测试 |
 | 14 | [角色包系统](14-pack-system.md) | manifest 校验、persona/avatar 注入、zip 导入安全校验与默认包落地 |
-| 15 | [多模态与 Computer Use](15-multimodal-computer-use.md) | 本地 OCR（PP-OCRv5）、屏幕窗口/截图、语音 STT 接入与 TTS 预留、媒体生成 |
+| 15 | [多模态与 Computer Use](15-multimodal-computer-use.md) | 本地 OCR（PP-OCRv5）、屏幕窗口/截图、语音 STT + TTS 接入（dashscope / gpt-sovits）、媒体生成 |
 | 16 | [MCP 集成（stdio 第一阶段）](16-mcp-integration.md) | stdio MCP Manager、动态 `mcp__server__tool` 发现与调用、资源读取、凭据脱敏 |
 | 17 | [前端架构](17-frontend-architecture.md) | App 状态编排、`api.ts` typed 桥、事件契约、核心组件与 i18n |
 | 18 | [应用外壳、命令面与构建](18-app-shell-build.md) | `AppState`、Tauri 命令分类、初始化与目录布局、构建与 release profile |
+| 19 | [Live2D 面板](19-live2d-panel.md) | Cubism 4/5 模型挂载、untitled-pixi-live2d-engine + Tauri asset 协议、Cubism Core 私有运行时、bundle 隔离与待打磨 |
+| 20 | [Lorebook 向量召回与混合 RAG](20-lorebook-vector-rag.md) | `EmbeddingProvider` 抽象、远程优先 + 本地预留、RRF 融合稀疏/稠密、向量缓存与失效、同步线程化 embed |
 
 ## 文档约定
 
 - **行号是写作时刻的快照**：源码演进后行号会漂移，引用仅作定位线索，以代码为准。
-- **诚实标注状态**：预留/占位能力（如 TTS 后端、`usage_limited` 预留态、per-agent 独立硬预算等）均按当前实现如实标注，不写成已完成。
+- **诚实标注状态**：预留/占位能力（如 TTS 的流式/播放队列/打断、`usage_limited` 预留态、per-agent 独立硬预算等）均按当前实现如实标注，不写成已完成。
 - **命名中立**：文档不把本项目描述为任何特定产品的衍生品；兼容能力统一使用项目自有的 `.demiurge/compat/` 目录约定。
 
 ## 维护提示

@@ -28,10 +28,14 @@ import type {
   WebDavConfig,
   WebSearchProvider,
 } from "../lib/types";
-import { CheckIcon, CloseIcon, DownloadIcon } from "./Icons";
+import { CheckIcon, CloseIcon, DownloadIcon, FileIcon, FolderIcon, PersonIcon, TrashIcon } from "./Icons";
 import { Select } from "./Select";
+import { PackEditor } from "./pack-editor/PackEditor";
+import { PackFileBrowser } from "./pack-editor/PackFileBrowser";
+import { LorebookRecallPanel } from "./pack-editor/LorebookRecallPanel";
 import { PROVIDER_OPTIONS, PROVIDER_ICON_SET, modelContextWindow, autoContextBudget } from "../lib/providers";
 import { useI18n, type TFunction } from "../lib/i18n";
+import { isAutoPromptEnabled, setAutoPromptEnabled } from "../lib/fortune";
 
 interface Props {
   open: boolean;
@@ -97,6 +101,18 @@ const themeOptions: { value: AppTheme; labelKey: string; helpKey: string }[] = [
   { value: "system", labelKey: "settings.general.theme.system", helpKey: "settings.general.theme.systemHelp" },
   { value: "light", labelKey: "settings.general.theme.light", helpKey: "settings.general.theme.lightHelp" },
   { value: "dark", labelKey: "settings.general.theme.dark", helpKey: "settings.general.theme.darkHelp" },
+];
+
+const voiceSttOptions = [
+  { value: "none", labelKey: "settings.voice.backend.none", helpKey: "settings.voice.stt.noneHelp" },
+  { value: "dashscope", labelKey: "settings.voice.backend.dashscope", helpKey: "settings.voice.stt.dashscopeHelp" },
+  { value: "openai", labelKey: "settings.voice.backend.openai", helpKey: "settings.voice.stt.openaiHelp" },
+];
+
+const voiceTtsOptions = [
+  { value: "none", labelKey: "settings.voice.backend.none", helpKey: "settings.voice.tts.noneHelp" },
+  { value: "dashscope", labelKey: "settings.voice.backend.dashscope", helpKey: "settings.voice.tts.dashscopeHelp" },
+  { value: "gpt-sovits", labelKey: "settings.voice.backend.gptSovits", helpKey: "settings.voice.tts.gptSovitsHelp" },
 ];
 
 const inputCls =
@@ -378,6 +394,23 @@ function ToggleRow({
   );
 }
 
+/** 每日吉签自动弹窗开关：自管理 state + localStorage，不走 settings save 流程。 */
+function FortuneAutoPromptRow() {
+  const { t } = useI18n();
+  const [enabled, setEnabled] = useState(() => isAutoPromptEnabled());
+  return (
+    <ToggleRow
+      checked={enabled}
+      title={t("fortune.autoPrompt")}
+      description={t("fortune.autoPromptDesc")}
+      onChange={(v) => {
+        setEnabled(v);
+        setAutoPromptEnabled(v);
+      }}
+    />
+  );
+}
+
 function ContextMetric({ label, value }: { label: string; value: number }) {
   return (
     <div className="rounded-lg border border-[#e5e8ed] bg-white px-3 py-2">
@@ -594,6 +627,7 @@ export default function SettingsDialog({
   const [memoryBusy, setMemoryBusy] = useState(false);
   const [memoryError, setMemoryError] = useState("");
   const [memoryDrafts, setMemoryDrafts] = useState<Record<string, { kind: string; text: string }>>({});
+  const [memoryMigrateTo, setMemoryMigrateTo] = useState("");
   const [companionMemorySuggestions, setCompanionMemorySuggestions] = useState<CompanionMemorySuggestion[]>([]);
   const [companionMemoryQueue, setCompanionMemoryQueue] = useState<CompanionMemoryQueueState | null>(null);
   const [companionState, setCompanionState] = useState<CompanionPanelState | null>(null);
@@ -605,10 +639,19 @@ export default function SettingsDialog({
   const [packImportBusy, setPackImportBusy] = useState(false);
   const [packImportStatus, setPackImportStatus] = useState("");
   const [packImportFailed, setPackImportFailed] = useState(false);
+  const [packImportWarnings, setPackImportWarnings] = useState<string[]>([]);
+  const [loreImportBusy, setLoreImportBusy] = useState(false);
+  const [loreImportStatus, setLoreImportStatus] = useState("");
+  const [loreImportFailed, setLoreImportFailed] = useState(false);
+  const [packBrowserOpen, setPackBrowserOpen] = useState(false);
+  const loreImportInputRef = useRef<HTMLInputElement | null>(null);
   const [packManifestJson, setPackManifestJson] = useState("");
   const [packManifestBusy, setPackManifestBusy] = useState(false);
   const [packManifestStatus, setPackManifestStatus] = useState("");
   const [packManifestFailed, setPackManifestFailed] = useState(false);
+  const [live2dImportBusy, setLive2dImportBusy] = useState(false);
+  const [live2dImportStatus, setLive2dImportStatus] = useState("");
+  const [live2dImportFailed, setLive2dImportFailed] = useState(false);
   const [lorePreviewQuery, setLorePreviewQuery] = useState("");
   const [lorePreviewText, setLorePreviewText] = useState("");
   const [lorePreviewBusy, setLorePreviewBusy] = useState(false);
@@ -752,7 +795,7 @@ export default function SettingsDialog({
     }).then((fn) => {
       if (disposed) fn();
       else unlisten = fn;
-    });
+    }).catch((e) => console.warn("subscribe failed", e));
     return () => {
       disposed = true;
       unlisten?.();
@@ -768,7 +811,7 @@ export default function SettingsDialog({
     }).then((fn) => {
       if (disposed) fn();
       else unlisten = fn;
-    });
+    }).catch((e) => console.warn("subscribe failed", e));
     return () => {
       disposed = true;
       unlisten?.();
@@ -823,6 +866,10 @@ export default function SettingsDialog({
       return null;
     }
   }, [packManifestJson]);
+  const currentPackManifest = useMemo(
+    () => packs.find((p) => p.id === form.current_pack) ?? null,
+    [packs, form.current_pack],
+  );
   const loreEntries = packManifestDraft?.lorebook ?? [];
 
   if (!open) return null;
@@ -960,19 +1007,102 @@ export default function SettingsDialog({
     setPackImportBusy(true);
     setPackImportStatus("");
     setPackImportFailed(false);
+    setPackImportWarnings([]);
     try {
       const bytes = Array.from(new Uint8Array(await file.arrayBuffer()));
       const imported = await api.importPackZip(file.name, bytes);
+      const manifest = imported.manifest;
       const nextPacks = await api.listPacks();
       onPacksChange(nextPacks);
-      set("current_pack", imported.id);
-      setPackImportStatus(t("settings.provider.importResult", { name: imported.name, id: imported.id }));
+      set("current_pack", manifest.id);
+      setPackImportStatus(
+        t("settings.provider.importResult", { name: manifest.name, id: manifest.id }),
+      );
+      setPackImportWarnings(imported.warnings ?? []);
     } catch (err) {
       setPackImportFailed(true);
       setPackImportStatus(t("settings.provider.importFailed", { error: String(err) }));
     } finally {
       setPackImportBusy(false);
       if (packImportInputRef.current) packImportInputRef.current.value = "";
+    }
+  }
+
+  async function handleImportLive2d() {
+    if (!form.current_pack) return;
+    setLive2dImportBusy(true);
+    setLive2dImportStatus("");
+    setLive2dImportFailed(false);
+    try {
+      const { open } = await import("@tauri-apps/plugin-dialog");
+      const selected = await open({ directory: true, multiple: false });
+      if (typeof selected !== "string" || !selected) return;
+      const updated = await api.importPackLive2dFolder(form.current_pack, selected);
+      const nextPacks = await api.listPacks();
+      onPacksChange(nextPacks);
+      setPackManifestJson(await api.readPackManifestJson(updated.id));
+      setLive2dImportStatus(t("settings.persona.live2dImported", { name: updated.name }));
+    } catch (err) {
+      setLive2dImportFailed(true);
+      setLive2dImportStatus(String(err));
+    } finally {
+      setLive2dImportBusy(false);
+    }
+  }
+
+  async function handleRemoveLive2d() {
+    if (!form.current_pack) return;
+    setLive2dImportBusy(true);
+    setLive2dImportStatus("");
+    setLive2dImportFailed(false);
+    try {
+      await api.removePackLive2d(form.current_pack);
+      const nextPacks = await api.listPacks();
+      onPacksChange(nextPacks);
+      setPackManifestJson(await api.readPackManifestJson(form.current_pack));
+      setLive2dImportStatus(t("settings.persona.live2dRemoved"));
+    } catch (err) {
+      setLive2dImportFailed(true);
+      setLive2dImportStatus(String(err));
+    } finally {
+      setLive2dImportBusy(false);
+    }
+  }
+
+  async function openPackDir() {
+    if (!form.current_pack) return;
+    try {
+      await api.openPackDir(form.current_pack);
+    } catch (err) {
+      setLoreImportFailed(true);
+      setLoreImportStatus(String(err));
+    }
+  }
+
+  async function importLoreFiles(fileList: FileList | null) {
+    if (!fileList || fileList.length === 0 || !form.current_pack) return;
+    setLoreImportBusy(true);
+    setLoreImportStatus("");
+    setLoreImportFailed(false);
+    try {
+      const files = await Promise.all(
+        Array.from(fileList).map(async (file) => ({
+          name: file.name,
+          bytes: Array.from(new Uint8Array(await file.arrayBuffer())),
+        })),
+      );
+      await api.importPackLoreFiles(form.current_pack, files);
+      const nextPacks = await api.listPacks();
+      onPacksChange(nextPacks);
+      setLoreImportStatus(t("settings.persona.loreImportResult", { count: files.length }));
+      // 重新加载 manifest 以反映新 lore 文件（若 manifest 含 lorebook 条目）。
+      setPackManifestJson(await api.readPackManifestJson(form.current_pack));
+    } catch (err) {
+      setLoreImportFailed(true);
+      setLoreImportStatus(String(err));
+    } finally {
+      setLoreImportBusy(false);
+      if (loreImportInputRef.current) loreImportInputRef.current.value = "";
     }
   }
 
@@ -1664,6 +1794,9 @@ export default function SettingsDialog({
                       onChange={(checked) => set("launch_on_startup", checked)}
                     />
                   </Section>
+                  <Section title={t("fortune.autoPromptSection")} description={t("fortune.autoPromptSectionDesc")}>
+                    <FortuneAutoPromptRow />
+                  </Section>
                 </>
               )}
 
@@ -1868,6 +2001,18 @@ export default function SettingsDialog({
                                 }`}
                               >
                                 {packImportStatus}
+                              </div>
+                            )}
+                            {packImportWarnings.length > 0 && (
+                              <div className="mt-2 rounded-md border border-[#f3d8a3] bg-[#fff8e8] px-3 py-2 text-[12px] leading-5 text-[#9a6b00]">
+                                {packImportWarnings.map((w, idx) => (
+                                  <div key={idx} className="flex items-start gap-2">
+                                    <span className="mt-0.5 grid size-4 shrink-0 place-items-center rounded-full border border-[#e9c46a] text-[10px] font-semibold">
+                                      !
+                                    </span>
+                                    <span>{w}</span>
+                                  </div>
+                                ))}
                               </div>
                             )}
                           </div>
@@ -2103,7 +2248,143 @@ export default function SettingsDialog({
                             {packImportStatus}
                           </div>
                         )}
+                        {packImportWarnings.length > 0 && (
+                          <div className="mt-2 rounded-md border border-[#f3d8a3] bg-[#fff8e8] px-3 py-2 text-[12px] leading-5 text-[#9a6b00]">
+                            {packImportWarnings.map((w, idx) => (
+                              <div key={idx} className="flex items-start gap-2">
+                                <span className="mt-0.5 grid size-4 shrink-0 place-items-center rounded-full border border-[#e9c46a] text-[10px] font-semibold">
+                                  !
+                                </span>
+                                <span>{w}</span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
                       </div>
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          className={secondaryButtonCls}
+                          disabled={!form.current_pack}
+                          onClick={() => void openPackDir()}
+                        >
+                          <FolderIcon size={14} className="mr-1.5" />
+                          {t("settings.persona.openPackDir")}
+                        </button>
+                        <input
+                          ref={loreImportInputRef}
+                          className="hidden"
+                          type="file"
+                          accept=".md,.markdown,.txt"
+                          multiple
+                          onChange={(event) => void importLoreFiles(event.target.files)}
+                        />
+                        <button
+                          type="button"
+                          className={secondaryButtonCls}
+                          disabled={!form.current_pack || loreImportBusy}
+                          onClick={() => loreImportInputRef.current?.click()}
+                        >
+                          <FileIcon size={14} className="mr-1.5" />
+                          {loreImportBusy ? t("settings.persona.importing") : t("settings.persona.importLore")}
+                        </button>
+                        <button
+                          type="button"
+                          className={secondaryButtonCls}
+                          disabled={!form.current_pack}
+                          onClick={() => setPackBrowserOpen((v) => !v)}
+                        >
+                          <FolderIcon size={14} className="mr-1.5" />
+                          {packBrowserOpen ? t("settings.persona.hideBrowser") : t("settings.persona.showBrowser")}
+                        </button>
+                      </div>
+                      {loreImportStatus && (
+                        <div
+                          className={`rounded-md border px-3 py-2 text-[12px] leading-5 ${
+                            loreImportFailed
+                              ? "border-[#f3c3c3] bg-[#fff7f7] text-[#b42318]"
+                              : "border-[#dce6d8] bg-[#f8fbf6] text-[#3f6212]"
+                          }`}
+                        >
+                          {loreImportStatus}
+                        </div>
+                      )}
+                      {packBrowserOpen && form.current_pack && (
+                        <PackFileBrowser packId={form.current_pack} />
+                      )}
+                    </div>
+                  </Section>
+
+                  <Section title={t("settings.persona.live2dTitle")} description={t("settings.persona.live2dDesc")}>
+                    <div className="grid gap-3">
+                      {currentPackManifest?.live2d ? (
+                        <div className="rounded-lg border border-[#dce6d8] bg-[#f8fbf6] p-3">
+                          <div className="flex flex-wrap items-center gap-3">
+                            <div className="min-w-0 flex-1">
+                              <div className="text-[13px] font-medium text-[#202124]">
+                                {t("settings.persona.live2dConfigured")}
+                              </div>
+                              <div className="mt-0.5 truncate text-[12px] text-[#7a8088]">
+                                {currentPackManifest.live2d}
+                              </div>
+                            </div>
+                            <button
+                              type="button"
+                              disabled={live2dImportBusy}
+                              onClick={() => void handleImportLive2d()}
+                              className="inline-flex items-center rounded-md border border-[#dfe3e8] bg-white px-3 py-1.5 text-[12px] text-[#3f3f3f] transition hover:bg-[#f6f7f9] disabled:opacity-60"
+                            >
+                              <FolderIcon size={14} className="mr-1.5" />
+                              {t("settings.persona.live2dReplace")}
+                            </button>
+                            <button
+                              type="button"
+                              disabled={live2dImportBusy}
+                              onClick={() => void handleRemoveLive2d()}
+                              className="inline-flex items-center rounded-md border border-[#f3c3c3] bg-white px-3 py-1.5 text-[12px] text-[#b42318] transition hover:bg-[#fff7f7] disabled:opacity-60"
+                            >
+                              <TrashIcon size={14} className="mr-1.5" />
+                              {t("settings.persona.live2dRemove")}
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="rounded-lg border border-dashed border-[#cfd5dd] bg-[#fbfcfd] p-3">
+                          <div className="flex flex-wrap items-center gap-3">
+                            <div className="grid size-10 shrink-0 place-items-center rounded-lg border border-[#dfe3e8] bg-white text-[#59616d]">
+                              <PersonIcon size={18} />
+                            </div>
+                            <div className="min-w-[180px] flex-1">
+                              <div className="text-[13px] font-medium text-[#202124]">
+                                {t("settings.persona.live2dImport")}
+                              </div>
+                              <div className="mt-0.5 text-[12px] leading-5 text-[#7a8088]">
+                                {t("settings.persona.live2dImportDesc")}
+                              </div>
+                            </div>
+                            <button
+                              type="button"
+                              disabled={live2dImportBusy || !form.current_pack}
+                              onClick={() => void handleImportLive2d()}
+                              className="inline-flex items-center rounded-md border border-[#dfe3e8] bg-white px-3 py-1.5 text-[12px] text-[#3f3f3f] transition hover:bg-[#f6f7f9] disabled:opacity-60"
+                            >
+                              <FolderIcon size={14} className="mr-1.5" />
+                              {live2dImportBusy ? t("settings.persona.importing") : t("settings.persona.live2dChoose")}
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                      {live2dImportStatus && (
+                        <div
+                          className={`rounded-md border px-3 py-2 text-[12px] leading-5 ${
+                            live2dImportFailed
+                              ? "border-[#f3c3c3] bg-[#fff7f7] text-[#b42318]"
+                              : "border-[#dce6d8] bg-[#f8fbf6] text-[#3f6212]"
+                          }`}
+                        >
+                          {live2dImportStatus}
+                        </div>
+                      )}
                     </div>
                   </Section>
 
@@ -2136,101 +2417,20 @@ export default function SettingsDialog({
                         </button>
                       </div>
 
-                      <div className="mt-3 rounded-md border border-[#e2e5ea] bg-[#fbfcfd] p-3">
-                        <div className="mb-2 flex flex-wrap items-center justify-between gap-3">
-                          <div>
-                            <div className="text-[12px] font-medium text-[#202124]">Lorebook RAG</div>
-                            <div className="mt-0.5 text-[12px] leading-5 text-[#7a8088]">
-                              {t("settings.persona.lorebookDesc")}
-                            </div>
-                          </div>
-                        </div>
-                        <div className="space-y-2">
-                          {loreEntries.length ? (
-                            loreEntries.map((entry, index) => (
-                              <div
-                                key={`${entry.path}-${index}`}
-                                className="rounded-md border border-[#e5e7eb] bg-white px-3 py-2 text-[12px] leading-5 text-[#5f6368]"
-                              >
-                                <div className="flex flex-wrap items-center gap-2">
-                                  <span className="font-mono text-[#202124]">{entry.path}</span>
-                                  {entry.recursive && (
-                                    <span className="rounded bg-[#eef2ff] px-1.5 py-0.5 text-[#3730a3]">recursive</span>
-                                  )}
-                                  {entry.extensions?.length ? (
-                                    <span className="rounded bg-[#ecfdf3] px-1.5 py-0.5 text-[#166534]">
-                                      {entry.extensions.join(", ")}
-                                    </span>
-                                  ) : (
-                                    <span className="rounded bg-[#f5f5f5] px-1.5 py-0.5 text-[#6b7280]">
-                                      md, markdown, txt
-                                    </span>
-                                  )}
-                                  {typeof entry.priority === "number" && (
-                                    <span className="rounded bg-[#fff7ed] px-1.5 py-0.5 text-[#9a3412]">
-                                      priority {entry.priority}
-                                    </span>
-                                  )}
-                                </div>
-                                {(entry.title || entry.tags?.length) && (
-                                  <div className="mt-1 text-[#7a8088]">
-                                    {[entry.title, entry.tags?.length ? `tags: ${entry.tags.join(", ")}` : ""]
-                                      .filter(Boolean)
-                                      .join(" / ")}
-                                  </div>
-                                )}
-                              </div>
-                            ))
-                          ) : (
-                            <div className="rounded-md border border-dashed border-[#d9d9d9] bg-white px-3 py-2 text-[12px] leading-5 text-[#7a8088]">
-                              {t("settings.persona.noLorebook")}
-                            </div>
-                          )}
-                        </div>
-                        <div className="mt-3 flex flex-col gap-2 sm:flex-row">
-                          <input
-                            className={inputCls}
-                            value={lorePreviewQuery}
-                            onChange={(event) => {
-                              setLorePreviewQuery(event.target.value);
-                              setLorePreviewText("");
-                              setLorePreviewFailed(false);
-                            }}
-                            placeholder={t("settings.persona.previewPlaceholder")}
-                          />
-                          <button
-                            type="button"
-                            className={secondaryButtonCls}
-                            disabled={lorePreviewBusy || !form.current_pack || !lorePreviewQuery.trim()}
-                            onClick={() => void previewCurrentPackLorebook()}
-                          >
-                            {lorePreviewBusy ? t("settings.persona.previewing") : t("settings.persona.preview")}
-                          </button>
-                        </div>
-                        {lorePreviewText && (
-                          <pre
-                            className={`mt-3 max-h-48 overflow-auto whitespace-pre-wrap rounded-md border px-3 py-2 text-[12px] leading-5 ${
-                              lorePreviewFailed
-                                ? "border-[#f3c3c3] bg-[#fff7f7] text-[#b42318]"
-                                : "border-[#d9d9d9] bg-white text-[#3f4650]"
-                            }`}
-                          >
-                            {lorePreviewText}
-                          </pre>
-                        )}
+                      <div className="mt-3">
+                        <LorebookRecallPanel packId={form.current_pack} />
                       </div>
 
-                      <textarea
-                        className="mt-3 min-h-[260px] w-full resize-y rounded-md border border-[#d9d9d9] bg-[#fbfcfd] px-3 py-2 font-mono text-[12px] leading-5 text-[#202124] outline-none transition focus:border-[#7a7f87] focus:ring-1 focus:ring-[#202124]/10"
-                        spellCheck={false}
-                        value={packManifestJson}
-                        onChange={(event) => {
-                          setPackManifestJson(event.target.value);
-                          setPackManifestStatus("");
-                          setPackManifestFailed(false);
-                        }}
-                        placeholder={packManifestBusy ? t("settings.persona.loadingManifest") : "manifest.json"}
-                      />
+                      <div className="mt-3">
+                        <PackEditor
+                          manifestJson={packManifestJson}
+                          onJsonChange={(json) => {
+                            setPackManifestJson(json);
+                            setPackManifestStatus("");
+                            setPackManifestFailed(false);
+                          }}
+                        />
+                      </div>
                       {packManifestStatus && (
                         <div
                           className={`mt-3 rounded-md border px-3 py-2 text-[12px] leading-5 ${
@@ -3021,6 +3221,36 @@ export default function SettingsDialog({
                           </button>
                         </div>
                       </div>
+                      {memoryState?.namespace && (
+                        <div className="mt-3 flex flex-wrap items-center gap-2 rounded-md border border-[#e2e5ea] bg-[#fbfcfd] px-3 py-2 text-[12px]">
+                          <span className="font-medium text-[#202124]">{t("settings.memory.namespaceActive")}</span>
+                          <code className="rounded bg-[#f1f3f5] px-1.5 py-0.5 text-[#3f6212]">{memoryState.namespace}</code>
+                          <span className="text-[#7a8088]">{t("settings.memory.namespaceHint")}</span>
+                        </div>
+                      )}
+                      <div className="mt-3 flex flex-wrap items-center gap-2 text-[12px]">
+                        <span className="text-[#5f6368]">{t("settings.memory.migrateLabel")}</span>
+                        <input
+                          className="h-8 max-w-[200px] rounded-md border border-[#d9d9d9] bg-white px-2 text-[12px] text-[#202124] outline-none focus:border-[#7a7f87]"
+                          placeholder={t("settings.memory.migratePlaceholder")}
+                          value={memoryMigrateTo}
+                          onChange={(e) => setMemoryMigrateTo(e.target.value)}
+                        />
+                        <button
+                          type="button"
+                          className={secondaryButtonCls}
+                          disabled={memoryBusy || !memoryMigrateTo.trim()}
+                          onClick={() => {
+                            const fromNs = memoryState?.namespace || "default";
+                            const toNs = memoryMigrateTo.trim();
+                            void runMemoryAction(() => api.memoryMigrateNamespace(fromNs, toNs)).then(() => {
+                              setMemoryMigrateTo("");
+                            });
+                          }}
+                        >
+                          {t("settings.memory.migrate")}
+                        </button>
+                      </div>
                       {memoryError && (
                         <div className="mt-3 rounded-lg border border-[#ffd7d7] bg-[#fff7f7] p-3 text-[12px] text-[#b42318]">
                           {memoryError}
@@ -3209,6 +3439,85 @@ export default function SettingsDialog({
                         )}
                       </div>
                     </div>
+                  </Section>
+                  <Section title={t("settings.embedding.title")} description={t("settings.embedding.desc")}>
+                    <ToggleRow
+                      checked={form.embedding_enabled}
+                      title={t("settings.embedding.enable")}
+                      description={t("settings.embedding.enableDesc")}
+                      onChange={(checked) => set("embedding_enabled", checked)}
+                    />
+                    {form.embedding_enabled && (
+                      <div className="mt-3 space-y-3">
+                        <Field label={t("settings.embedding.provider")}>
+                          <Select
+                            value={form.embedding_provider}
+                            onChange={(v) => set("embedding_provider", v)}
+                            options={[
+                              { value: "none", label: t("settings.embedding.providerNone") },
+                              { value: "remote", label: t("settings.embedding.providerRemote") },
+                            ]}
+                          />
+                        </Field>
+                        {form.embedding_provider === "remote" && (
+                          <>
+                            <Field label={t("settings.embedding.baseUrl")}>
+                              <input
+                                className={inputCls}
+                                value={form.embedding_base_url}
+                                onChange={(e) => set("embedding_base_url", e.target.value)}
+                                placeholder="https://api.openai.com/v1"
+                              />
+                            </Field>
+                            <Field label={t("settings.embedding.model")}>
+                              <input
+                                className={inputCls}
+                                value={form.embedding_model}
+                                onChange={(e) => set("embedding_model", e.target.value)}
+                                placeholder="text-embedding-3-small"
+                              />
+                            </Field>
+                            <Field label={t("settings.embedding.apiKey")}>
+                              <input
+                                className={inputCls}
+                                type="password"
+                                value={form.embedding_api_key}
+                                onChange={(e) => set("embedding_api_key", e.target.value)}
+                                placeholder={t("settings.embedding.apiKeyPlaceholder")}
+                              />
+                            </Field>
+                            <Field label={t("settings.embedding.dims")}>
+                              <input
+                                className={inputCls}
+                                type="number"
+                                min={1}
+                                value={form.embedding_dims}
+                                onChange={(e) => set("embedding_dims", Number(e.target.value) || 0)}
+                              />
+                            </Field>
+                          </>
+                        )}
+                        <Field label={t("settings.embedding.hybridWeight")} help={t("settings.embedding.hybridWeightHelp")}>
+                          <div className="flex items-center gap-3">
+                            <input
+                              type="range"
+                              min={0}
+                              max={1}
+                              step={0.05}
+                              value={form.hybrid_weight}
+                              onChange={(e) => set("hybrid_weight", Number(e.target.value))}
+                              className="flex-1"
+                            />
+                            <span className="w-10 text-right text-[12px] text-[#5f6368]">
+                              {form.hybrid_weight.toFixed(2)}
+                            </span>
+                          </div>
+                        </Field>
+                        <div className="rounded-md border border-[#e2e5ea] bg-[#fbfcfd] p-3 text-[12px] leading-5 text-[#7a8088]">
+                          {t("settings.embedding.note")}
+                        </div>
+                      </div>
+                    )}
                   </Section>
                   <Section title={t("settings.agents.title")} description={t("settings.agents.desc")}>
                     <div className="rounded-lg border border-[#e2e5ea] bg-[#fbfcfd]">
@@ -3812,6 +4121,15 @@ export default function SettingsDialog({
                           </div>
                           <div className="mt-1">{selectedPermissionTool.description}</div>
                           <div className="mt-1 text-[#8a9099]">{selectedPermissionTool.default_reason}</div>
+                          {selectedPermissionTool.card_preference && (
+                            <div className="mt-1 text-[#3f6212]">
+                              {t("settings.perm.cardOverlay")}:{" "}
+                              <code className="rounded bg-[#f1f3f5] px-1">
+                                {selectedPermissionTool.card_preference}
+                              </code>
+                              <span className="ml-1 text-[#8a9099]">{t("settings.perm.cardOverlayHint")}</span>
+                            </div>
+                          )}
                         </div>
                       )}
                     </div>
@@ -3959,32 +4277,58 @@ export default function SettingsDialog({
                     />
                     <div className="mt-4 grid gap-4 sm:grid-cols-2">
                       <Field label={t("settings.voice.stt")} help={t("settings.voice.sttHelp")}>
-                        <input
-                          className={inputCls}
-                          value={form.voice_stt_backend}
-                          placeholder="none / dashscope / openai"
-                          onChange={(e) => set("voice_stt_backend", e.target.value)}
+                        <Select
+                          value={form.voice_stt_backend || "none"}
+                          onChange={(value) => set("voice_stt_backend", value)}
+                          options={voiceSttOptions.map((option) => ({
+                            value: option.value,
+                            label: t(option.labelKey),
+                            hint: t(option.helpKey),
+                          }))}
                         />
                       </Field>
-                      <Field label={t("settings.voice.tts")}>
-                        <input
-                          className={inputCls}
-                          value={form.voice_tts_backend}
-                          placeholder="none / dashscope"
-                          onChange={(e) => set("voice_tts_backend", e.target.value)}
+                      <Field label={t("settings.voice.tts")} help={t("settings.voice.ttsHelp")}>
+                        <Select
+                          value={
+                            ["gpt_sovits", "gptsovits"].includes(form.voice_tts_backend.trim().toLowerCase())
+                              ? "gpt-sovits"
+                              : form.voice_tts_backend || "none"
+                          }
+                          onChange={(value) => set("voice_tts_backend", value)}
+                          options={voiceTtsOptions.map((option) => ({
+                            value: option.value,
+                            label: t(option.labelKey),
+                            hint: t(option.helpKey),
+                          }))}
                         />
                       </Field>
                     </div>
-                    <div className="mt-4">
-                      <Field label={t("settings.voice.voiceId")}>
+                    <div className="mt-4 grid gap-4 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+                      <Field label={t("settings.voice.voiceId")} help={t("settings.voice.voiceIdHelp")}>
                         <input
                           className={inputCls}
                           value={form.voice_id}
-                          placeholder="default"
+                          placeholder={t("settings.voice.voiceIdPlaceholder")}
                           onChange={(e) => set("voice_id", e.target.value)}
                         />
                       </Field>
+                      <Field label={t("settings.voice.localBaseUrl")} help={t("settings.voice.localBaseUrlHelp")}>
+                        <input
+                          className={inputCls}
+                          value={form.media_base_url}
+                          placeholder="http://127.0.0.1:9880"
+                          onChange={(e) => set("media_base_url", e.target.value)}
+                        />
+                      </Field>
                     </div>
+                    {["gpt-sovits", "gpt_sovits", "gptsovits"].includes(
+                      form.voice_tts_backend.trim().toLowerCase(),
+                    ) && (
+                      <div className="mt-4 rounded-lg border border-[#dce6d8] bg-[#f8fbf6] px-3 py-3 text-[12px] leading-5 text-[#3f6212]">
+                        <div className="font-semibold text-[#2f4f12]">{t("settings.voice.gptSovitsReadyTitle")}</div>
+                        <div className="mt-1 text-[#52643d]">{t("settings.voice.gptSovitsReadyDesc")}</div>
+                      </div>
+                    )}
                   </Section>
                 </>
               )}

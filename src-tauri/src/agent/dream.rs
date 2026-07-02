@@ -37,7 +37,8 @@ pub async fn run_manual_dream(
 
     let sandbox_dir = state.sandbox_dir.lock().unwrap().clone();
     let packs_dir = state.packs_dir.lock().unwrap().clone();
-    let memory_path = sandbox_dir.join(".demiurge").join("memory.md");
+    let memory_path =
+        super::memory::project_memory_path(&sandbox_dir, &packs_dir, &settings.current_pack);
     let current_memory = fs::read_to_string(&memory_path).unwrap_or_default();
     let session_snapshot = current_session_snapshot(state, &sid);
     let source = build_source_bundle(
@@ -127,7 +128,7 @@ pub async fn run_manual_dream(
 
     let preview = build_preview(&memory_path, &current_memory, &next_memory);
     let decision = PermissionDecision::from_policy(tools::PermissionPolicy::ask(
-        "会整理并覆盖沙盒内的 .demiurge/memory.md。",
+        "会整理并覆盖沙盒内的长期记忆文件。",
     ));
     permission::audit(state, "dream", &decision);
     let response = permission::confirm(
@@ -139,9 +140,9 @@ pub async fn run_manual_dream(
             description: "整理长期记忆文件",
             risk: tools::ToolRisk::Mutating,
             decision: decision.clone(),
-            summary: "将整理并覆盖沙盒内的长期记忆文件 `.demiurge/memory.md`。".to_string(),
+            summary: "将整理并覆盖沙盒内的长期记忆文件。".to_string(),
             preview: Some(preview),
-            affected_paths: vec![".demiurge/memory.md".to_string()],
+            affected_paths: vec![memory_path.to_string_lossy().to_string()],
         },
     )
     .await;
@@ -161,7 +162,7 @@ pub async fn run_manual_dream(
     emit_delta(
         &events,
         &mut visible,
-        "记忆整理完成，已更新沙盒 `.demiurge/memory.md`。",
+        "记忆整理完成，已更新沙盒长期记忆文件。",
     );
     finish(&events, state, &sid, visible);
     Ok(())

@@ -83,6 +83,28 @@ export function RotateCwIcon(props: IconProps) {
   );
 }
 
+export function ClockIcon(props: IconProps) {
+  return (
+    <Icon strokeWidth={1.7} {...props}>
+      <circle cx="12" cy="12" r="9" />
+      <path d="M12 7v5l3 2" />
+    </Icon>
+  );
+}
+
+export function CloudSunIcon(props: IconProps) {
+  return (
+    <Icon strokeWidth={1.7} {...props}>
+      <path d="M12 2v2" />
+      <path d="m4.93 4.93 1.41 1.41" />
+      <path d="M20 12h2" />
+      <path d="m19.07 4.93-1.41 1.41" />
+      <path d="M15.5 8.5A4.5 4.5 0 0 0 7.2 11" />
+      <path d="M17 21H8a5 5 0 1 1 1.1-9.88A6 6 0 0 1 17 21Z" />
+    </Icon>
+  );
+}
+
 export function TargetIcon(props: IconProps) {
   return (
     <Icon strokeWidth={1.7} {...props}>
@@ -122,6 +144,22 @@ export function CloseIcon(props: IconProps) {
   );
 }
 
+export function MinimizeIcon(props: IconProps) {
+  return (
+    <Icon strokeWidth={2} {...props}>
+      <path d="M5 12h14" />
+    </Icon>
+  );
+}
+
+export function MaximizeIcon(props: IconProps) {
+  return (
+    <Icon strokeWidth={1.8} {...props}>
+      <rect x="5" y="5" width="14" height="14" rx="2" />
+    </Icon>
+  );
+}
+
 export function SettingsIcon(props: IconProps) {
   return (
     <Icon strokeWidth={1.7} {...props}>
@@ -143,6 +181,18 @@ export function FolderIcon(props: IconProps) {
   return (
     <Icon strokeWidth={1.7} {...props}>
       <path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z" />
+    </Icon>
+  );
+}
+
+export function GitBranchIcon(props: IconProps) {
+  return (
+    <Icon strokeWidth={1.7} {...props}>
+      <circle cx="6" cy="6" r="2.5" />
+      <circle cx="18" cy="18" r="2.5" />
+      <circle cx="6" cy="18" r="2.5" />
+      <path d="M6 8.5v7" />
+      <path d="M8.5 6H12a6 6 0 0 1 6 6v3.5" />
     </Icon>
   );
 }
@@ -199,6 +249,15 @@ export function SparklesIcon(props: IconProps) {
       <path d="M12 3l1.7 4.2L18 9l-4.3 1.8L12 15l-1.7-4.2L6 9l4.3-1.8Z" />
       <path d="M19 15l.9 2.1L22 18l-2.1.9L19 21l-.9-2.1L16 18l2.1-.9Z" />
       <path d="M5 14l.7 1.6L7.3 16l-1.6.7L5 18.3l-.7-1.6L2.7 16l1.6-.4Z" />
+    </Icon>
+  );
+}
+
+export function PersonIcon(props: IconProps) {
+  return (
+    <Icon strokeWidth={1.7} {...props}>
+      <circle cx="12" cy="8" r="4" />
+      <path d="M6 21v-1a6 6 0 0 1 12 0v1" />
     </Icon>
   );
 }

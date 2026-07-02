@@ -69,6 +69,13 @@ function manualChunks(id: string) {
   }
   if (normalized.includes("/node_modules/pdfjs-dist/")) return "vendor-pdf";
   if (normalized.includes("/node_modules/jszip/")) return "vendor-zip";
+  if (
+    normalized.includes("/node_modules/pixi.js/") ||
+    normalized.includes("/node_modules/@pixi/") ||
+    normalized.includes("/node_modules/untitled-pixi-live2d-engine/")
+  ) {
+    return "vendor-live2d";
+  }
   return undefined;
 }
 

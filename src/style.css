@@ -164,6 +164,52 @@ html[data-resolved-theme="dark"] pre {
   color: #e8ebf0 !important;
 }
 
+html[data-resolved-theme="dark"] select {
+  background-image:
+    linear-gradient(45deg, transparent 50%, #a0a8b5 50%),
+    linear-gradient(135deg, #a0a8b5 50%, transparent 50%);
+}
+
+html[data-resolved-theme="dark"] .cf-dropdown {
+  background: rgba(24, 29, 37, 0.98);
+  border-color: #2a303a;
+  box-shadow:
+    0 8px 24px rgba(0, 0, 0, 0.28),
+    0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
+html[data-resolved-theme="dark"] .cf-menu-item {
+  color: #e8ebf0;
+}
+
+html[data-resolved-theme="dark"] .cf-menu-item:hover,
+html[data-resolved-theme="dark"] .cf-menu-item.is-active {
+  background: #222936;
+}
+
+html[data-resolved-theme="dark"] .app-titlebar {
+  border-bottom-color: #2a303a;
+  background: rgba(16, 19, 24, 0.96);
+}
+
+html[data-resolved-theme="dark"] .app-titlebar-brand,
+html[data-resolved-theme="dark"] .app-title-menu-button,
+html[data-resolved-theme="dark"] .app-window-controls button {
+  color: #a0a8b5;
+}
+
+html[data-resolved-theme="dark"] .app-title-menu-button:hover,
+html[data-resolved-theme="dark"] .app-title-menu-button.is-active,
+html[data-resolved-theme="dark"] .app-window-controls button:hover {
+  background: #222936;
+  color: #e8ebf0;
+}
+
+html[data-resolved-theme="dark"] .app-window-controls .app-window-close:hover {
+  background: #e81123;
+  color: white;
+}
+
 html[data-resolved-theme="dark"] ::placeholder {
   color: #788292 !important;
 }
@@ -197,10 +243,130 @@ body {
   font-optical-sizing: auto;
 }
 
+.app-titlebar {
+  display: flex;
+  height: 34px;
+  flex: 0 0 34px;
+  align-items: center;
+  border-bottom: 1px solid rgba(207, 213, 221, 0.72);
+  background: rgba(238, 241, 245, 0.96);
+  user-select: none;
+}
+
+.app-titlebar-drag {
+  -webkit-app-region: drag;
+}
+
+.app-titlebar-brand {
+  display: flex;
+  height: 100%;
+  min-width: 128px;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px;
+  color: #4f5661;
+  font-size: 12px;
+  font-weight: 650;
+  letter-spacing: 0;
+}
+
+.app-titlebar-menus {
+  display: flex;
+  height: 100%;
+  align-items: center;
+  gap: 2px;
+}
+
+.app-titlebar-menus,
+.app-titlebar-menus *,
+.app-window-controls,
+.app-window-controls * {
+  -webkit-app-region: no-drag;
+}
+
+.app-title-menu-button {
+  height: 26px;
+  border-radius: 6px;
+  padding: 0 9px;
+  color: #4f5661;
+  font-size: 12px;
+  font-weight: 520;
+  letter-spacing: 0;
+  transition:
+    background-color 0.14s ease,
+    color 0.14s ease;
+}
+
+.app-title-menu-button:hover,
+.app-title-menu-button.is-active {
+  background: rgba(223, 228, 234, 0.78);
+  color: #111827;
+}
+
+.app-titlebar-menu {
+  position: absolute;
+  left: 0;
+  top: 31px;
+  z-index: 60;
+}
+
+.app-titlebar-spacer {
+  height: 100%;
+  min-width: 24px;
+  flex: 1 1 auto;
+}
+
+.app-window-controls {
+  display: flex;
+  height: 100%;
+  margin-left: auto;
+}
+
+.app-window-controls button {
+  display: grid;
+  width: 44px;
+  height: 34px;
+  place-items: center;
+  color: #59616d;
+  transition:
+    background-color 0.14s ease,
+    color 0.14s ease;
+}
+
+.app-window-controls button:hover {
+  background: rgba(223, 228, 234, 0.86);
+  color: #202124;
+}
+
+.app-window-controls .app-window-close:hover {
+  background: #e81123;
+  color: white;
+}
+
 button,
 textarea {
   font: inherit;
   letter-spacing: inherit;
+}
+
+select {
+  font: inherit;
+  letter-spacing: inherit;
+  appearance: none;
+  background-color: #fbfcfd;
+  background-image:
+    linear-gradient(45deg, transparent 50%, #8a9099 50%),
+    linear-gradient(135deg, #8a9099 50%, transparent 50%);
+  background-position:
+    calc(100% - 14px) calc(50% - 2px),
+    calc(100% - 9px) calc(50% - 2px);
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+  padding-right: 28px !important;
+}
+
+select:focus {
+  box-shadow: 0 0 0 3px rgba(17, 24, 39, 0.06);
 }
 
 /* 数字对齐场景（统计面板、token 计数、表格）用等宽数字，避免数值跳动 */
@@ -213,23 +379,51 @@ textarea {
 /* ---- 精致的细滚动条（贴近 ChatGPT） ---- */
 * {
   scrollbar-width: thin;
-  scrollbar-color: #c7ccd4 transparent;
+  scrollbar-color: #d9dee6 transparent;
 }
 ::-webkit-scrollbar {
-  width: 9px;
-  height: 9px;
+  width: 7px;
+  height: 7px;
 }
 ::-webkit-scrollbar-thumb {
-  background: #c7ccd4;
+  background: rgba(154, 161, 171, 0.38);
   border: 2px solid transparent;
   border-radius: 999px;
   background-clip: padding-box;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #aeb6c2;
+  background: rgba(154, 161, 171, 0.62);
   background-clip: padding-box;
 }
 ::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.capsule-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(138, 144, 153, 0.36) transparent;
+}
+
+.capsule-scrollbar::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+}
+
+.capsule-scrollbar::-webkit-scrollbar-thumb {
+  min-height: 48px;
+  border: 4px solid transparent;
+  border-radius: 999px;
+  background: rgba(138, 144, 153, 0.32);
+  background-clip: padding-box;
+}
+
+.capsule-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: rgba(111, 119, 130, 0.5);
+  background-clip: padding-box;
+}
+
+.capsule-scrollbar::-webkit-scrollbar-track {
+  border-radius: 999px;
   background: transparent;
 }
 
@@ -278,6 +472,46 @@ textarea {
 .cf-menu-in {
   animation: cf-menu-in 0.16s var(--ease-pop) both;
   transform-origin: top center;
+}
+
+.cf-dropdown {
+  border: 1px solid #e4e7ec;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.98);
+  box-shadow:
+    0 8px 24px rgba(15, 23, 42, 0.10),
+    0 1px 0 rgba(15, 23, 42, 0.04);
+  backdrop-filter: blur(10px);
+}
+
+.cf-menu-item {
+  border-radius: 7px;
+  padding: 7px 9px;
+  text-align: left;
+  font-size: 13px;
+  line-height: 1.35;
+  color: #3f444c;
+  transition:
+    background-color 0.14s ease,
+    color 0.14s ease;
+}
+
+.cf-menu-item:hover {
+  background: #f5f6f8;
+}
+
+/* 键盘 ↑↓ 高亮项（与 hover 同色，保证键盘可达性与鼠标一致） */
+.cf-menu-item.is-highlighted {
+  background: #f5f6f8;
+}
+
+html[data-resolved-theme="dark"] .cf-menu-item.is-highlighted {
+  background: #222936;
+}
+
+.cf-menu-item.is-active {
+  background: #eef1f5;
+  color: #111827;
 }
 
 /* 按钮按压反馈：点击瞬间轻微缩小（配合 Tailwind transition 一起平滑） */
@@ -342,6 +576,9 @@ textarea {
   .cf-pop,
   .cf-menu-in,
   .cf-rise,
+  .cf-shake,
+  .cf-fall,
+  .cf-breathe,
   .cf-dots > span {
     animation: none !important;
   }
@@ -352,6 +589,55 @@ textarea {
   .markdown-body.is-streaming > *:last-child::after {
     animation: none;
   }
+}
+
+/* ---- 每日吉签 · 仪式感动效 ---- */
+/* 摇签筒：左右晃动 + 轻微旋转，1.2s 一轮 */
+@keyframes cf-shake {
+  0%, 100% { transform: rotate(0deg) translateY(0); }
+  15% { transform: rotate(-8deg) translateY(-2px); }
+  30% { transform: rotate(7deg) translateY(1px); }
+  45% { transform: rotate(-6deg) translateY(-1px); }
+  60% { transform: rotate(5deg) translateY(1px); }
+  75% { transform: rotate(-3deg) translateY(0); }
+}
+.cf-shake {
+  animation: cf-shake 1.2s ease-in-out;
+  transform-origin: 50% 80%;
+}
+
+/* 签从上方落入结果区 */
+@keyframes cf-fall {
+  from { opacity: 0; transform: translateY(-20px); }
+  to { opacity: 1; transform: none; }
+}
+.cf-fall { animation: cf-fall 0.5s var(--ease-pop) both; }
+
+/* 引导弹窗签筒呼吸（静止待摇） */
+@keyframes cf-breathe {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.04); }
+}
+.cf-breathe {
+  animation: cf-breathe 3.2s ease-in-out infinite;
+  transform-origin: 50% 80%;
+}
+
+/* ---- Header utility popover ---- */
+.toy-panel > button,
+.toy-panel > section {
+  border: 1px solid #eceff3;
+  border-radius: 10px;
+  background: #fff;
+  margin: 0;
+}
+
+.toy-panel > * + * {
+  margin-top: 8px;
+}
+
+.toy-panel > section {
+  padding: 10px;
 }
 
 /* ---- Markdown 正文 ---- */

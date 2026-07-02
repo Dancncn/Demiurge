@@ -87,14 +87,14 @@ Owner 标记：**[R]** Rust 内核 · **[F]** 前端。
 }
 ```
 
-预留（对应轨道落地时再加，无需重写内核）：🔜 Live2D 模型路径、表情 / 情绪映射、TTS 后端 + 音色、问候 / 待机台词。
+预留（对应轨道落地时再加，无需重写内核）：🔜 Live2D 模型路径、表情 / 情绪映射、TTS 后端 + 音色（TTS 已接通 dashscope + gpt-sovits 双后端；音色/流式/队列待补）、问候 / 待机台词。
 
 ## MVP 范围外
 
 > 下列为 MVP 当时的范围外清单，多数已在后续实现，保留并就地标注。
 
 推迟——已为其设计，后续经「角色包字段 + 适配器」加入：
-- ASR（语音输入）✅ **已实现**（DashScope `qwen3-asr-flash` / OpenAI 兼容 Whisper）；TTS（语音输出）🔜 接口已预留、未接后端。
+- ASR（语音输入）✅ **已实现**（DashScope `qwen3-asr-flash` / OpenAI 兼容 Whisper）；TTS（语音输出）✅ **已接通双后端**（dashscope `qwen3-tts-flash` + gpt-sovits，`voice.rs:193-249`）；流式合成/播放队列/打断/语速/情感参数仍 🔜。
 - 屏幕感知 ✅ **已实现**（deferred 的 `screen_list_windows` / 区域·窗口截图 / 区域·窗口 OCR）；桌宠视觉外壳的透明置顶窗口、Live2D、点击穿透、主动说话仍 🔜。
 
 不需要——**不要**搭：

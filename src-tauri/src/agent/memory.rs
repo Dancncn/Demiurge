@@ -65,6 +65,10 @@ pub struct MemoryPanelState {
     pub entries: Vec<MemoryEntry>,
     pub duplicates: Vec<MemoryDuplicateGroup>,
     pub scopes: Vec<MemoryScopeState>,
+    /// 当前生效的 memory namespace（来自角色卡 runtime.memory.namespace）。
+    /// None 表示走默认共享路径；Some(ns) 表示 user/project 已隔离到带后缀文件。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub namespace: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -115,6 +119,7 @@ pub fn panel_state(
         entries,
         duplicates,
         scopes,
+        namespace: active_namespace(packs_dir, pack_id),
     }
 }
 
@@ -264,10 +269,56 @@ pub fn apply_dedupe(
     ))
 }
 
+/// 把 from_ns 命名空间下的 user/project 记忆文件拷贝到 to_ns。
+/// 用于角色包切换 namespace 时迁移已有记忆；源文件保留，目标存在则覆盖。
+/// from_ns 可以是 "default"（从默认共享路径迁出），to_ns 不能是 "default"。
+pub fn migrate_namespace(
+    data_dir: &Path,
+    sandbox_dir: &Path,
+    from_ns: &str,
+    to_ns: &str,
+) -> Result<(), String> {
+    let from_ns = from_ns.trim();
+    let to_ns = to_ns.trim();
+    if from_ns.is_empty() || to_ns.is_empty() {
+        return Err("namespace 不能为空".to_string());
+    }
+    if from_ns == to_ns {
+        return Ok(());
+    }
+    if to_ns == "default" {
+        return Err("目标 namespace 不能是 default".to_string());
+    }
+    let user_from = data_dir
+        .join("memory")
+        .join(namespaced_file_name("user", Some(from_ns)));
+    let user_to = data_dir
+        .join("memory")
+        .join(namespaced_file_name("user", Some(to_ns)));
+    let proj_from = memory_path(sandbox_dir, Some(from_ns));
+    let proj_to = memory_path(sandbox_dir, Some(to_ns));
+    copy_memory_file(&user_from, &user_to)?;
+    copy_memory_file(&proj_from, &proj_to)?;
+    Ok(())
+}
+
+fn copy_memory_file(from: &Path, to: &Path) -> Result<(), String> {
+    if !from.exists() {
+        return Ok(());
+    }
+    if let Some(parent) = to.parent() {
+        fs::create_dir_all(parent).map_err(|e| format!("创建目录失败：{e}"))?;
+    }
+    fs::copy(from, to).map_err(|e| format!("复制记忆文件失败：{e}"))?;
+    Ok(())
+}
+
 pub async fn extract_and_update(
     client: &reqwest::Client,
     settings: &Settings,
     sandbox_dir: &Path,
+    packs_dir: &Path,
+    pack_id: &str,
     user_text: &str,
     assistant_text: &str,
     cancel: &AtomicBool,
@@ -317,7 +368,8 @@ Conversation:
         return Ok(());
     }
 
-    append_entries(sandbox_dir, &entries)
+    let namespace = active_namespace(packs_dir, pack_id);
+    append_entries(sandbox_dir, namespace.as_deref(), &entries)
 }
 
 pub fn scoped_memory_paths(
@@ -333,6 +385,12 @@ pub fn scoped_memory_paths(
         .collect()
 }
 
+/// 当前 project scope 的记忆文件路径（已按 namespace 隔离）。供 /dream 等直接读写项目记忆的调用方使用。
+pub fn project_memory_path(sandbox_dir: &Path, packs_dir: &Path, pack_id: &str) -> PathBuf {
+    let ns = active_namespace(packs_dir, pack_id);
+    memory_path(sandbox_dir, ns.as_deref())
+}
+
 fn scope_files(
     data_dir: &Path,
     sandbox_dir: &Path,
@@ -341,16 +399,18 @@ fn scope_files(
     session_id: &str,
 ) -> Vec<MemoryScopeFile> {
     let session_id = sanitize_path_segment(session_id);
+    let ns = active_namespace(packs_dir, pack_id);
+    let user_name = namespaced_file_name("user", ns.as_deref());
     vec![
         MemoryScopeFile {
             id: "user",
             label: "User",
-            path: data_dir.join("memory").join("user.md"),
+            path: data_dir.join("memory").join(user_name),
         },
         MemoryScopeFile {
             id: "project",
             label: "Project",
-            path: memory_path(sandbox_dir),
+            path: memory_path(sandbox_dir, ns.as_deref()),
         },
         MemoryScopeFile {
             id: "session",
@@ -366,6 +426,19 @@ fn scope_files(
             path: packs_dir.join(pack_id).join("memory.md"),
         },
     ]
+}
+
+/// 当前角色包声明的 memory namespace；None 表示走默认共享路径。
+fn active_namespace(packs_dir: &Path, pack_id: &str) -> Option<String> {
+    crate::pack::manifest_namespace(packs_dir, pack_id)
+}
+
+/// 按 namespace 生成记忆文件名：默认 `user.md`/`memory.md`，命名空间下 `user.{ns}.md`/`memory.{ns}.md`。
+fn namespaced_file_name(base: &str, ns: Option<&str>) -> String {
+    match ns.map(str::trim) {
+        Some(n) if !n.is_empty() && n != "default" => format!("{base}.{n}.md"),
+        _ => format!("{base}.md"),
+    }
 }
 
 fn find_scope_file(
@@ -386,8 +459,9 @@ fn find_scope_file(
         .ok_or_else(|| format!("Unknown memory scope: {scope_id}"))
 }
 
-fn memory_path(sandbox_dir: &Path) -> PathBuf {
-    sandbox_dir.join(".demiurge").join("memory.md")
+fn memory_path(sandbox_dir: &Path, namespace: Option<&str>) -> PathBuf {
+    let name = namespaced_file_name("memory", namespace);
+    sandbox_dir.join(".demiurge").join(name)
 }
 
 fn parse_entries(scope: &str, scope_label: &str, raw: &str) -> Vec<MemoryEntry> {
@@ -501,9 +575,13 @@ fn normalize_candidates(candidates: Vec<MemoryCandidate>) -> Vec<(String, String
     out
 }
 
-fn append_entries(sandbox_dir: &Path, entries: &[(String, String)]) -> Result<(), String> {
+fn append_entries(
+    sandbox_dir: &Path,
+    namespace: Option<&str>,
+    entries: &[(String, String)],
+) -> Result<(), String> {
     let memory_dir = sandbox_dir.join(".demiurge");
-    let memory_path = memory_dir.join("memory.md");
+    let memory_path = memory_path(sandbox_dir, namespace);
 
     if let Ok(meta) = fs::metadata(&memory_path) {
         if meta.len() > MAX_MEMORY_FILE_BYTES {
@@ -737,6 +815,66 @@ mod tests {
             .join("session_1.md")
             .is_file());
         assert!(packs.join("default").join("memory.md").is_file());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn namespaced_file_name_formats_paths() {
+        assert_eq!(namespaced_file_name("user", None), "user.md");
+        assert_eq!(namespaced_file_name("user", Some("")), "user.md");
+        assert_eq!(namespaced_file_name("user", Some("default")), "user.md");
+        assert_eq!(namespaced_file_name("user", Some("alice")), "user.alice.md");
+        assert_eq!(
+            namespaced_file_name("memory", Some("alice")),
+            "memory.alice.md"
+        );
+    }
+
+    #[test]
+    fn scope_files_isolate_user_project_by_namespace() {
+        let root =
+            std::env::temp_dir().join(format!("demiurge_memory_ns_{}", crate::store::now_millis()));
+        let data = root.join("data");
+        let sandbox = root.join("sandbox");
+        let packs = root.join("packs");
+
+        // 声明 namespace=alice 的角色包
+        let alice_dir = packs.join("alice-pack");
+        std::fs::create_dir_all(&alice_dir).unwrap();
+        std::fs::write(
+            alice_dir.join("manifest.json"),
+            r#"{"id":"alice-pack","name":"Alice","persona":"persona.md","runtime":{"memory":{"namespace":"alice"}}}"#,
+        )
+        .unwrap();
+        std::fs::write(alice_dir.join("persona.md"), "persona").unwrap();
+
+        let scopes = scope_files(&data, &sandbox, &packs, "alice-pack", "session/1");
+        let user = scopes.iter().find(|s| s.id == "user").unwrap();
+        let project = scopes.iter().find(|s| s.id == "project").unwrap();
+        let session = scopes.iter().find(|s| s.id == "session").unwrap();
+        let pack = scopes.iter().find(|s| s.id == "pack").unwrap();
+        let norm = |p: &std::path::PathBuf| p.to_string_lossy().replace('\\', "/");
+        assert!(norm(&user.path).ends_with("user.alice.md"));
+        assert!(norm(&project.path).ends_with("memory.alice.md"));
+        // session 与 pack 层不受 namespace 影响
+        assert!(norm(&session.path).ends_with("session_1.md"));
+        assert!(norm(&pack.path).ends_with("alice-pack/memory.md"));
+
+        // 未声明 namespace 的包走 legacy 共享路径
+        let default_dir = packs.join("default");
+        std::fs::create_dir_all(&default_dir).unwrap();
+        std::fs::write(
+            default_dir.join("manifest.json"),
+            r#"{"id":"default","name":"Default","persona":"persona.md"}"#,
+        )
+        .unwrap();
+        std::fs::write(default_dir.join("persona.md"), "persona").unwrap();
+        let scopes = scope_files(&data, &sandbox, &packs, "default", "session/1");
+        let user = scopes.iter().find(|s| s.id == "user").unwrap();
+        let project = scopes.iter().find(|s| s.id == "project").unwrap();
+        assert!(norm(&user.path).ends_with("user.md"));
+        assert!(norm(&project.path).ends_with("memory.md"));
+
         let _ = std::fs::remove_dir_all(root);
     }
 }

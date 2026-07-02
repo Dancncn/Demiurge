@@ -5,8 +5,11 @@
 //! backend is selected by `settings.voice_stt_backend`:
 //!   - `dashscope`  → Aliyun Bailian / DashScope ASR (`qwen3-asr-flash`)
 //!   - `openai`     → the active provider's OpenAI-compatible whisper endpoint
-//! TTS can route to the DashScope media adapter for one-shot synthesis.
+//! TTS can route to the DashScope media adapter or a user-managed GPT-SoVITS
+//! HTTP service for one-shot synthesis.
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine};
 use serde::Serialize;
+use serde_json::json;
 use tauri::State;
 
 use crate::media::{self, dashscope_api_key, dashscope_base_url, SpeechSynthesisRequest};
@@ -232,11 +235,106 @@ pub async fn voice_synthesize(
             .await?;
             Ok(result.url)
         }
-        "none" | "" => {
-            Err("No TTS backend selected. Set voice TTS backend to dashscope.".to_string())
+        "gpt-sovits" | "gpt_sovits" | "gptsovits" => {
+            synthesize_with_gpt_sovits(&state.http, &settings, text, requested_voice_id).await
         }
+        "none" | "" => Err(
+            "No TTS backend selected. Set voice TTS backend to dashscope or gpt-sovits."
+                .to_string(),
+        ),
         other => Err(format!(
-            "Unknown TTS backend `{other}`. Supported backend: dashscope."
+            "Unknown TTS backend `{other}`. Supported backends: dashscope, gpt-sovits."
         )),
     }
+}
+
+fn env_value(name: &str) -> Option<String> {
+    std::env::var(name)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn gpt_sovits_base_url(settings: &Settings) -> String {
+    let value = settings.media_base_url.trim().trim_end_matches('/');
+    if value.is_empty() || value == "https://dashscope.aliyuncs.com" {
+        "http://127.0.0.1:9880".to_string()
+    } else {
+        value.to_string()
+    }
+}
+
+async fn synthesize_with_gpt_sovits(
+    http: &reqwest::Client,
+    settings: &Settings,
+    text: &str,
+    requested_voice_id: Option<String>,
+) -> Result<String, String> {
+    let ref_audio_path = requested_voice_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .or_else(|| {
+            let value = settings.voice_id.trim();
+            (!value.is_empty()).then_some(value)
+        })
+        .map(str::to_string)
+        .or_else(|| env_value("DEMIURGE_GPT_SOVITS_REF_AUDIO"))
+        .ok_or_else(|| {
+            "GPT-SoVITS requires a reference audio path. Set Voice ID or DEMIURGE_GPT_SOVITS_REF_AUDIO."
+                .to_string()
+        })?;
+
+    let prompt_text = env_value("DEMIURGE_GPT_SOVITS_PROMPT_TEXT").unwrap_or_default();
+    let prompt_lang =
+        env_value("DEMIURGE_GPT_SOVITS_PROMPT_LANG").unwrap_or_else(|| "zh".to_string());
+    let text_lang = env_value("DEMIURGE_GPT_SOVITS_TEXT_LANG").unwrap_or_else(|| "zh".to_string());
+    let url = format!("{}/tts", gpt_sovits_base_url(settings));
+    let body = json!({
+        "text": text,
+        "text_lang": text_lang,
+        "ref_audio_path": ref_audio_path,
+        "prompt_text": prompt_text,
+        "prompt_lang": prompt_lang,
+        "text_split_method": "cut5",
+        "batch_size": 1,
+        "media_type": "wav",
+        "streaming_mode": false,
+        "parallel_infer": true,
+    });
+
+    let resp = http
+        .post(url)
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("GPT-SoVITS request failed: {e}"))?;
+    let status = resp.status();
+    let content_type = resp
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("audio/wav")
+        .split(';')
+        .next()
+        .unwrap_or("audio/wav")
+        .trim()
+        .to_string();
+    let bytes = resp
+        .bytes()
+        .await
+        .map_err(|e| format!("GPT-SoVITS response read failed: {e}"))?;
+    if !status.is_success() {
+        let detail = String::from_utf8_lossy(&bytes);
+        return Err(format!("GPT-SoVITS returned HTTP {status}: {detail}"));
+    }
+    if bytes.is_empty() {
+        return Err("GPT-SoVITS returned empty audio.".to_string());
+    }
+
+    Ok(format!(
+        "data:{};base64,{}",
+        content_type,
+        BASE64_STANDARD.encode(bytes)
+    ))
 }

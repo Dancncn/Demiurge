@@ -11,11 +11,17 @@ edition = "2021"
 name = "demiurge_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+[features]
+# 本地 embedding provider（fastembed / ONNX runtime）。默认不启用，避免打进 ONNX runtime 增大包体。
+# 启用后编译 LocalEmbeddingProvider 桩；真实本地推理仍需后续接入 fastembed crate 与模型下载 UX。
+embeddings-local = []
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = [] }
+tauri = { version = "2", features = ["protocol-asset"] }
+tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_yaml = "0.9"

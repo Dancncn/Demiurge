@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { CheckIcon, CopyIcon } from "./Icons";
+import { useCopyToClipboard } from "../lib/hooks";
 
 type MermaidModule = typeof import("mermaid").default;
 
@@ -24,7 +25,7 @@ export function MermaidBlock({ chart }: { chart: string }) {
   const idRef = useRef(`mermaid-${Math.random().toString(36).slice(2)}`);
   const [svg, setSvg] = useState("");
   const [error, setError] = useState("");
-  const [copied, setCopied] = useState(false);
+  const { copied, copy } = useCopyToClipboard();
 
   useEffect(() => {
     let disposed = false;
@@ -47,13 +48,7 @@ export function MermaidBlock({ chart }: { chart: string }) {
   }, [chart]);
 
   async function copySource() {
-    try {
-      await navigator.clipboard.writeText(chart);
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 1600);
-    } catch {
-      // Ignore clipboard errors.
-    }
+    await copy(chart);
   }
 
   return (

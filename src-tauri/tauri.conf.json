@@ -19,11 +19,16 @@
         "minWidth": 980,
         "minHeight": 680,
         "resizable": true,
+        "decorations": false,
         "center": true
       }
     ],
     "security": {
-      "csp": null
+      "csp": null,
+      "assetProtocol": {
+        "enable": true,
+        "scope": ["$APPDATA/packs/**"]
+      }
     }
   },
   "bundle": {

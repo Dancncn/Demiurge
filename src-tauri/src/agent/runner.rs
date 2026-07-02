@@ -413,10 +413,13 @@ pub async fn run_turn_with_options(
             events.assistant_done(assistant_text.clone());
 
             let sandbox_dir = state.sandbox_dir.lock().unwrap().clone();
+            let packs_dir = state.packs_dir.lock().unwrap().clone();
             let _ = memory::extract_and_update(
                 &state.http,
                 &settings,
                 &sandbox_dir,
+                &packs_dir,
+                &settings.current_pack,
                 &original_user_text,
                 &assistant_text,
                 &state.cancel,

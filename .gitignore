@@ -19,9 +19,16 @@ src-tauri/.cargo/
 packs/*
 !packs/default/
 
+# Cubism Core（Live2D 私有运行时，用户自行下载，不入库）
+public/core/live2dcubismcore.min.js
+
 # 本地配置
 .env
 .env.local
+
+# 本地 GPT-SoVITS 启动脚本与音色配置（含本机绝对路径与个人训练模型引用，仅本机有效，不入库）
+scripts/gpt-sovits-dan-tts.yaml
+scripts/start-gpt-sovits-dan.ps1
 
 # 编辑器
 .vscode/

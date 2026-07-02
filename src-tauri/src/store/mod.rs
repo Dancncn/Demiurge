@@ -62,6 +62,18 @@ fn default_auto_memory_enabled() -> bool {
     DEFAULT_AUTO_MEMORY_ENABLED
 }
 
+fn default_embedding_provider() -> String {
+    "none".to_string()
+}
+
+fn default_embedding_dims() -> usize {
+    1024
+}
+
+fn default_hybrid_weight() -> f32 {
+    0.5
+}
+
 fn default_companion_enabled() -> bool {
     DEFAULT_COMPANION_ENABLED
 }
@@ -297,6 +309,28 @@ pub struct Settings {
     pub reasoning_effort: ReasoningEffort,
     #[serde(default = "default_auto_memory_enabled")]
     pub auto_memory_enabled: bool,
+    /// 是否启用 Lorebook 向量召回（embedding 混合 RRF）。
+    #[serde(default)]
+    pub embedding_enabled: bool,
+    /// embedding provider 类型："none"（默认，纯 BM25）或 "remote"。
+    #[serde(default = "default_embedding_provider")]
+    pub embedding_provider: String,
+    /// 远程 embedding base URL（OpenAI 兼容，如 DashScope / OpenAI）。
+    #[serde(default)]
+    pub embedding_base_url: String,
+    /// 远程 embedding API Key。运行时由 `credentials::hydrate_or_migrate_settings` 从系统凭据管理器填充；
+    /// 落盘时由 `redacted_settings` 清空，明文不写入 `settings.json`。
+    #[serde(default)]
+    pub embedding_api_key: String,
+    /// embedding 模型名（如 text-embedding-v3 / text-embedding-3-small）。
+    #[serde(default)]
+    pub embedding_model: String,
+    /// 输出向量维度，用于缓存失效判断。默认 1024。
+    #[serde(default = "default_embedding_dims")]
+    pub embedding_dims: usize,
+    /// 混合召回权重：0.0=纯稀疏，1.0=纯稠密，默认 0.5（RRF 融合）。
+    #[serde(default = "default_hybrid_weight")]
+    pub hybrid_weight: f32,
     #[serde(default = "default_companion_enabled")]
     pub companion_enabled: bool,
     #[serde(default = "default_companion_memory_extraction_enabled")]
@@ -388,6 +422,13 @@ impl Default for Settings {
             launch_on_startup: false,
             reasoning_effort: default_reasoning_effort(),
             auto_memory_enabled: DEFAULT_AUTO_MEMORY_ENABLED,
+            embedding_enabled: false,
+            embedding_provider: default_embedding_provider(),
+            embedding_base_url: String::new(),
+            embedding_api_key: String::new(),
+            embedding_model: String::new(),
+            embedding_dims: default_embedding_dims(),
+            hybrid_weight: default_hybrid_weight(),
             companion_enabled: DEFAULT_COMPANION_ENABLED,
             companion_memory_extraction_enabled: false,
             companion_memory_extraction_scope: default_companion_memory_extraction_scope(),
@@ -520,6 +561,7 @@ pub fn redacted_settings(s: &Settings) -> Settings {
     safe.exa_api_key.clear();
     safe.webdav_password.clear();
     safe.media_api_key.clear();
+    safe.embedding_api_key.clear();
     for server in &mut safe.mcp_servers {
         for env in &mut server.env {
             if env.secret {
@@ -638,6 +680,7 @@ mod tests {
             brave_search_api_key: "brave-secret".to_string(),
             exa_api_key: "exa-secret".to_string(),
             media_api_key: "media-secret".to_string(),
+            embedding_api_key: "embed-secret".to_string(),
             ..Settings::default()
         };
         save_settings(&dir, &settings).unwrap();
@@ -648,6 +691,7 @@ mod tests {
         assert!(!raw.contains("brave-secret"));
         assert!(!raw.contains("exa-secret"));
         assert!(!raw.contains("media-secret"));
+        assert!(!raw.contains("embed-secret"));
         let saved = serde_json::from_str::<Settings>(&raw).unwrap();
         assert!(saved.api_key.is_empty());
         assert!(saved.tavily_api_key.is_empty());
@@ -655,6 +699,7 @@ mod tests {
         assert!(saved.exa_api_key.is_empty());
         assert!(saved.webdav_password.is_empty());
         assert!(saved.media_api_key.is_empty());
+        assert!(saved.embedding_api_key.is_empty());
 
         let _ = std::fs::remove_dir_all(&dir);
     }

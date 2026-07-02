@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react";
 import type { SessionMeta } from "../lib/types";
 import { useI18n } from "../lib/i18n";
-import { ComposeIcon, FolderIcon, ImageIcon, PanelLeftIcon, SettingsIcon, SparklesIcon, TrashIcon } from "./Icons";
+import { ComposeIcon, ImageIcon, PanelLeftIcon, PersonIcon, SettingsIcon, SparklesIcon, TrashIcon } from "./Icons";
 
-export type AppView = "chat" | "media" | "skills" | "settings";
+export type AppView = "chat" | "media" | "skills" | "live2d" | "settings";
 
 type Props = {
   open: boolean;
@@ -19,7 +19,6 @@ type Props = {
   onSelectSession: (id: string) => void;
   onRenameSession: (id: string, title: string) => Promise<void> | void;
   onDeleteSession: (id: string) => void;
-  onOpenSandbox: () => void;
   onOpenSettings: () => void;
 };
 
@@ -37,7 +36,6 @@ export function Sidebar({
   onSelectSession,
   onRenameSession,
   onDeleteSession,
-  onOpenSandbox,
   onOpenSettings,
 }: Props) {
   const { t } = useI18n();
@@ -140,26 +138,18 @@ export function Sidebar({
             <SparklesIcon size={17} className="shrink-0" />
             {open && <span>{t("nav.skills")}</span>}
           </button>
+          <button
+            onClick={() => onViewChange("live2d")}
+            className={`${navButton} ${activeView === "live2d" ? "bg-white text-[#111827] shadow-sm" : "text-[#202124] hover:bg-[#dfe4ea]"} ${
+              open ? "" : "justify-center px-0"
+            }`}
+          >
+            <PersonIcon size={17} className="shrink-0" />
+            {open && <span>{t("nav.live2d")}</span>}
+          </button>
         </div>
 
-        {open && (
-          <button
-            onClick={() => {
-              onViewChange("chat");
-              onNewChat();
-            }}
-            className="mb-4 flex h-9 items-center gap-2 rounded-md px-2 text-left text-[13px] text-[#202124] transition hover:bg-[#dfe4ea]"
-          >
-            <img
-              src={packAvatar || "/demiurge.png"}
-              alt=""
-              className="size-7 shrink-0 rounded-md border border-[#dfe3e8] bg-white object-cover"
-            />
-            <span>{t("sidebar.newChat")}</span>
-          </button>
-        )}
-
-        <div className={`min-h-0 flex-1 overflow-y-auto ${open ? "" : "hidden"}`}>
+        <div className={`capsule-scrollbar min-h-0 flex-1 overflow-y-auto ${open ? "" : "hidden"}`}>
           <div className="px-2 pb-1.5 text-[11px] font-semibold uppercase tracking-wide text-[#8a9099]">{t("sidebar.chats")}</div>
           {sessions.length === 0 && <div className="px-2 py-2 text-[13px] text-[#9aa1ab]">{t("sidebar.noChats")}</div>}
           {sessions.map((s) => {
@@ -232,15 +222,6 @@ export function Sidebar({
               </div>
             );
           })}
-
-          <div className="mt-4 px-2 pb-1.5 text-[11px] font-semibold uppercase tracking-wide text-[#8a9099]">{t("sidebar.tools")}</div>
-          <button
-            onClick={onOpenSandbox}
-            className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-[13px] text-[#202124] transition hover:bg-[#dfe4ea]"
-          >
-            <FolderIcon size={16} className="text-[#8a8a8a]" />
-            {t("sidebar.openSandbox")}
-          </button>
         </div>
 
         <div className="border-t border-[#dfe3e8] pt-2">
