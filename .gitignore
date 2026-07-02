@@ -19,6 +19,9 @@ src-tauri/.cargo/
 packs/*
 !packs/default/
 
+# Cubism Core（Live2D 私有运行时，用户自行下载，不入库）
+public/core/live2dcubismcore.min.js
+
 # 本地配置
 .env
 .env.local

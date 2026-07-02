@@ -20,7 +20,7 @@
 
 这种拆分的设计意图是：角色包是可被用户替换、可被第三方制作分发的「皮」，而引擎规则是不可被角色包覆盖的「骨」。两者在 `agent/prompt.rs` 中以不同优先级合成，保证再花哨的角色设定也无法改写工具/安全约束。
 
-模块顶部注释明确把当前定位写成「MVP 文本版清单，格式预留可成长字段（Live2D / TTS / 表情等）」（`src-tauri/src/pack/mod.rs:1`）。也就是说，清单结构本身就是为将来扩展预留的，现阶段只落地了 `id` / `name` / `persona` / `avatar` 四个字段。
+模块顶部注释明确把当前定位写成「MVP 文本版清单，格式预留可成长字段（Live2D / TTS / 表情等）」（`src-tauri/src/pack/mod.rs:1`）。清单结构本身为扩展预留，现阶段已落地 `id` / `name` / `persona` / `avatar` / `live2d` 等字段（`live2d` 指向 `.model3.json` 相对路径，经 Tauri asset 协议加载），TTS / 表情等仍是预留方向。
 
 ---
 
@@ -36,10 +36,13 @@ pub struct PackManifest {
     pub persona: String,              // persona 文件名（相对包目录）
     pub avatar: Option<String>,       // 可选头像相对路径
     pub avatar_data_url: Option<String>, // 运行时填充，rename = "avatarDataUrl"
+    pub live2d: Option<String>,       // 可选 Live2D .model3.json 相对路径
 }
 ```
 
 `avatar_data_url` 是一个**派生字段**：磁盘清单里不存在它（`#[serde(... skip_serializing_if = "Option::is_none")]`），而是在 `read_manifest_with_avatar` 阶段把磁盘头像读出来、编码成 data URL 后填回内存对象，供前端直接 `<img src>` 渲染。这避免了前端再去走一次 Tauri 命令读图片字节，也避免暴露本地绝对路径。
+
+`live2d` 与 `avatar` 走**不同路径**：它只存相对路径字符串，**不** base64 进清单。原因是 Live2D 模型是多 MB 的 `.moc3` + 多张纹理 + 物理/动作 JSON，且 `.model3.json` 会以相对路径引用这些 sibling 文件。前端通过 `resolve_pack_live2d_path` 命令拿到绝对路径，再用 `convertFileSrc` 转成 Tauri asset 协议 URL（`$APPDATA/packs/**` scope）交给 `untitled-pixi-live2d-engine`，引擎以该 URL 为 base 原生 fetch 全部相对引用。
 
 ```rust
 // src-tauri/src/pack/mod.rs:28
@@ -233,7 +236,7 @@ extract_archive(prefix → temp)                           pack/mod.rs:141 / 289
 
 ## 6. 已知限制与扩展点
 
-- **清单是 MVP 文本版，多数「成长字段」尚未落地**。源码注释列出的 Live2D / TTS / 表情等（`pack/mod.rs:1`）目前在 `PackManifest` 中**没有任何对应字段**，属预留方向而非已实现能力。请勿在文档中把它们描述为已支持。
+- **清单是 MVP 文本版，部分「成长字段」已落地**。`live2d`（指向 `.model3.json` 的相对路径，经 Tauri asset 协议加载，非 data URL）已在 `PackManifest` 中落地并通过 `import_live2d_folder` / `resolve_pack_live2d_path` / `remove_live2d` 命令暴露。源码注释列出的 TTS / 表情等仍是预留方向而非已实现能力，请勿在文档中把它们描述为已支持。
 - **语音（TTS/ASR）后端未接通**。角色包当前无法携带语音配置；`voice.rs` 的语音命令面板在设置中可见但后端未接入（与 `docs/IMPLEMENTATION.md:101` 的现状一致）。角色包与语音的衔接是未来扩展点，现状为空。
 - **头像无大小上限**。`MAX_IMPORT_BYTES` 只约束 zip 导入；对一个已落地包，`avatar_data_url` 会把整张图 base64 进内存/panel 状态，超大头像可能放大 IPC 负载。
 - **`manifest.id` 与目录名强绑定**。导入后 id 不可改名（改名等于新包），且大小写/同名冲突依赖文件系统语义。
