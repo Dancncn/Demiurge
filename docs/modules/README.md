@@ -29,6 +29,7 @@
 | 17 | [前端架构](17-frontend-architecture.md) | App 状态编排、`api.ts` typed 桥、事件契约、核心组件与 i18n |
 | 18 | [应用外壳、命令面与构建](18-app-shell-build.md) | `AppState`、Tauri 命令分类、初始化与目录布局、构建与 release profile |
 | 19 | [Live2D 面板](19-live2d-panel.md) | Cubism 4/5 模型挂载、untitled-pixi-live2d-engine + Tauri asset 协议、Cubism Core 私有运行时、bundle 隔离与待打磨 |
+| 20 | [Lorebook 向量召回与混合 RAG](20-lorebook-vector-rag.md) | `EmbeddingProvider` 抽象、远程优先 + 本地预留、RRF 融合稀疏/稠密、向量缓存与失效、同步线程化 embed |
 
 ## 文档约定
 
