@@ -342,6 +342,9 @@ textarea {
   .cf-pop,
   .cf-menu-in,
   .cf-rise,
+  .cf-shake,
+  .cf-fall,
+  .cf-breathe,
   .cf-dots > span {
     animation: none !important;
   }
@@ -352,6 +355,55 @@ textarea {
   .markdown-body.is-streaming > *:last-child::after {
     animation: none;
   }
+}
+
+/* ---- 每日吉签 · 仪式感动效 ---- */
+/* 摇签筒：左右晃动 + 轻微旋转，1.2s 一轮 */
+@keyframes cf-shake {
+  0%, 100% { transform: rotate(0deg) translateY(0); }
+  15% { transform: rotate(-8deg) translateY(-2px); }
+  30% { transform: rotate(7deg) translateY(1px); }
+  45% { transform: rotate(-6deg) translateY(-1px); }
+  60% { transform: rotate(5deg) translateY(1px); }
+  75% { transform: rotate(-3deg) translateY(0); }
+}
+.cf-shake {
+  animation: cf-shake 1.2s ease-in-out;
+  transform-origin: 50% 80%;
+}
+
+/* 签从上方落入结果区 */
+@keyframes cf-fall {
+  from { opacity: 0; transform: translateY(-20px); }
+  to { opacity: 1; transform: none; }
+}
+.cf-fall { animation: cf-fall 0.5s var(--ease-pop) both; }
+
+/* 引导弹窗签筒呼吸（静止待摇） */
+@keyframes cf-breathe {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.04); }
+}
+.cf-breathe {
+  animation: cf-breathe 3.2s ease-in-out infinite;
+  transform-origin: 50% 80%;
+}
+
+/* ---- Header utility popover ---- */
+.toy-panel > button,
+.toy-panel > section {
+  border: 1px solid #eceff3;
+  border-radius: 10px;
+  background: #fff;
+  margin: 0;
+}
+
+.toy-panel > * + * {
+  margin-top: 8px;
+}
+
+.toy-panel > section {
+  padding: 10px;
 }
 
 /* ---- Markdown 正文 ---- */

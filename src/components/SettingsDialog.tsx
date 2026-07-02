@@ -4011,3 +4011,24 @@ export default function SettingsDialog({
     </div>
   );
 }
+import { isAutoPromptEnabled, setAutoPromptEnabled } from "../lib/fortune";
+/** 每日吉签自动弹窗开关：自管理 state + localStorage，不走 settings save 流程。 */
+function FortuneAutoPromptRow() {
+  const { t } = useI18n();
+  const [enabled, setEnabled] = useState(() => isAutoPromptEnabled());
+  return (
+    <ToggleRow
+      checked={enabled}
+      title={t("fortune.autoPrompt")}
+      description={t("fortune.autoPromptDesc")}
+      onChange={(v) => {
+        setEnabled(v);
+        setAutoPromptEnabled(v);
+      }}
+    />
+  );
+}
+
+                  <Section title={t("fortune.autoPromptSection")} description={t("fortune.autoPromptSectionDesc")}>
+                    <FortuneAutoPromptRow />
+                  </Section>

@@ -268,6 +268,18 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    const preventContextMenu = (event: MouseEvent) => event.preventDefault();
+    document.addEventListener("contextmenu", preventContextMenu);
+    return () => document.removeEventListener("contextmenu", preventContextMenu);
+  }, []);
+
+  // 每日吉签：应用启动时若启用自动弹窗、今日尚未抽签且未主动忽略，弹出引导抽签。
+  useEffect(() => {
+    if (!isAutoPromptEnabled()) return;
+    if (canDrawToday() && !isDismissedToday()) setFortuneOpen(true);
+  }, []);
+
+  useEffect(() => {
     (async () => {
       try {
         const [s, ps, agents, goal, list, hist, plan, engine] = await Promise.all([
@@ -975,6 +987,7 @@ export default function App() {
                 thinking={thinking}
                 greeting={t("chat.greeting")}
                 onRetry={(text) => void handleSend(text)}
+                onOpenFortune={() => setFortuneOpen(true)}
               />
 
               <Composer
@@ -1021,6 +1034,10 @@ export default function App() {
       </section>
 
       <ConfirmDialog req={confirmReq} mode={settings?.permission_mode ?? "default"} onRespond={handleRespondConfirm} />
+      <FortuneDialog open={fortuneOpen} onClose={() => setFortuneOpen(false)} />
     </main>
   );
 }
+import FortuneDialog from "./components/FortuneDialog";
+import { canDrawToday, isAutoPromptEnabled, isDismissedToday } from "./lib/fortune";
+  const [fortuneOpen, setFortuneOpen] = useState(false);
