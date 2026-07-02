@@ -68,6 +68,13 @@ export interface Settings {
   launch_on_startup: boolean;
   reasoning_effort: ReasoningEffort;
   auto_memory_enabled: boolean;
+  embedding_enabled: boolean;
+  embedding_provider: string;
+  embedding_base_url: string;
+  embedding_api_key: string;
+  embedding_model: string;
+  embedding_dims: number;
+  hybrid_weight: number;
   companion_enabled: boolean;
   companion_memory_extraction_enabled: boolean;
   companion_memory_extraction_scope: string;
@@ -378,6 +385,14 @@ export interface WebDavBackupFile {
   size: number;
 }
 
+export interface WorkspaceState {
+  path: string;
+  name: string;
+  is_git: boolean;
+  branch?: string | null;
+  dirty: boolean;
+}
+
 export type OcrModelSource = "modelscope" | "huggingface";
 
 export interface OcrModelFileStatus {
@@ -488,6 +503,7 @@ export interface MemoryPanelState {
   entries: MemoryEntry[];
   duplicates: MemoryDuplicateGroup[];
   scopes: MemoryScopeState[];
+  namespace?: string;
 }
 
 export interface MemoryScopeState {
@@ -598,9 +614,73 @@ export interface PackManifest {
   persona: string;
   avatar?: string;
   avatarDataUrl?: string;
+  live2d?: string;
   character?: CharacterCard;
   runtime?: CharacterRuntime;
   lorebook?: LoreEntry[];
+  credits?: AssetCredit[];
+  license?: string;
+}
+
+export interface AssetCredit {
+  asset: string;
+  author?: string;
+  source?: string;
+  license?: string;
+}
+
+export interface PackFileEntry {
+  path: string;
+  is_dir: boolean;
+  size: number;
+  modified_ms: number;
+}
+
+export interface PackFileContent {
+  path: string;
+  text?: string;
+  data_url?: string;
+  truncated: boolean;
+}
+
+export interface PackLoreFile {
+  name: string;
+  bytes: number[];
+}
+
+export interface PackImportResult {
+  manifest: PackManifest;
+  warnings: string[];
+}
+
+export interface LoreIndexStatus {
+  pack_id: string;
+  cache_exists: boolean;
+  version?: number;
+  file_count: number;
+  chunk_count: number;
+  files_stale: boolean;
+  last_built_ms: number;
+}
+
+export interface LoreHitDetail {
+  score: number;
+  source: string;
+  title: string;
+  heading?: string;
+  chunk_index: number;
+  text: string;
+  tags: string[];
+  keywords: string[];
+  priority: number;
+  matched_terms: string[];
+  dense_score?: number;
+}
+
+export interface LoreRecallDetail {
+  query: string;
+  total_chunks: number;
+  hits: LoreHitDetail[];
 }
 
 export interface CharacterCard {
@@ -813,7 +893,11 @@ export interface AgentEventEnvelope<T = unknown> {
 
 export type PermissionEffect = "allow" | "deny" | "ask";
 export type PermissionScope = "once" | "session" | "project" | "user";
-export type PermissionDecisionSource = "tool_default" | "user_override" | "unknown_tool";
+export type PermissionDecisionSource =
+  | "tool_default"
+  | "user_override"
+  | "unknown_tool"
+  | "card_overlay";
 export type ToolRisk = "read_only" | "mutating" | "external" | "privileged";
 export type ToolConcurrency = "parallel_safe" | "serial_only";
 export type ToolOutputPolicy = "inline" | "truncate_for_ui";
@@ -842,6 +926,7 @@ export interface PermissionToolView {
   default_effect: PermissionEffect;
   default_scope: PermissionScope;
   default_reason: string;
+  card_preference?: string;
 }
 
 export interface PermissionRuleInput {

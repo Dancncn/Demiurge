@@ -14,6 +14,8 @@ import {
   ChevronDownIcon,
   CloseIcon,
   FileIcon,
+  FolderIcon,
+  GitBranchIcon,
   MicIcon,
   PaperclipIcon,
   StopIcon,
@@ -22,7 +24,7 @@ import { Select } from "./Select";
 import { ContextMeter } from "./ContextMeter";
 import { findProvider, REASONING_EFFORTS } from "../lib/providers";
 import { useI18n } from "../lib/i18n";
-import type { PermissionMode, ProviderKind, ReasoningEffort } from "../lib/types";
+import type { PermissionMode, ProviderKind, ReasoningEffort, WorkspaceState } from "../lib/types";
 
 const PERMISSION_MODE_LABELS: Record<PermissionMode, string> = {
   plan: "Plan",
@@ -76,6 +78,8 @@ type Props = {
   onSetModel: (model: string) => void;
   onSetEffort: (effort: ReasoningEffort) => void;
   onOpenSettings: () => void;
+  workspace?: WorkspaceState | null;
+  onOpenWorkspace?: () => void;
   textareaRef: RefObject<HTMLTextAreaElement>;
   onSubmit: (attachments: ProcessedAttachment[]) => Promise<boolean> | boolean;
   onStop: () => void;
@@ -99,6 +103,8 @@ export function Composer({
   onSetModel,
   onSetEffort,
   onOpenSettings,
+  workspace,
+  onOpenWorkspace,
   textareaRef,
   onSubmit,
   onStop,
@@ -427,7 +433,7 @@ export function Composer({
         className="relative mx-auto w-full max-w-3xl"
       >
         {paletteOpen && (
-          <div className="cf-menu-in absolute bottom-[calc(100%+8px)] left-0 right-0 z-30 overflow-hidden rounded-lg border border-[#e2e5ea] bg-white shadow-[0_12px_36px_rgba(15,23,42,0.16)]">
+          <div className="cf-menu-in cf-dropdown absolute bottom-[calc(100%+8px)] left-0 right-0 z-30 overflow-hidden">
             <div className="border-b border-[#eef1f4] px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-[#8a9099]">
               {t("composer.commands")}
             </div>
@@ -438,9 +444,7 @@ export function Composer({
                   type="button"
                   onMouseEnter={() => setCmdActive(i)}
                   onClick={() => applyCommand(c)}
-                  className={`flex w-full items-center gap-3 rounded-md px-2.5 py-2 text-left transition ${
-                    i === cmdActive ? "bg-[#eef1f5]" : "hover:bg-[#f3f4f7]"
-                  }`}
+                  className={`cf-menu-item flex w-full items-center gap-3 ${i === cmdActive ? "is-active" : ""}`}
                 >
                   <span className="font-mono text-[13px] font-medium text-[#111827]">{c.name}</span>
                   {c.args && <span className="font-mono text-[12px] text-[#9aa1ab]">{c.args}</span>}
@@ -452,6 +456,30 @@ export function Composer({
         )}
 
         {/* Input box — kept clean; only the textarea lives inside. */}
+        {workspace && (
+          <div className="mb-2 flex flex-wrap items-center gap-1.5 px-0.5">
+            <button
+              type="button"
+              onClick={onOpenWorkspace}
+              className="cf-press inline-flex h-7 max-w-[220px] items-center gap-1.5 rounded-md border border-[#e2e5ea] bg-white px-2 text-[12px] font-medium text-[#4f5661] shadow-[0_1px_2px_rgba(15,23,42,0.04)] transition hover:bg-[#fbfcfd]"
+              title={workspace.path}
+            >
+              <FolderIcon size={14} className="shrink-0 text-[#7a8088]" />
+              <span className="truncate">{workspace.name || "Workspace"}</span>
+            </button>
+            {workspace.is_git && workspace.branch && (
+              <span
+                className="inline-flex h-7 max-w-[180px] items-center gap-1.5 rounded-md border border-[#e2e5ea] bg-white px-2 text-[12px] text-[#4f5661] shadow-[0_1px_2px_rgba(15,23,42,0.04)]"
+                title={workspace.branch}
+              >
+                <GitBranchIcon size={14} className="shrink-0 text-[#7a8088]" />
+                <span className="truncate">{workspace.branch}</span>
+                {workspace.dirty && <span className="size-1.5 rounded-sm bg-[#c7ccd4]" title="worktree" />}
+              </span>
+            )}
+          </div>
+        )}
+
         <div className="rounded-2xl border border-[#dfe3e8] bg-white px-1 py-1 shadow-[0_1px_3px_rgba(15,23,42,0.06)] transition focus-within:border-[#c2c8d0] focus-within:shadow-[0_2px_10px_rgba(15,23,42,0.08)]">
           {attachments.length > 0 && (
             <div className="mb-1 flex max-h-28 flex-wrap gap-2 overflow-y-auto px-2 pt-1">
@@ -559,7 +587,7 @@ export function Composer({
               </button>
 
               {menuOpen && (
-                <div className="cf-menu-in absolute bottom-[calc(100%+6px)] left-0 z-30 max-h-[280px] w-56 overflow-y-auto rounded-lg border border-[#dfe3e8] bg-white p-1 shadow-[0_12px_36px_rgba(15,23,42,0.16)]">
+                <div className="cf-menu-in cf-dropdown absolute bottom-[calc(100%+6px)] left-0 z-30 max-h-[280px] w-56 overflow-y-auto p-1">
                   <div className="px-2.5 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-[#8a9099]">
                     {t("composer.voiceDevices")}
                   </div>
@@ -575,9 +603,7 @@ export function Composer({
                           key={d.deviceId || d.label}
                           type="button"
                           onClick={() => pickDevice(d.deviceId)}
-                          className={`flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left transition ${
-                            active ? "bg-[#eef1f5] text-[#111827]" : "text-[#3f444c] hover:bg-[#f3f4f7]"
-                          }`}
+                          className={`cf-menu-item flex w-full items-center gap-2 ${active ? "is-active" : ""}`}
                         >
                           <span className="min-w-0 flex-1 truncate text-[13px] font-medium">{d.label}</span>
                           {active && <CheckIcon size={15} className="shrink-0 text-[#111827]" />}
@@ -589,7 +615,7 @@ export function Composer({
               )}
 
               {voiceToast && !menuOpen && (
-                <div className="cf-menu-in absolute bottom-[calc(100%+6px)] left-0 z-30 w-60 rounded-lg border border-[#dfe3e8] bg-white px-3 py-2 text-[12px] text-[#3f444c] shadow-[0_12px_36px_rgba(15,23,42,0.16)]">
+                <div className="cf-menu-in cf-dropdown absolute bottom-[calc(100%+6px)] left-0 z-30 w-60 px-3 py-2 text-[12px] text-[#3f444c]">
                   {voiceToast}
                 </div>
               )}

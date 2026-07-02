@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import * as api from "../lib/api";
+import { useI18n } from "../lib/i18n";
 import type {
   GoalPanelState,
   PomodoroMode,
@@ -9,16 +10,8 @@ import type {
   PomodoroTaskKind,
   WorkflowRunProgress,
 } from "../lib/types";
-import { PauseIcon, PlayIcon, RotateCwIcon, TargetIcon } from "./Icons";
-
-const modeLabels: Record<PomodoroMode, string> = {
-  focus: "专注",
-  short_break: "短休息",
-  long_break: "长休息",
-  custom: "自定义",
-};
-
-const interruptionReasons = ["切换任务", "消息打断", "卡住了", "临时离开"];
+import { ClockIcon, PauseIcon, PlayIcon, RotateCwIcon } from "./Icons";
+import { Select } from "./Select";
 
 function formatClock(totalSeconds: number) {
   const safe = Math.max(0, Math.floor(totalSeconds));
@@ -53,6 +46,7 @@ type Props = {
 };
 
 export default function PomodoroCard({ activeSessionId, activeSessionTitle, goal }: Props) {
+  const { t } = useI18n();
   const [state, setState] = useState<PomodoroPanelState | null>(null);
   const [mode, setMode] = useState<PomodoroMode>("focus");
   const [customMinutes, setCustomMinutes] = useState(25);
@@ -113,23 +107,23 @@ export default function PomodoroCard({ activeSessionId, activeSessionTitle, goal
   const efficientHour = topRhythmEntry(state?.rhythm.efficient_hour_counts);
   const commonInterruption = topRhythmEntry(state?.rhythm.interruption_reasons);
   const rhythmSummary = [
-    preferredDuration ? `偏好 ${preferredDuration}m` : "",
-    efficientHour ? `高效 ${String(efficientHour).padStart(2, "0")}:00` : "",
-    commonInterruption ? `常见中断 ${commonInterruption}` : "",
+    preferredDuration ? t("pomodoro.rhythmDuration", { minutes: preferredDuration }) : "",
+    efficientHour ? t("pomodoro.rhythmHour", { hour: String(efficientHour).padStart(2, "0") }) : "",
+    commonInterruption ? t("pomodoro.rhythmInterrupt", { reason: commonInterruption }) : "",
   ].filter(Boolean);
 
   function taskBinding(): PomodoroTaskBinding {
     if (taskKind === "session") {
       return {
         kind: "session",
-        title: activeSessionTitle || "Current chat",
+        title: activeSessionTitle || t("pomodoro.currentChat"),
         session_id: activeSessionId || null,
       };
     }
     if (taskKind === "goal") {
       return {
         kind: "goal",
-        title: goal?.objective || "Current goal",
+        title: goal?.objective || t("pomodoro.currentGoal"),
         goal_objective: goal?.objective || null,
       };
     }
@@ -142,7 +136,7 @@ export default function PomodoroCard({ activeSessionId, activeSessionTitle, goal
     }
     return {
       kind: "manual",
-      title: manualTitle.trim() || "Focus session",
+      title: manualTitle.trim() || t("pomodoro.defaultTask"),
     };
   }
 
@@ -175,19 +169,29 @@ export default function PomodoroCard({ activeSessionId, activeSessionTitle, goal
   };
 
   const statusLabel = active
-    ? `${modeLabels[timer?.mode ?? "focus"]} · ${timer?.status === "paused" ? "已暂停" : "进行中"}`
-    : state?.timer.feedback.completion_message || "准备开始一轮节奏";
+    ? `${t(`pomodoro.mode.${timer?.mode ?? "focus"}`)} · ${paused ? t("pomodoro.paused") : t("pomodoro.running")}`
+    : state?.timer.feedback.completion_message || t("pomodoro.ready");
+  const interruptionReasons = [
+    t("pomodoro.interrupt.switchTask"),
+    t("pomodoro.interrupt.message"),
+    t("pomodoro.interrupt.blocked"),
+    t("pomodoro.interrupt.away"),
+  ];
+  const compactSelectTrigger =
+    "flex h-8 min-w-[120px] items-center gap-1.5 rounded-md border border-[#e4e7ec] bg-[#fbfcfd] px-2.5 text-[12px] text-[#202124] outline-none transition hover:bg-white focus:shadow-[0_0_0_3px_rgba(17,24,39,0.06)] disabled:cursor-not-allowed disabled:opacity-50";
 
   return (
-    <section className="border-b border-[#eceff3] bg-white px-3 py-2">
+    <section className="bg-white">
       <div className="flex flex-wrap items-center gap-3">
         <div className="flex min-w-[154px] items-center gap-2">
           <div className="grid size-8 shrink-0 place-items-center rounded-md border border-[#dfe3e8] text-[#4f5661]">
-            <TargetIcon size={17} />
+            <ClockIcon size={17} />
           </div>
           <div className="min-w-0">
-            <div className="text-[12px] font-semibold text-[#202124]">番茄钟</div>
-            <div className="truncate text-[11px] text-[#7a8088]">{statusLabel}</div>
+            <div className="text-[12px] font-semibold text-[#202124]">{t("pomodoro.title")}</div>
+            <div className="truncate text-[11px] text-[#7a8088]" title={statusLabel}>
+              {statusLabel}
+            </div>
           </div>
         </div>
 
@@ -202,16 +206,17 @@ export default function PomodoroCard({ activeSessionId, activeSessionTitle, goal
 
         {!active && (
           <div className="flex flex-wrap items-center gap-2">
-            <select
+            <Select
               value={mode}
-              onChange={(e) => setMode(e.target.value as PomodoroMode)}
-              className="h-8 rounded-md border border-[#d9dfe7] bg-white px-2 text-[12px] outline-none"
-            >
-              <option value="focus">专注 25</option>
-              <option value="short_break">短休息 5</option>
-              <option value="long_break">长休息 15</option>
-              <option value="custom">自定义</option>
-            </select>
+              onChange={(value) => setMode(value as PomodoroMode)}
+              triggerClassName={compactSelectTrigger}
+              options={[
+                { value: "focus", label: t("pomodoro.option.focus") },
+                { value: "short_break", label: t("pomodoro.option.shortBreak") },
+                { value: "long_break", label: t("pomodoro.option.longBreak") },
+                { value: "custom", label: t("pomodoro.option.custom") },
+              ]}
+            />
             {mode === "custom" && (
               <input
                 type="number"
@@ -220,42 +225,39 @@ export default function PomodoroCard({ activeSessionId, activeSessionTitle, goal
                 value={customMinutes}
                 onChange={(e) => setCustomMinutes(Math.min(240, Math.max(1, Number(e.target.value) || 1)))}
                 className="h-8 w-20 rounded-md border border-[#d9dfe7] bg-white px-2 text-[12px] outline-none"
+                aria-label={t("pomodoro.customMinutes")}
               />
             )}
-            <select
+            <Select
               value={taskKind}
-              onChange={(e) => setTaskKind(e.target.value as PomodoroTaskKind)}
-              className="h-8 rounded-md border border-[#d9dfe7] bg-white px-2 text-[12px] outline-none"
-            >
-              <option value="manual">手动任务</option>
-              <option value="session">当前会话</option>
-              <option value="goal" disabled={!goal}>
-                当前 Goal
-              </option>
-              <option value="workflow" disabled={!workflowRuns.length}>
-                Workflow
-              </option>
-            </select>
+              onChange={(value) => setTaskKind(value as PomodoroTaskKind)}
+              triggerClassName={compactSelectTrigger}
+              options={[
+                { value: "manual", label: t("pomodoro.task.manual") },
+                { value: "session", label: t("pomodoro.task.session") },
+                ...(goal ? [{ value: "goal", label: t("pomodoro.task.goal") }] : []),
+                ...(workflowRuns.length ? [{ value: "workflow", label: "Workflow" }] : []),
+              ]}
+            />
             {taskKind === "manual" && (
               <input
                 value={manualTitle}
                 onChange={(e) => setManualTitle(e.target.value)}
-                placeholder="任务标题"
+                placeholder={t("pomodoro.taskPlaceholder")}
                 className="h-8 w-36 rounded-md border border-[#d9dfe7] bg-white px-2 text-[12px] outline-none"
               />
             )}
             {taskKind === "workflow" && (
-              <select
+              <Select
                 value={workflowRunId}
-                onChange={(e) => setWorkflowRunId(e.target.value)}
-                className="h-8 max-w-44 rounded-md border border-[#d9dfe7] bg-white px-2 text-[12px] outline-none"
-              >
-                {workflowRuns.map((run) => (
-                  <option key={run.run_id} value={run.run_id}>
-                    {run.name} · {run.status}
-                  </option>
-                ))}
-              </select>
+                onChange={setWorkflowRunId}
+                triggerClassName={`${compactSelectTrigger} max-w-44`}
+                options={workflowRuns.map((run) => ({
+                  value: run.run_id,
+                  label: run.name,
+                  hint: run.status,
+                }))}
+              />
             )}
             <button
               type="button"
@@ -264,7 +266,7 @@ export default function PomodoroCard({ activeSessionId, activeSessionTitle, goal
               className="inline-flex h-8 items-center gap-1.5 rounded-md bg-[#111827] px-3 text-[12px] font-medium text-white transition hover:bg-[#2b3442] disabled:opacity-50"
             >
               <PlayIcon size={13} />
-              开始
+              {t("pomodoro.start")}
             </button>
           </div>
         )}
@@ -272,26 +274,21 @@ export default function PomodoroCard({ activeSessionId, activeSessionTitle, goal
         {active && (
           <div className="flex items-center gap-2">
             {timer?.mode === "focus" && (
-              <select
+              <Select
                 value={skipReason}
-                onChange={(e) => setSkipReason(e.target.value)}
-                className="h-8 max-w-32 rounded-md border border-[#d9dfe7] bg-white px-2 text-[12px] outline-none"
-                title="中断原因"
-              >
-                <option value="">中断原因</option>
-                {interruptionReasons.map((reason) => (
-                  <option key={reason} value={reason}>
-                    {reason}
-                  </option>
-                ))}
-              </select>
+                onChange={setSkipReason}
+                triggerClassName={`${compactSelectTrigger} max-w-36`}
+                placeholder={t("pomodoro.interruptReason")}
+                options={interruptionReasons.map((reason) => ({ value: reason, label: reason }))}
+              />
             )}
             <button
               type="button"
               onClick={() => void runAction(paused ? api.pomodoroResume : api.pomodoroPause)}
               disabled={busy}
               className="grid h-8 w-8 place-items-center rounded-md border border-[#d9dfe7] text-[#4f5661] transition hover:bg-[#f5f6f8] disabled:opacity-50"
-              title={paused ? "继续" : "暂停"}
+              aria-label={paused ? t("pomodoro.resume") : t("pomodoro.pause")}
+              title={paused ? t("pomodoro.resume") : t("pomodoro.pause")}
             >
               {paused ? <PlayIcon size={13} /> : <PauseIcon size={15} />}
             </button>
@@ -300,7 +297,8 @@ export default function PomodoroCard({ activeSessionId, activeSessionTitle, goal
               onClick={() => void skip()}
               disabled={busy}
               className="grid h-8 w-8 place-items-center rounded-md border border-[#d9dfe7] text-[#4f5661] transition hover:bg-[#f5f6f8] disabled:opacity-50"
-              title="跳过"
+              aria-label={t("pomodoro.skip")}
+              title={t("pomodoro.skip")}
             >
               <RotateCwIcon size={15} />
             </button>

@@ -6,6 +6,7 @@ export interface SelectOption {
   label: string;
   hint?: string;
   icon?: ReactNode;
+  disabled?: boolean;
 }
 
 /**
@@ -61,7 +62,7 @@ export function Select({
         onClick={() => setOpen((v) => !v)}
         className={`cf-press ${
           triggerClassName ??
-          "flex h-9 w-full items-center gap-2 rounded-md border border-[#d9d9d9] bg-white px-3 text-[13px] text-[#202124] outline-none transition hover:border-[#bcc2cb] focus:border-[#7a7f87] focus:ring-1 focus:ring-[#202124]/10 disabled:cursor-not-allowed disabled:opacity-50"
+          "flex h-8 w-full items-center gap-1.5 rounded-lg border border-[#e4e7ec] bg-[#fbfcfd] px-2.5 text-[13px] text-[#202124] outline-none transition hover:border-[#cfd5dd] hover:bg-white focus:border-[#bcc2cb] focus:bg-white focus:shadow-[0_0_0_3px_rgba(17,24,39,0.06)] disabled:cursor-not-allowed disabled:opacity-50"
         }`}
       >
         {selected?.icon && <span className="shrink-0">{selected.icon}</span>}
@@ -75,7 +76,7 @@ export function Select({
       </button>
       {open && (
         <div
-          className={`cf-menu-in absolute z-30 max-h-[300px] min-w-full overflow-y-auto rounded-lg border border-[#e2e5ea] bg-white p-1 shadow-[0_12px_36px_rgba(15,23,42,0.16)] ${
+          className={`cf-menu-in cf-dropdown absolute z-30 max-h-[300px] min-w-full overflow-y-auto p-1 ${
             align === "right" ? "right-0" : "left-0"
           } ${direction === "up" ? "bottom-[calc(100%+4px)]" : "top-[calc(100%+4px)]"}`}
         >
@@ -85,12 +86,14 @@ export function Select({
               <button
                 key={o.value}
                 type="button"
+                disabled={o.disabled}
                 onClick={() => {
+                  if (o.disabled) return;
                   onChange(o.value);
                   setOpen(false);
                 }}
-                className={`flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left transition ${
-                  active ? "bg-[#eef1f5] text-[#111827]" : "text-[#3f444c] hover:bg-[#f3f4f7]"
+                className={`cf-menu-item flex w-full items-center gap-2 ${active ? "is-active" : ""} ${
+                  o.disabled ? "cursor-not-allowed opacity-45" : ""
                 }`}
               >
                 {o.icon && <span className="shrink-0">{o.icon}</span>}

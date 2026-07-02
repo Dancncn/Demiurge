@@ -17,12 +17,18 @@ import type {
   ImageGenerationRequest,
   ImageGenerationResult,
   Message,
+  LoreIndexStatus,
+  LoreRecallDetail,
   MemoryPanelState,
   McpPanelState,
   OcrDownloadProgress,
   OcrModelSource,
   OcrModelStatus,
   PackManifest,
+  PackFileContent,
+  PackFileEntry,
+  PackImportResult,
+  PackLoreFile,
   PermissionMode,
   PermissionScope,
   PlanState,
@@ -45,6 +51,7 @@ import type {
   WebDavBackupFile,
   WebDavConfig,
   VoiceStatus,
+  WorkspaceState,
   WorkflowPanelState,
 } from "./types";
 
@@ -78,12 +85,31 @@ export const mcpSetServerEnabled = (name: string, enabled: boolean) =>
   invoke<McpPanelState>("mcp_set_server_enabled", { name, enabled });
 export const listPacks = () => invoke<PackManifest[]>("list_packs");
 export const importPackZip = (fileName: string, bytes: number[]) =>
-  invoke<PackManifest>("import_pack_zip", { fileName, bytes });
+  invoke<PackImportResult>("import_pack_zip", { fileName, bytes });
 export const readPackManifestJson = (id: string) => invoke<string>("read_pack_manifest_json", { id });
 export const savePackManifestJson = (id: string, rawJson: string) =>
   invoke<PackManifest>("save_pack_manifest_json", { id, rawJson });
 export const previewPackLorebook = (id: string, query: string) =>
   invoke<string>("preview_pack_lorebook", { id, query });
+export const importPackLive2dFolder = (packId: string, srcDir: string) =>
+  invoke<PackManifest>("import_pack_live2d_folder", { packId, srcDir });
+export const resolvePackLive2dPath = (packId: string) =>
+  invoke<string>("resolve_pack_live2d_path", { packId });
+export const removePackLive2d = (packId: string) =>
+  invoke<PackManifest>("remove_pack_live2d", { packId });
+export const openPackDir = (id: string) => invoke<void>("open_pack_dir", { id });
+export const importPackLoreFiles = (id: string, files: PackLoreFile[]) =>
+  invoke<PackManifest>("import_pack_lore_files", { id, files });
+export const listPackFiles = (id: string, subDir?: string) =>
+  invoke<PackFileEntry[]>("list_pack_files", { id, subDir: subDir ?? null });
+export const readPackFile = (id: string, path: string) =>
+  invoke<PackFileContent>("read_pack_file", { id, path });
+export const lorebookIndexStatus = (id: string) =>
+  invoke<LoreIndexStatus>("lorebook_index_status", { id });
+export const lorebookRecallDetail = (id: string, query: string, limit?: number) =>
+  invoke<LoreRecallDetail>("lorebook_recall_detail", { id, query, limit: limit ?? null });
+export const lorebookRebuildIndex = (id: string) =>
+  invoke<LoreIndexStatus>("lorebook_rebuild_index", { id });
 export const agentPanelState = () => invoke<AgentPanelState>("agent_panel_state");
 export const agentTemplateJson = () => invoke<string>("agent_template_json");
 export const agentValidateJson = (rawJson: string) => invoke<AgentValidationResult>("agent_validate_json", { rawJson });
@@ -136,7 +162,10 @@ export const memoryUpdateEntry = (id: string, kind: string, text: string) =>
   invoke<MemoryPanelState>("memory_update_entry", { id, kind, text });
 export const memoryDeleteEntry = (id: string) => invoke<MemoryPanelState>("memory_delete_entry", { id });
 export const memoryDedupeApply = () => invoke<MemoryPanelState>("memory_dedupe_apply");
+export const memoryMigrateNamespace = (fromNs: string, toNs: string) =>
+  invoke<MemoryPanelState>("memory_migrate_namespace", { fromNs, toNs });
 export const openSandbox = () => invoke<void>("open_sandbox");
+export const workspaceState = () => invoke<WorkspaceState>("workspace_state");
 export const webdavCheckConnection = (config: WebDavConfig) =>
   invoke<string>("webdav_check_connection", { config });
 export const webdavBackupNow = (config: WebDavConfig) => invoke<string>("webdav_backup_now", { config });

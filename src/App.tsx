@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, lazy, useEffect, useMemo, useRef, useState } from "react";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import { getCurrentWindow, PhysicalSize } from "@tauri-apps/api/window";
 import * as api from "./lib/api";
@@ -19,6 +19,7 @@ import type {
   SessionMeta,
   Settings,
   AppTheme,
+  WorkspaceState,
 } from "./lib/types";
 import { MessageList } from "./components/MessageList";
 import { Sidebar, type AppView } from "./components/Sidebar";
@@ -28,12 +29,16 @@ import ConfirmDialog from "./components/ConfirmDialog";
 import SettingsDialog, { type SettingsTab } from "./components/SettingsDialog";
 import MediaStudio from "./components/MediaStudio";
 import SkillsPanel from "./components/SkillsPanel";
+import FortuneDialog from "./components/FortuneDialog";
 import CompanionCard from "./components/CompanionCard";
 import PomodoroCard from "./components/PomodoroCard";
-import { CheckIcon, ChevronDownIcon, PanelLeftIcon } from "./components/Icons";
+import { CheckIcon, ChevronDownIcon, PanelLeftIcon, SettingsIcon, SparklesIcon } from "./components/Icons";
 import { attachmentKindLabel, buildAttachmentPrompt, formatAttachmentSize, type ProcessedAttachment } from "./lib/fileProcessing";
 import { autoContextBudget } from "./lib/providers";
+import { canDrawToday, isAutoPromptEnabled, isDismissedToday } from "./lib/fortune";
 import { useI18n } from "./lib/i18n";
+
+const Live2DPanel = lazy(() => import("./components/Live2DPanel"));
 
 const DEFAULT_WINDOW_SIZE = { width: 1811, height: 1213 };
 
@@ -54,6 +59,13 @@ const PREVIEW_SETTINGS: Settings = {
   theme: "system",
   launch_on_startup: false,
   auto_memory_enabled: true,
+  embedding_enabled: false,
+  embedding_provider: "none",
+  embedding_base_url: "",
+  embedding_api_key: "",
+  embedding_model: "",
+  embedding_dims: 1024,
+  hybrid_weight: 0.5,
   companion_enabled: true,
   companion_memory_extraction_enabled: false,
   companion_memory_extraction_scope: "recent_turn",
@@ -181,6 +193,7 @@ export default function App() {
   const [settings, setSettings] = useState<Settings | null>(null);
   const [packs, setPacks] = useState<PackManifest[]>([]);
   const [agentPanel, setAgentPanel] = useState<AgentPanelState>({ definitions: [], agents_dir: "" });
+  const [workspace, setWorkspace] = useState<WorkspaceState | null>(null);
   const [goalPanel, setGoalPanel] = useState<GoalPanelState | null>(null);
   const [goalProgress, setGoalProgress] = useState<GoalProgressEvent | null>(null);
   const [sessionEngine, setSessionEngine] = useState<SessionEnginePanelState | null>(null);
@@ -193,8 +206,11 @@ export default function App() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [packMenuOpen, setPackMenuOpen] = useState(false);
   const [agentMenuOpen, setAgentMenuOpen] = useState(false);
+  const [toyMenuOpen, setToyMenuOpen] = useState(false);
+  const [headerMenuOpen, setHeaderMenuOpen] = useState<"file" | "view" | "help" | null>(null);
   const [confirmReq, setConfirmReq] = useState<ConfirmRequestEvent | null>(null);
   const [planState, setPlanState] = useState<PlanState>({ active: false, approved: false });
+  const [fortuneOpen, setFortuneOpen] = useState(false);
 
   const seq = useRef(0);
   const genId = () => `it_${++seq.current}`;
@@ -211,6 +227,8 @@ export default function App() {
   });
   const packMenuRef = useRef<HTMLDivElement | null>(null);
   const agentMenuRef = useRef<HTMLDivElement | null>(null);
+  const toyMenuRef = useRef<HTMLDivElement | null>(null);
+  const headerMenuRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 
   const activeSession = useMemo(() => sessions.find((s) => s.id === activeId) ?? null, [activeId, sessions]);
@@ -236,6 +254,7 @@ export default function App() {
     if (selectedAgentNames.length === 1) return selectedAgentNames[0];
     return t("header.agentsCount", { n: selectedAgentNames.length });
   }, [selectedAgentNames, t]);
+  const showAgentMenu = agentPanel.definitions.length > 0 || selectedAgentNames.length > 0;
 
   useEffect(() => {
     const theme = previewTheme ?? settings?.theme ?? "system";
@@ -282,7 +301,7 @@ export default function App() {
   useEffect(() => {
     (async () => {
       try {
-        const [s, ps, agents, goal, list, hist, plan, engine] = await Promise.all([
+        const [s, ps, agents, goal, list, hist, plan, engine, workspaceState] = await Promise.all([
           api.getSettings(),
           api.listPacks(),
           api.agentPanelState(),
@@ -291,6 +310,7 @@ export default function App() {
           api.getHistory(),
           api.planState(),
           api.sessionEngineState(),
+          api.workspaceState(),
         ]);
         setSettings(s);
         if (s.language === "zh" || s.language === "en") setLang(s.language);
@@ -302,12 +322,14 @@ export default function App() {
         setItems(buildHistory(hist));
         setPlanState(plan);
         setSessionEngine(engine);
+        setWorkspace(workspaceState);
         setBusy(engine.busy);
       } catch (e) {
         console.error("Failed to initialize Demiurge", e);
         // Outside Tauri (browser preview), seed defaults so the UI is still browsable.
         if (!("__TAURI_INTERNALS__" in window)) {
           setSettings((prev) => prev ?? PREVIEW_SETTINGS);
+          setWorkspace({ path: "D:\\Project\\Project-1\\Demiurge", name: "Demiurge", is_git: true, branch: "main", dirty: false });
         }
       }
     })();
@@ -545,6 +567,22 @@ export default function App() {
   }, [packMenuOpen]);
 
   useEffect(() => {
+    if (!headerMenuOpen) return;
+    const onDown = (e: MouseEvent) => {
+      if (!headerMenuRef.current?.contains(e.target as Node)) setHeaderMenuOpen(null);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setHeaderMenuOpen(null);
+    };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [headerMenuOpen]);
+
+  useEffect(() => {
     if (!agentMenuOpen) return;
     const onDown = (e: MouseEvent) => {
       if (!agentMenuRef.current?.contains(e.target as Node)) setAgentMenuOpen(false);
@@ -552,6 +590,22 @@ export default function App() {
     document.addEventListener("mousedown", onDown);
     return () => document.removeEventListener("mousedown", onDown);
   }, [agentMenuOpen]);
+
+  useEffect(() => {
+    if (!toyMenuOpen) return;
+    const onDown = (e: MouseEvent) => {
+      if (!toyMenuRef.current?.contains(e.target as Node)) setToyMenuOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setToyMenuOpen(false);
+    };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [toyMenuOpen]);
 
   async function handleSend(textArg?: string, attachments: ProcessedAttachment[] = []) {
     const text = (textArg ?? input).trim();
@@ -828,7 +882,6 @@ export default function App() {
         onSelectSession={handleSelectSession}
         onRenameSession={handleRenameSession}
         onDeleteSession={handleDeleteSession}
-        onOpenSandbox={() => void api.openSandbox()}
         onOpenSettings={() => openSettings("general")}
       />
 
@@ -862,14 +915,14 @@ export default function App() {
                     />
                   </button>
                   {packMenuOpen && (
-                    <div className="cf-pop cf-pop-down absolute left-0 top-10 z-20 max-h-[70vh] w-64 overflow-y-auto rounded-lg border border-[#dfe3e8] bg-white p-1.5 shadow-[0_16px_48px_rgba(15,23,42,0.16)]">
+                    <div className="cf-pop cf-pop-down cf-dropdown absolute left-0 top-10 z-20 max-h-[70vh] w-64 overflow-y-auto p-1.5">
                       {packs.length === 0 && <div className="px-3 py-2 text-sm text-[#9a9a9a]">No persona packs found</div>}
                       {packs.map((p) => (
                         <button
                           key={p.id}
                           onClick={() => handleSelectPack(p.id)}
-                          className={`flex w-full items-center justify-between gap-2 rounded-md px-2.5 py-2 text-left text-[13px] transition hover:bg-[#f6f7f9] ${
-                            settings?.current_pack === p.id ? "bg-[#eef1f5]" : ""
+                          className={`cf-menu-item flex w-full items-center justify-between gap-2 ${
+                            settings?.current_pack === p.id ? "is-active" : ""
                           }`}
                         >
                           <span className="flex min-w-0 items-center gap-2">
@@ -890,22 +943,24 @@ export default function App() {
                   )}
                 </div>
 
-                <div ref={agentMenuRef} className="relative">
+                {showAgentMenu && (
+                  <div ref={agentMenuRef} className="relative">
                   <button
                     onClick={() => setAgentMenuOpen((v) => !v)}
-                    className={`flex items-center gap-1 rounded-md px-2.5 py-2 text-sm font-medium transition hover:bg-[#eef1f5] ${
+                    className={`flex h-8 items-center gap-1 rounded-md px-2 text-[13px] font-medium transition hover:bg-[#eef1f5] ${
                       selectedAgentNames.length ? "text-[#171717]" : "text-[#6f7782]"
                     }`}
+                    title={t("header.agents")}
                   >
                     {selectedAgentLabel}
                     <ChevronDownIcon
-                      size={16}
+                      size={15}
                       className={`text-[#9a9a9a] transition-transform duration-200 ${agentMenuOpen ? "rotate-180" : ""}`}
                     />
                   </button>
                   {agentMenuOpen && (
-                    <div className="cf-pop cf-pop-down absolute left-0 top-11 z-20 max-h-[70vh] w-80 overflow-y-auto rounded-lg border border-[#dfe3e8] bg-white p-2 shadow-[0_16px_48px_rgba(15,23,42,0.16)]">
-                      <div className="border-b border-[#eef1f4] px-3 py-2">
+                    <div className="cf-pop cf-pop-down cf-dropdown absolute left-0 top-10 z-20 max-h-[70vh] w-80 overflow-y-auto p-1.5">
+                      <div className="border-b border-[#eef1f4] px-2.5 py-2">
                         <div className="text-[11px] font-semibold uppercase tracking-wide text-[#8a9099]">
                           Agents folder
                         </div>
@@ -913,19 +968,14 @@ export default function App() {
                           {agentsDir}\*.json
                         </div>
                       </div>
-                      {agentPanel.definitions.length === 0 && (
-                        <div className="px-3 py-3 text-sm text-[#9a9a9a]">
-                          No custom agents found. Add JSON files in the agents folder.
-                        </div>
-                      )}
                       {agentPanel.definitions.map((agent) => {
                         const selected = selectedAgentNames.includes(agent.name);
                         return (
                           <button
                             key={agent.name}
                             onClick={() => toggleAgent(agent.name)}
-                            className={`flex w-full items-start justify-between gap-2 rounded-md px-3 py-3 text-left text-sm transition hover:bg-[#f6f7f9] ${
-                              selected ? "bg-[#eef1f5]" : ""
+                            className={`cf-menu-item flex w-full items-start justify-between gap-2 ${
+                              selected ? "is-active" : ""
                             }`}
                           >
                             <span className="min-w-0">
@@ -946,14 +996,15 @@ export default function App() {
                       {selectedAgentNames.length > 0 && (
                         <button
                           onClick={() => setSelectedAgentNames([])}
-                          className="mt-1 w-full rounded-md px-3 py-2 text-left text-xs text-[#8a8a8a] transition hover:bg-[#f6f7f9]"
+                          className="mt-1 w-full rounded-md px-2.5 py-2 text-left text-xs text-[#8a8a8a] transition hover:bg-[#f6f7f9]"
                         >
                           Clear selection
                         </button>
                       )}
                     </div>
                   )}
-                </div>
+                  </div>
+                )}
 
                 <div className="hidden min-w-0 flex-col border-l border-[#dfe3e8] pl-3 text-[11px] text-[#8a9099] sm:flex">
                   <span className="max-w-[28vw] truncate font-medium text-[#3f3f3f]" title={activeSession?.title ?? t("chat.newChat")}>
@@ -963,24 +1014,86 @@ export default function App() {
                 </div>
 
 
-                {planState.path && !planState.approved && (
-                  <div className="ml-auto hidden items-center gap-1 rounded-md border border-[#b8d4ff] bg-[#eef5ff] px-2 py-1 text-xs text-[#0b57d0] lg:flex">
-                    <span className="max-w-[18vw] truncate" title={planState.path}>
-                      {t("header.planReady")}{planState.path}
-                    </span>
-                    <button className="rounded bg-[#0b57d0] px-2 py-1 text-white" onClick={() => void handleApprovePlan()}>
-                      {t("header.approve")}
+                <div className="ml-auto flex items-center gap-2">
+                  {planState.path && !planState.approved && (
+                    <div className="hidden items-center gap-1 rounded-md border border-[#b8d4ff] bg-[#eef5ff] px-2 py-1 text-xs text-[#0b57d0] lg:flex">
+                      <span className="max-w-[18vw] truncate" title={planState.path}>
+                        {t("header.planReady")}{planState.path}
+                      </span>
+                      <button className="rounded bg-[#0b57d0] px-2 py-1 text-white" onClick={() => void handleApprovePlan()}>
+                        {t("header.approve")}
+                      </button>
+                      <button className="rounded px-2 py-1 text-[#5f6368] hover:bg-white" onClick={() => void handleRejectPlan()}>
+                        {t("header.reject")}
+                      </button>
+                    </div>
+                  )}
+
+                  <div ref={toyMenuRef} className="relative">
+                    <button
+                      type="button"
+                      onClick={() => setToyMenuOpen((v) => !v)}
+                      className={`grid h-8 w-8 place-items-center rounded-md transition ${
+                        toyMenuOpen ? "bg-[#eef1f5] text-[#111827]" : "text-[#59616d] hover:bg-[#eef1f5]"
+                      }`}
+                      aria-label={t("header.toys")}
+                      title={t("header.toys")}
+                    >
+                      <SparklesIcon size={17} />
                     </button>
-                    <button className="rounded px-2 py-1 text-[#5f6368] hover:bg-white" onClick={() => void handleRejectPlan()}>
-                      {t("header.reject")}
-                    </button>
+                    {toyMenuOpen && (
+                      <div className="cf-pop cf-pop-down cf-dropdown absolute right-0 top-10 z-30 w-[min(720px,calc(100vw-2rem))] overflow-hidden">
+                        <div className="flex items-center justify-between border-b border-[#eceff3] bg-[#fbfcfd] px-3 py-2.5">
+                          <div className="flex items-center gap-2 text-[13px] font-semibold text-[#202124]">
+                            <SparklesIcon size={16} />
+                            {t("header.toys")}
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setToyMenuOpen(false);
+                              openSettings("companion");
+                            }}
+                            className="inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-[12px] font-medium text-[#59616d] transition hover:bg-[#eef1f5] hover:text-[#202124]"
+                          >
+                            <SettingsIcon size={13} />
+                            {t("sidebar.settings")}
+                          </button>
+                        </div>
+                        <div className="toy-panel max-h-[min(72vh,680px)] overflow-y-auto p-2">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setToyMenuOpen(false);
+                              setFortuneOpen(true);
+                            }}
+                            className="flex w-full items-center gap-2 rounded-[10px] border border-[#eceff3] bg-white p-2.5 text-left transition hover:bg-[#fbfcfd]"
+                          >
+                            <span className="grid size-7 shrink-0 place-items-center rounded-md border border-[#e2e5ea] text-[#49515c]">
+                              <SparklesIcon size={15} />
+                            </span>
+                            <span className="min-w-0 flex-1">
+                              <span className="block text-[12px] font-semibold text-[#202124]">{t("fortune.cardTitle")}</span>
+                              <span className="block truncate text-[11px] text-[#7a8088]">{t("fortune.cardDesc")}</span>
+                            </span>
+                            <span className="text-[12px] font-medium text-[#59616d]">{t("fortune.cardDraw")}</span>
+                          </button>
+                          <CompanionCard
+                            settings={settings}
+                            onOpenSettings={() => {
+                              setToyMenuOpen(false);
+                              openSettings("companion");
+                            }}
+                          />
+                          <PomodoroCard activeSessionId={activeId} activeSessionTitle={activeSession?.title} goal={goalPanel} />
+                        </div>
+                      </div>
+                    )}
                   </div>
-                )}
+                </div>
               </header>
 
               <GoalBar goal={goalPanel} busy={appBusy} progress={goalProgress} onAction={handleGoalAction} />
-              <CompanionCard settings={settings} onOpenSettings={() => openSettings("companion")} />
-              <PomodoroCard activeSessionId={activeId} activeSessionTitle={activeSession?.title} goal={goalPanel} />
 
               <MessageList
                 items={items}
@@ -1003,6 +1116,8 @@ export default function App() {
                 onSetModel={(m) => void handleSetModel(m)}
                 onSetEffort={(e) => void handleSetEffort(e)}
                 onOpenSettings={() => openSettings("context")}
+                workspace={workspace}
+                onOpenWorkspace={() => void api.openSandbox()}
                 textareaRef={textareaRef}
                 onSubmit={(attachments) => handleSend(undefined, attachments)}
                 onStop={() => {
@@ -1016,6 +1131,21 @@ export default function App() {
             <MediaStudio settings={settings} onOpenSettings={() => openSettings("media")} />
           ) : activeView === "skills" ? (
             <SkillsPanel />
+          ) : activeView === "live2d" ? (
+            settings ? (
+              <Suspense
+                fallback={
+                  <div className="grid flex-1 place-items-center text-[13px] text-[#8a9099]">
+                    {t("live2d.loading")}
+                  </div>
+                }
+              >
+                <Live2DPanel
+                  packId={settings.current_pack}
+                  onOpenSettings={() => openSettings("persona")}
+                />
+              </Suspense>
+            ) : null
           ) : settings ? (
             <SettingsDialog
               open
@@ -1038,6 +1168,3 @@ export default function App() {
     </main>
   );
 }
-import FortuneDialog from "./components/FortuneDialog";
-import { canDrawToday, isAutoPromptEnabled, isDismissedToday } from "./lib/fortune";
-  const [fortuneOpen, setFortuneOpen] = useState(false);

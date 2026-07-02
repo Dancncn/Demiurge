@@ -9,9 +9,10 @@ type Status = "idle" | "loading" | "ready" | "error";
 
 interface Props {
   packId: string;
+  onOpenSettings?: () => void;
 }
 
-export default function Live2DPanel({ packId }: Props) {
+export default function Live2DPanel({ packId, onOpenSettings }: Props) {
   const { t } = useI18n();
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -121,8 +122,23 @@ export default function Live2DPanel({ packId }: Props) {
           </div>
         )}
         {status === "error" && (
-          <div className="absolute inset-0 grid place-items-center p-6 text-center text-[13px] leading-6 text-[#b42318]">
-            {noModel ? t("live2d.noModel") : t("live2d.loadFailed", { error })}
+          <div className="absolute inset-0 grid place-items-center p-6 text-center">
+            <div className="flex flex-col items-center gap-3">
+              <div
+                className={`max-w-[80%] text-[13px] leading-6 ${noModel ? "text-[#7a8088]" : "text-[#b42318]"}`}
+              >
+                {noModel ? t("live2d.noModel") : t("live2d.loadFailed", { error })}
+              </div>
+              {onOpenSettings && (
+                <button
+                  type="button"
+                  onClick={onOpenSettings}
+                  className="rounded-md border border-[#dfe3e8] bg-white px-3 py-1.5 text-[12px] font-medium text-[#3f3f3f] transition hover:bg-[#f6f7f9]"
+                >
+                  {t("live2d.goConfig")}
+                </button>
+              )}
+            </div>
           </div>
         )}
         <canvas ref={canvasRef} className="h-full w-full touch-none" />

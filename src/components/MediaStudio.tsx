@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import * as api from "../lib/api";
 import type { ImageGenerationResult, Settings, SpeechSynthesisResult } from "../lib/types";
 import { DownloadIcon, ImageIcon, SparklesIcon, VolumeIcon } from "./Icons";
+import { Select } from "./Select";
 
 type Props = {
   settings: Settings | null;
@@ -86,14 +87,20 @@ export default function MediaStudio({ settings, onOpenSettings }: Props) {
     setError("");
     setTtsResult(null);
     try {
-      setTtsResult(
-        await api.mediaSynthesizeSpeech({
-          text,
-          model: settings?.tts_model || "qwen3-tts-flash",
-          voice: settings?.tts_voice || "Cherry",
-          language_type: "Chinese",
-        }),
-      );
+      const voiceBackend = settings?.voice_tts_backend?.trim().toLowerCase() || "";
+      if (["gpt-sovits", "gpt_sovits", "gptsovits"].includes(voiceBackend)) {
+        const url = await api.voiceSynthesize(text, settings?.voice_id || undefined);
+        setTtsResult({ request_id: "gpt-sovits", url, usage: {} });
+      } else {
+        setTtsResult(
+          await api.mediaSynthesizeSpeech({
+            text,
+            model: settings?.tts_model || "qwen3-tts-flash",
+            voice: settings?.tts_voice || "Cherry",
+            language_type: "Chinese",
+          }),
+        );
+      }
     } catch (err) {
       setError(String(err));
     } finally {
@@ -200,15 +207,12 @@ export default function MediaStudio({ settings, onOpenSettings }: Props) {
                 className="h-9 rounded-md border border-[#dfe3e8] px-2.5 text-[12px] outline-none"
                 placeholder="qwen-image-2.0"
               />
-              <select
+              <Select
                 value={size}
-                onChange={(e) => setSize(e.target.value)}
-                className="h-9 rounded-md border border-[#dfe3e8] px-2.5 text-[12px] outline-none"
-              >
-                {sizeOptions.map((option) => (
-                  <option key={option} value={option}>{option}</option>
-                ))}
-              </select>
+                onChange={setSize}
+                triggerClassName="flex h-9 items-center gap-1.5 rounded-md border border-[#e4e7ec] bg-[#fbfcfd] px-2.5 text-[12px] text-[#202124] outline-none transition hover:bg-white focus:shadow-[0_0_0_3px_rgba(17,24,39,0.06)]"
+                options={sizeOptions.map((option) => ({ value: option, label: option }))}
+              />
               <input
                 value={seed}
                 onChange={(e) => setSeed(e.target.value.replace(/[^\d]/g, ""))}
