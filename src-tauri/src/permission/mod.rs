@@ -304,16 +304,25 @@ pub fn remember_response(
     tool: &str,
     response: &PermissionResponse,
 ) -> Result<(), String> {
-    if response.scope == PermissionScope::Once {
+    let card_pref = load_card_prefs(state)
+        .get(tool)
+        .and_then(|v| parse_card_preference(v));
+
+    // 角色卡 ask_every_time 偏好：禁止持久化 remember，确保每次都弹确认。
+    if card_pref == Some(CardPreference::AskEveryTime) {
         return Ok(());
     }
 
-    // 角色卡 ask_every_time 偏好：禁止持久化 remember，确保每次都弹确认。
-    if load_card_prefs(state)
-        .get(tool)
-        .and_then(|v| parse_card_preference(v))
-        == Some(CardPreference::AskEveryTime)
-    {
+    // 角色卡 ask_once 偏好：用户选 Once 时自动升级为 Session，
+    // 保证"每会话只问一次"语义（不必让用户手动挑 Session scope）。
+    let scope =
+        if card_pref == Some(CardPreference::AskOnce) && response.scope == PermissionScope::Once {
+            PermissionScope::Session
+        } else {
+            response.scope
+        };
+
+    if scope == PermissionScope::Once {
         return Ok(());
     }
 
@@ -324,12 +333,12 @@ pub fn remember_response(
         } else {
             PermissionEffect::Deny
         },
-        scope: response.scope,
+        scope,
         reason: "用户在确认弹窗中选择记住此决策。".to_string(),
         updated_at: store::now_millis(),
     };
 
-    match response.scope {
+    match scope {
         PermissionScope::Once => Ok(()),
         PermissionScope::Session => {
             state

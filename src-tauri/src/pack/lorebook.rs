@@ -19,7 +19,7 @@ use super::manifest::{
     normalize_search_text, pack_dir, parse_markdown_meta, query_terms, read_manifest_no_avatar,
     resolve_pack_file, search_tokens, split_lore_markdown, LoreChunk, LoreHit, LoreHitDetail,
     LoreIndexCache, LoreIndexStatus, LoreRecallDetail, LoreSearchStats, PackManifest,
-    MAX_LORE_CONTEXT_CHARS, MAX_LORE_CONTEXT_CHUNKS, LORE_INDEX_VERSION,
+    LORE_INDEX_VERSION, MAX_LORE_CONTEXT_CHARS, MAX_LORE_CONTEXT_CHUNKS,
 };
 
 pub fn lorebook_context(
@@ -33,15 +33,30 @@ pub fn lorebook_context(
     let Some(query) = query.map(str::trim).filter(|value| !value.is_empty()) else {
         return String::new();
     };
-    let Ok((mut chunks, cache_path)) = load_lore_index_with_cache(packs_dir, data_dir, id) else {
+    let Ok((mut chunks, cache_path, cached_stats)) =
+        load_lore_index_with_cache(packs_dir, data_dir, id)
+    else {
         return String::new();
     };
+    let stats = cached_stats.unwrap_or_else(|| lore_search_stats(&chunks));
     if let Some(p) = provider {
         let model_key = format!("{}:{}", p.name(), p.dims());
         ensure_chunk_embeddings(&mut chunks, p, &model_key, &cache_path);
-        render_lore_hits(select_lore_hits(&chunks, query, Some(p), hybrid_weight))
+        render_lore_hits(select_lore_hits(
+            &chunks,
+            query,
+            Some(p),
+            hybrid_weight,
+            &stats,
+        ))
     } else {
-        render_lore_hits(select_lore_hits(&chunks, query, None, hybrid_weight))
+        render_lore_hits(select_lore_hits(
+            &chunks,
+            query,
+            None,
+            hybrid_weight,
+            &stats,
+        ))
     }
 }
 
@@ -101,15 +116,23 @@ pub fn lorebook_recall_detail(
     provider: Option<&dyn embed::EmbeddingProvider>,
     hybrid_weight: f32,
 ) -> Result<LoreRecallDetail, String> {
-    let (mut chunks, cache_path) = load_lore_index_with_cache(packs_dir, data_dir, id)?;
+    let (mut chunks, cache_path, cached_stats) =
+        load_lore_index_with_cache(packs_dir, data_dir, id)?;
     let total = chunks.len();
     if let Some(p) = provider {
         let model_key = format!("{}:{}", p.name(), p.dims());
         ensure_chunk_embeddings(&mut chunks, p, &model_key, &cache_path);
     }
+    let stats = cached_stats.unwrap_or_else(|| lore_search_stats(&chunks));
     let terms = query_terms(query);
     let norm = normalize_search_text(query);
-    let mut hits = score_all_lore_hits(&chunks, query, provider, hybrid_weight);
+    let hits = score_all_lore_hits(&chunks, query, provider, hybrid_weight, &stats);
+    let embedding_status = match provider {
+        None => "disabled".to_string(),
+        Some(_) if hits.iter().any(|h| h.dense_score.is_some()) => "ok".to_string(),
+        Some(_) => "degraded".to_string(),
+    };
+    let mut hits = hits;
     if limit > 0 {
         hits.truncate(limit);
     }
@@ -136,6 +159,7 @@ pub fn lorebook_recall_detail(
         query: query.to_string(),
         total_chunks: total,
         hits: details,
+        embedding_status,
     })
 }
 
@@ -155,34 +179,36 @@ fn load_lore_index(packs_dir: &Path, data_dir: &Path, id: &str) -> Result<Vec<Lo
     Ok(load_lore_index_with_cache(packs_dir, data_dir, id)?.0)
 }
 
-/// 加载 lorebook 索引，返回 chunks 与缓存文件路径（供 embedding 持久化使用）。
+/// 加载 lorebook 索引，返回 chunks、缓存文件路径与预算好的 BM25 统计（供 IDF 缓存）。
 fn load_lore_index_with_cache(
     packs_dir: &Path,
     data_dir: &Path,
     id: &str,
-) -> Result<(Vec<LoreChunk>, PathBuf), String> {
+) -> Result<(Vec<LoreChunk>, PathBuf, Option<LoreSearchStats>), String> {
     let dir = pack_dir(packs_dir, id);
     let manifest = read_manifest_no_avatar(&dir)?;
     let cache_path = lore_index_cache_path(data_dir, id);
     if manifest.lorebook.is_empty() {
-        return Ok((Vec::new(), cache_path));
+        return Ok((Vec::new(), cache_path, None));
     }
     let files = lore_file_signatures(&dir, &manifest)?;
     if let Ok(text) = fs::read_to_string(&cache_path) {
         if let Ok(cache) = serde_json::from_str::<LoreIndexCache>(&text) {
             if cache.version == LORE_INDEX_VERSION && cache.pack_id == id && cache.files == files {
-                return Ok((cache.chunks, cache_path));
+                return Ok((cache.chunks, cache_path, cache.stats));
             }
         }
     }
 
     let chunks = build_lore_chunks(&dir, &manifest)?;
+    let stats = lore_search_stats(&chunks);
     let cache = LoreIndexCache {
         version: LORE_INDEX_VERSION,
         pack_id: id.to_string(),
         files,
         chunks: chunks.clone(),
         embedding_model: None,
+        stats: Some(stats.clone()),
     };
     if let Some(parent) = cache_path.parent() {
         let _ = fs::create_dir_all(parent);
@@ -190,7 +216,7 @@ fn load_lore_index_with_cache(
     if let Ok(text) = serde_json::to_string_pretty(&cache) {
         let _ = fs::write(&cache_path, format!("{text}\n"));
     }
-    Ok((chunks, cache_path))
+    Ok((chunks, cache_path, Some(stats)))
 }
 
 fn build_lore_chunks(dir: &Path, manifest: &PackManifest) -> Result<Vec<LoreChunk>, String> {
@@ -253,16 +279,24 @@ fn ensure_chunk_embeddings(
         }
     }
     // 回写缓存（保留原 metadata，更新 chunks 与 embedding_model）
-    let (version, pack_id, files) = existing
+    let (version, pack_id, files, stats) = existing
         .as_ref()
-        .map(|c| (c.version, c.pack_id.clone(), c.files.clone()))
-        .unwrap_or((LORE_INDEX_VERSION, String::new(), Vec::new()));
+        .map(|c| {
+            (
+                c.version,
+                c.pack_id.clone(),
+                c.files.clone(),
+                c.stats.clone(),
+            )
+        })
+        .unwrap_or((LORE_INDEX_VERSION, String::new(), Vec::new(), None));
     let cache = LoreIndexCache {
         version,
         pack_id,
         files,
         chunks: chunks.to_vec(),
         embedding_model: Some(model_key.to_string()),
+        stats: stats.or_else(|| Some(lore_search_stats(chunks))),
     };
     if let Some(parent) = cache_path.parent() {
         let _ = fs::create_dir_all(parent);
@@ -293,13 +327,13 @@ fn score_all_lore_hits(
     query: &str,
     provider: Option<&dyn embed::EmbeddingProvider>,
     hybrid_weight: f32,
+    stats: &LoreSearchStats,
 ) -> Vec<LoreHit> {
     let terms = query_terms(query);
     if terms.is_empty() {
         return Vec::new();
     }
     let norm = normalize_search_text(query);
-    let stats = lore_search_stats(chunks);
 
     // 稀疏分（BM25 + 短语/元数据加权）
     let sparse: Vec<f32> = chunks
@@ -422,8 +456,9 @@ fn select_lore_hits(
     query: &str,
     provider: Option<&dyn embed::EmbeddingProvider>,
     hybrid_weight: f32,
+    stats: &LoreSearchStats,
 ) -> Vec<LoreHit> {
-    let mut hits = score_all_lore_hits(chunks, query, provider, hybrid_weight);
+    let mut hits = score_all_lore_hits(chunks, query, provider, hybrid_weight, stats);
     hits.truncate(MAX_LORE_CONTEXT_CHUNKS);
     hits
 }
@@ -682,4 +717,3 @@ priority: 0.8
         let _ = fs::remove_dir_all(data);
     }
 }
-

@@ -7,6 +7,7 @@ import type {
   AgentValidationResult,
   AssistantErrorEvent,
   ConnectionTestResult,
+  EmbeddingProbeResult,
   ConfirmRequestEvent,
   CompanionMemoryQueueState,
   CompanionPanelState,
@@ -110,6 +111,8 @@ export const lorebookRecallDetail = (id: string, query: string, limit?: number) 
   invoke<LoreRecallDetail>("lorebook_recall_detail", { id, query, limit: limit ?? null });
 export const lorebookRebuildIndex = (id: string) =>
   invoke<LoreIndexStatus>("lorebook_rebuild_index", { id });
+export const embeddingProbe = (settings: Settings) =>
+  invoke<EmbeddingProbeResult>("embedding_probe", { settings });
 export const agentPanelState = () => invoke<AgentPanelState>("agent_panel_state");
 export const agentTemplateJson = () => invoke<string>("agent_template_json");
 export const agentValidateJson = (rawJson: string) => invoke<AgentValidationResult>("agent_validate_json", { rawJson });

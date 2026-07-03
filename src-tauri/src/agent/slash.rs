@@ -254,6 +254,12 @@ fn format_recall_detail(detail: &pack::LoreRecallDetail) -> String {
         detail.total_chunks,
         detail.hits.len()
     );
+    let status_note = match detail.embedding_status.as_str() {
+        "ok" => "向量召回: 混合 RRF 生效",
+        "degraded" => "向量召回: provider 报错或无向量，已回落纯 BM25",
+        _ => "向量召回: 未启用（纯 BM25）",
+    };
+    out.push_str(&format!("（{status_note}）\n"));
     if detail.hits.is_empty() {
         out.push_str("无命中。");
         return out;
@@ -264,8 +270,12 @@ fn format_recall_detail(detail: &pack::LoreRecallDetail) -> String {
             .as_deref()
             .filter(|h| !h.is_empty())
             .unwrap_or(&hit.title);
+        let dense = hit
+            .dense_score
+            .map(|d| format!(" dense={:.2}", d))
+            .unwrap_or_default();
         out.push_str(&format!(
-            "\n{}. score={:.1} — {}#{} / {}\n",
+            "\n{}. score={:.1}{dense} — {}#{} / {}\n",
             i + 1,
             hit.score,
             hit.source,

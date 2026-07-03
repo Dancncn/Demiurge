@@ -255,6 +255,10 @@ pub(super) struct LoreIndexCache {
     /// 生成 chunks.embeddings 所用的 provider+model 标识；切换 model 时失效重算。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) embedding_model: Option<String>,
+    /// BM25 用 IDF 统计（document_count/average_len/document_frequency），建索引时预算一次，
+    /// 避免每次查询都 O(n) 重算。chunks 重建时随之刷新。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) stats: Option<LoreSearchStats>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -298,6 +302,7 @@ pub(super) struct LoreHit {
     pub(super) dense_score: Option<f32>,
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub(super) struct LoreSearchStats {
     pub(super) document_count: usize,
     pub(super) average_len: f32,
@@ -341,6 +346,8 @@ pub struct LoreRecallDetail {
     pub query: String,
     pub total_chunks: usize,
     pub hits: Vec<LoreHitDetail>,
+    /// 向量召回状态："disabled"（未配 provider）/ "ok"（混合召回生效）/ "degraded"（配了 provider 但 embed 失败或无向量，已回落纯 BM25）。
+    pub embedding_status: String,
 }
 
 /// 内置的通用人格（通用、不绑定任何特定角色）。首启动时落地为 packs/default。
@@ -1150,7 +1157,10 @@ pub(super) fn lore_file_signatures(
     Ok(files)
 }
 
-pub(super) fn collect_lore_sources(dir: &Path, manifest: &PackManifest) -> Result<Vec<LoreSource>, String> {
+pub(super) fn collect_lore_sources(
+    dir: &Path,
+    manifest: &PackManifest,
+) -> Result<Vec<LoreSource>, String> {
     let mut sources = Vec::new();
     for lore in &manifest.lorebook {
         sources.extend(collect_lore_sources_from_entry(dir, lore)?);

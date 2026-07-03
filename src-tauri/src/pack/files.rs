@@ -14,8 +14,8 @@ use std::time::UNIX_EPOCH;
 use super::manifest::{
     avatar_mime, pack_dir, read_manifest_no_avatar, read_manifest_with_avatar, resolve_pack_file,
     validate_lore_file_extension, validate_relative_file, PackFileContent, PackFileEntry,
-    PackLoreFile, PackManifest, DEFAULT_LORE_EXTENSIONS, MAX_LORE_FILE_BYTES,
-    MAX_LORE_INDEX_FILES, MAX_PACK_LIST_ENTRIES, MAX_PACK_READ_BYTES,
+    PackLoreFile, PackManifest, DEFAULT_LORE_EXTENSIONS, MAX_LORE_FILE_BYTES, MAX_LORE_INDEX_FILES,
+    MAX_PACK_LIST_ENTRIES, MAX_PACK_READ_BYTES,
 };
 
 /// 计算 manifest 的授权缺失警告（非阻塞）。avatar/persona/lore 无 credit 记录时提示。

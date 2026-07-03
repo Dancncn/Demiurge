@@ -290,7 +290,9 @@ async fn send(app: AppHandle, state: State<'_, AppState>, text: String) -> Resul
     )?;
     let events = agent::session_engine::TurnEventEmitter::new(&app, st);
     let trimmed = text.trim();
-    let (res, should_drive_goal) = match agent::slash::dispatch(&app, st, text.clone(), &events).await {
+    let (res, should_drive_goal) = match agent::slash::dispatch(&app, st, text.clone(), &events)
+        .await
+    {
         Some(outcome) => outcome,
         None => {
             if let Some(risk) = companion::detect_high_risk_expression(trimmed) {
@@ -751,7 +753,11 @@ fn import_pack_lore_files(
     files: Vec<pack::PackLoreFile>,
 ) -> Result<pack::PackManifest, String> {
     let dir = state.packs_dir.lock().unwrap().clone();
-    pack::import_pack_lore_files(&dir, &id, files)
+    let manifest = pack::import_pack_lore_files(&dir, &id, files)?;
+    // 导入后立即重建 Lorebook 索引，让面板状态与召回立即可见新文件，不必等下次查询。
+    let data_dir = state.data_dir.lock().unwrap().clone();
+    let _ = pack::lorebook_rebuild_index(&dir, &data_dir, &id);
+    Ok(manifest)
 }
 
 #[tauri::command]
@@ -814,6 +820,14 @@ fn lorebook_rebuild_index(
     let packs_dir = state.packs_dir.lock().unwrap().clone();
     let data_dir = state.data_dir.lock().unwrap().clone();
     pack::lorebook_rebuild_index(&packs_dir, &data_dir, &id)
+}
+
+#[tauri::command]
+fn embedding_probe(
+    state: State<'_, AppState>,
+    settings: store::Settings,
+) -> embed::EmbeddingProbeResult {
+    embed::probe(&state.http, &settings)
 }
 
 #[tauri::command]
@@ -1468,7 +1482,11 @@ fn workspace_state(state: State<'_, AppState>) -> WorkspaceState {
             return None;
         }
         let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        if text.is_empty() { None } else { Some(text) }
+        if text.is_empty() {
+            None
+        } else {
+            Some(text)
+        }
     });
 
     let dirty = Command::new("git")
@@ -2152,6 +2170,7 @@ pub fn run() {
             lorebook_index_status,
             lorebook_recall_detail,
             lorebook_rebuild_index,
+            embedding_probe,
             read_pack_manifest_json,
             save_pack_manifest_json,
             preview_pack_lorebook,

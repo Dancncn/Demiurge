@@ -94,46 +94,48 @@ Demiurge 当前已经具备本地桌面 Agent 的主体能力：会话、工具�
 - [x] **Permission preference 强约束**：`CharacterRuntime.permissions` 解析为 `CardOverlay` 决策，插入 `decide` 的 user 规则与 tool 默认之间；`ask_every_time` 禁止持久化；`permission_panel_state` 暴露 `card_preference`。
 - [x] **前端体积治理**：Markdown/KaTeX/highlight、Mermaid、PDF、ZIP、Live2D 已按需加载或独立 vendor chunk。
 
-### 下次打磨（不完善处详述）
+### 本批次继续打磨（已完成）
 
-> 以下是上述已完成特性里**仍需打磨**的点，按特性分组，列出具体缺口与建议做法，供下一轮迭代直接取用。
+- [x] **#2 lore 导入后自动重建索引**：`import_pack_lore_files` 成功后 best-effort 调 `lorebook_rebuild_index`，导入的 lore 立即可见，不必等下次查询或手动重建。
+- [x] **#3 IDF 预计算缓存**：`LoreIndexCache` 增 `stats`（document_count/average_len/document_frequency），建索引时预算、chunks 重建时刷新；`score_all_lore_hits` 改为接收缓存 stats，避免每查询 O(n) 重算。
+- [x] **#4 embedding 失败降级提示**：`LoreRecallDetail` 增 `embedding_status`（disabled/ok/degraded）；`/recall` 输出状态行 + 每条 `dense_score`；`LorebookRecallPanel` 加状态徽标。
+- [x] **#4 维度自动探测**：`embedding_probe` 命令 + `EmbeddingProbeResult`，前端"测试连接/探测维度"按钮成功后自动回填 `embedding_dims`。
+- [x] **#4 embedding_api_key 凭据化**：已由前会话完成——`credentials.rs` 的 `load/save_embedding_api_key` + `hydrate_or_migrate_settings` 启动从 keyring 加载、`redacted_settings` 落盘前清空；测试 `save_settings_does_not_persist_api_key` 已断言。
+- [x] **#5 namespace 迁移下拉 + legacy 提示**：迁移目标改为列出已有 pack namespace 的 Select；namespace 激活时面板提示"legacy user.md/memory.md 仍保留，可从 default 迁移导入"。
+- [x] **#6 ask_once 自动 session-remember**：`remember_response` 在 card 偏好为 `ask_once` 且用户选 Once 时自动升级为 Session 持久化，落实"每会话只问一次"语义；`ask_every_time` 仍禁止持久化。
+
+### 仍需打磨（按特性）
 
 **#1 结构化角色卡编辑器**
-- 表单 ↔ 原始 JSON 双向同步：当前以表单为单一真源、原始 JSON 只读展示。若用户直接改 JSON（未来开放），需要双向 diff 与校验回写，避免覆盖表单状态。
-- 嵌套列表编辑：`AutoSkillBinding.when`（skill + 关键词列表）的增删/重排 UX 较简陋，可加 drag-handle 与去重提示。
-- 表单校验内联提示：`save_pack_manifest_json` 后端会校验路径与 persona 存在性，失败仅弹错误条；可前置前端校验并把错误定位到字段。
-- i18n 覆盖：部分字段标签可能仍走英文硬编码，需过一遍 `settings.card.*` keys。
+- 表单 ↔ 原始 JSON 双向同步（当前表单为单一真源、JSON 只读；未来开放直接改 JSON 需 diff 回写）。
+- `AutoSkillBinding.when` 嵌套列表增删/重排 UX（drag-handle + 去重提示）。
+- 表单校验内联提示（`save_pack_manifest_json` 失败时把错误定位到字段，而非仅弹错误条）。
+- i18n 覆盖（过一遍 `settings.card.*` keys，补可能仍走英文硬编码的字段）。
 
 **#2 角色包素材管理**
-- `import_pack_lore_files` 后未自动刷新 Lorebook 索引：导入的 lore 文件要等下次查询触发缓存失效或手动重建才进召回。建议导入成功后自动调 `lorebook_rebuild_index` 或在面板提示"已导入，点此重建"。
-- `PackFileBrowser` 大文件/二进制预览：`read_pack_file` 有 512KiB 截断，但图片预览无缩略图、无分页；大目录（接近 `MAX_PACK_LIST_ENTRIES=1000`）无懒加载。
-- credits 编辑器：当前是 `KVRows` 式行编辑，`AssetCredit` 的 4 字段（asset/author/source/license）挤在一行，可改卡片式。
-- 批量 lore 导入无进度：多文件上传时无逐文件进度，仅成功后刷新。
+- `PackFileBrowser` 大文件/二进制预览（图片缩略图、分页、大目录接近 `MAX_PACK_LIST_ENTRIES=1000` 时懒加载）。
+- credits 编辑器改卡片式（`AssetCredit` 4 字段不再挤一行）。
+- 批量 lore 导入逐文件进度。
 
 **#3 Lorebook 召回可视化**
-- IDF 预计算：`lore_search_stats` 每次查询都重算 document_frequency（O(n) in chunks）；500 文件 ×数千 chunk 时有感延迟，可缓存 IDF 到 `LoreIndexCache`。
-- CJK 关键词高亮：`matched_terms` 对中文 ngram 命中可能只整词高亮，不高亮命中的 bigram/trigram 子串。
-- `/recall` 与面板割裂：slash 在对话里输出文本卡片，面板是独立 UI；可让 `/recall` 结果也高亮跳转到面板，或面板复用同一渲染。
+- CJK 关键词高亮（`matched_terms` 对中文 ngram 命中高亮 bigram/trigram 子串，非仅整词）。
+- `/recall` 与面板联动（slash 结果高亮跳转面板，或面板复用同一渲染）。
 
 **#4 向量 RAG / embedding**
-- 本地 fastembed 真实推理：`embeddings-local` cargo feature 已留 `LocalEmbeddingProvider` 桩，但 `embed` 直接返回错误。后续接 `fastembed` crate + BAAI/bge-small-zh-v1.5 + 模型可选下载（复用 OCR 下载 UX）。
-- Cross-encoder reranker：`select_lore_hits` 取 top-N 后、`render_lore_hits` 前可插 reranker（`reranker`/`ort` + MiniLM）；当前未接入。
-- `embedding_api_key` 凭据化：目前存 settings（明文），应迁入 `credentials.rs` keyring，与 LLM API Key 一致；字段注释已标 TODO。
-- 维度自动探测：用户需手填 `embedding_dims`；可加"连接测试"时拉一次 embedding 自动填维度（复用 `provider_check_connection` 模式）。
-- embed 失败静默降级：`ensure_chunk_embeddings` / `select_lore_hits` 在 provider 报错时静默回落纯 BM25，用户无感知。应在 recall 面板与 Context 报告里标注"embedding provider 不可用，已降级"。
-- 热路径线程开销：每 turn 一个 query embed 起独立 OS 线程；可改 `tokio::task::block_in_place`（Tauri multi-thread runtime 下安全）或复用 runtime 句柄，避免线程创建开销。
+- 本地 fastembed 真实推理（`embeddings-local` feature 桩已留；后续接 `fastembed` crate + BAAI/bge-small-zh-v1.5 + 模型可选下载复用 OCR UX）。
+- Cross-encoder reranker（`select_lore_hits` top-N 后、`render_lore_hits` 前插 `reranker`/`ort` + MiniLM）。
+- 热路径线程开销（每 turn query embed 起独立 OS 线程；可改 `tokio::task::block_in_place` 或复用 runtime 句柄）。
 
 **#5 Memory namespace**
-- session 层不隔离：`session-memory/{session_id}.md` 不受 namespace 影响（ephemeral 设计），但跨 pack 切换的会话可能含混合 namespace 事实；需在面板说明 session 不隔离的原因。
-- 迁移策略单一：`memory_migrate_namespace` 只复制（源保留），不合并、不去重、不重命名。切 namespace 后 legacy 文件孤立需手动 migrate；可在 pack 切换时检测 namespace 变化并提示"是否迁移旧记忆"。
-- namespace 输入是自由文本：迁移表单让用户手输目标 namespace，无下拉选已有 pack 的 namespace。可列出所有 pack 的 namespace 供选择。
-- 面板无 legacy 回退提示：切到 namespace 后，面板只显示 namespaced 路径，不提示"legacy `user.md` 仍存在、可用迁移导入"。
+- session 层不隔离的面板说明（ephemeral 设计；跨 pack 切换会话可能含混合 namespace 事实）。
+- 迁移策略单一（只复制不合并/去重/重命名；可在 pack 切换时检测 namespace 变化提示迁移）。
+- 多 pack 冲突策略（当前单 active pack 无冲突；未来多 pack 叠加需定义"最严格 wins"）。
 
 **#6 Permission preference 强约束**
-- `ask_once` 语义不完整：当前 `ask_once` 与 `ask_every_time` 都只触发 Ask 弹窗；`ask_once` 不会自动 session-remember（用户仍要在弹窗选 scope）。应让 `ask_once` 在用户首次 allow 后自动落 Session 规则，`ask_every_time` 强制 Once（已实现）。
-- card overlay 仅在无 user/project/session 规则时生效：这是设计（显式用户规则优先），但用户设了 project allow 又被 card deny 时会困惑；面板已展示 `card_preference`，但工具列表未汇总"哪些工具被 card 覆盖"，可加一列。
-- 默认 pack manifest 的 `weather`/`screen_ocr` 偏好可能指向不在 registry 的工具：当前 `Default` 兜底（不报错），但用户无提示；可在面板标注"card 偏好指向未知工具"。
-- 多 pack 冲突：当前只一个 active pack，无冲突；未来若支持多 pack 叠加，需定义"最严格 wins"策略。
+- 工具列表汇总"哪些工具被 card 覆盖"列（当前 `card_preference` 只在选中工具详情展示）。
+- card 偏好指向未知工具的提示（`Default` 兜底时不报错但无提示）。
+- 多 pack 冲突策略（同 #5）。
+
 
 ### 其他未完成特性（原列表保留）
 
@@ -183,6 +185,7 @@ Demiurge 当前已经具备本地桌面 Agent 的主体能力：会话、工具�
 - [x] **TTS adapter 已接通**（base URL / 音色 / 非流式 / 并行推断，dashscope + gpt-sovits 双后端，`voice.rs:193-249`）。
 - [ ] **GPT-SoVITS / CosyVoice 接入要求**：尚需语速、情感参数、流式模式、连接测试、失败降级和播放队列状态展示；不要把本地语音模型打进默认安装包。
 - [ ] **流式语音合成**：复用模型流式文本，按句切分播放，支持打断、静音、音色选择和语速配置。
+- [ ] **语音通话 / 和角色打电话**：在流式 TTS + STT 之上做实时语音对话模式，体验像给角色打电话。需：通话 UI（拨号/接听/挂断、静音、时长）、VAD 端点检测（用户说完自动触发回复，免手动按）、半双工打断（角色说话时用户开口即停 TTS 并切回听）、回声消除/双工策略（本地半双工优先，云端全双工作后续）、通话记忆（按次归档摘要进 memory）、与 Live2D 联动（通话中驱动口型/动作）。第一阶段可做"按键说话 → STT → LLM → 流式 TTS"的回合制通话，再演进到 VAD 自动接续。
 - [ ] **语音唤醒/快捷键**：支持全局快捷键或按钮触发语音输入；唤醒词作为可选实验能力。
 - [ ] **桌面陪伴壳**：透明置顶窗口、轻量状态展示、点击穿透、可收起/展开，避免遮挡工作流。
 - [x] **Live2D 面板 MVP**：使用 `untitled-pixi-live2d-engine`（PixiJS v8 原生渲染管线，Cubism 2–5）在应用内渲染 Live2D 模型面板；角色包 manifest 新增 `live2d` 字段指向 `.model3.json`；支持文件夹导入、idle 物理/眨眼、缩放和拖拽；Cubism Core 由用户自行下载（`npm run fetch:cubism-core`）。

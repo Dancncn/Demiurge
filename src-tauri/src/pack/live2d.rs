@@ -130,17 +130,17 @@ fn copy_live2d_dir_recursive(
 /// 当前处理 FileReferences 的 Moc / Textures / Physics / DisplayInfo / UserData；
 /// Motions / Expressions 里的 CJK 文件名暂未处理（本模型无此情况，后续按需扩展）。
 /// 返回新的 model3.json 文件名（相对 dest）。
-fn normalize_live2d_model_files(
-    dest: &Path,
-    original_model3_name: &str,
-) -> Result<String, String> {
+fn normalize_live2d_model_files(dest: &Path, original_model3_name: &str) -> Result<String, String> {
     let model3_path = dest.join(original_model3_name);
-    let raw = fs::read_to_string(&model3_path)
-        .map_err(|e| format!("读取 model3.json 失败：{e}"))?;
+    let raw =
+        fs::read_to_string(&model3_path).map_err(|e| format!("读取 model3.json 失败：{e}"))?;
     let mut json: serde_json::Value =
         serde_json::from_str(&raw).map_err(|e| format!("解析 model3.json 失败：{e}"))?;
 
-    if let Some(refs) = json.get_mut("FileReferences").and_then(|v| v.as_object_mut()) {
+    if let Some(refs) = json
+        .get_mut("FileReferences")
+        .and_then(|v| v.as_object_mut())
+    {
         // 单文件引用：Moc / Physics / DisplayInfo / UserData
         for (key, ascii) in [
             ("Moc", "model.moc3"),
@@ -171,10 +171,9 @@ fn normalize_live2d_model_files(
     // 重写 model3.json 到 ASCII 名 model.model3.json，删原文件
     let new_name = "model.model3.json";
     let new_path = dest.join(new_name);
-    let text = serde_json::to_string_pretty(&json)
-        .map_err(|e| format!("序列化 model3.json 失败：{e}"))?;
-    fs::write(&new_path, format!("{text}\n"))
-        .map_err(|e| format!("写入 model3.json 失败：{e}"))?;
+    let text =
+        serde_json::to_string_pretty(&json).map_err(|e| format!("序列化 model3.json 失败：{e}"))?;
+    fs::write(&new_path, format!("{text}\n")).map_err(|e| format!("写入 model3.json 失败：{e}"))?;
     if original_model3_name != new_name {
         let _ = fs::remove_file(&model3_path);
     }
