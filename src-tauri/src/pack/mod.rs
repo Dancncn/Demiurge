@@ -9,10 +9,10 @@
 //! 对外公共 API 完全不变：所有 `pack::*` 调用路径仍可用（`pack::list_packs`、
 //! `pack::import_zip`、`pack::lorebook_recall_detail`、`pack::import_live2d_folder`、
 //! `pack::read_pack_file` 等）。
-mod manifest;
-mod lorebook;
-mod live2d;
 mod files;
+mod live2d;
+mod lorebook;
+mod manifest;
 
 pub use files::*;
 pub use live2d::*;

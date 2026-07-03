@@ -161,8 +161,10 @@ impl EmbeddingProvider for LocalEmbeddingProvider {
         0
     }
     fn embed(&self, _texts: &[&str]) -> Result<Vec<Vec<f32>>, String> {
-        Err("本地 embedding 尚未接入 fastembed 模型；请改用 remote provider 或等待后续集成。"
-            .to_string())
+        Err(
+            "本地 embedding 尚未接入 fastembed 模型；请改用 remote provider 或等待后续集成。"
+                .to_string(),
+        )
     }
 }
 
@@ -184,6 +186,58 @@ pub fn cosine(a: &[f32], b: &[f32]) -> f32 {
         0.0
     } else {
         dot / denom
+    }
+}
+
+/// 连接探测结果：成功时返回实测维度，前端可据此自动填 embedding_dims。
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct EmbeddingProbeResult {
+    pub ok: bool,
+    pub dims: usize,
+    pub latency_ms: u64,
+    pub detail: String,
+}
+
+/// 用 settings 构造 provider，embed 一句探测文本，返回维度与延迟。
+/// 用于"测试连接 + 自动探测维度"按钮；失败时 ok=false 且 detail 含错误。
+pub fn probe(http: &reqwest::Client, settings: &crate::store::Settings) -> EmbeddingProbeResult {
+    let started = std::time::Instant::now();
+    let Some(provider) = provider_from_settings(http, settings) else {
+        return EmbeddingProbeResult {
+            ok: false,
+            dims: 0,
+            latency_ms: 0,
+            detail: "embedding 未启用或配置不全（base_url / api_key / model 任一为空）".to_string(),
+        };
+    };
+    let probe_text = "Demiurge embedding 连接探测：你好世界 hello world";
+    match provider.embed(&[probe_text]) {
+        Ok(vectors) if !vectors.is_empty() => {
+            let dims = vectors[0].len();
+            EmbeddingProbeResult {
+                ok: true,
+                dims,
+                latency_ms: started.elapsed().as_millis() as u64,
+                detail: format!(
+                    "连接成功：{} / {}，实测维度 {}",
+                    provider.name(),
+                    settings.embedding_model,
+                    dims
+                ),
+            }
+        }
+        Ok(_) => EmbeddingProbeResult {
+            ok: false,
+            dims: 0,
+            latency_ms: started.elapsed().as_millis() as u64,
+            detail: "provider 返回空向量列表".to_string(),
+        },
+        Err(e) => EmbeddingProbeResult {
+            ok: false,
+            dims: 0,
+            latency_ms: started.elapsed().as_millis() as u64,
+            detail: format!("embedding 请求失败：{e}"),
+        },
     }
 }
 
