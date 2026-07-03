@@ -26,10 +26,11 @@
 Demiurge 是一个桌面伴侣 Agent 的“空引擎”。它不绑定具体角色，也不托管你的数据；你提供角色包和 LLM 端点，它负责把对话、工具、记忆、安全边界和本地桌面能力串起来。
 
 - **本地优先**：Tauri + Rust 后端，设置、会话、角色包、记忆都保存在本机。
-- **角色与引擎分离**：角色包只描述 persona、memory、头像/Live2D/未来的语音 等素材；引擎保持通用。
+- **角色与引擎分离**：角色包用 manifest 2.0 描述 persona、结构化 Character Card（身份/背景/人格/说话风格/示例对话/OOC 规则）、Runtime 策略（技能绑定、memory namespace、voice、permission 偏好）与 Lorebook 知识库；引擎保持通用。
 - **会动手**：可读写沙盒文件、编辑代码、跑 shell、联网搜索、截图/OCR、派生子 Agent、运行 workflow。
-- **可控安全**：写文件、shell、打开路径、截图/OCR 等敏感操作走确认门；文件工具被限制在沙盒目录。
+- **可控安全**：写文件、shell、打开路径、截图/OCR 等敏感操作走确认门；文件工具被限制在沙盒目录；角色卡可声明 permission 偏好，在用户规则与工具默认之间形成可配置 overlay。
 - **可持续推进**：`/goal` 可以设置长期目标，普通回合结束后继续自动驱动，直到完成、暂停、阻塞或预算耗尽。
+- **Lorebook 向量召回**：本地 BM25 稀疏检索 + 远程 embedding 稠密检索 + RRF 混合融合，chunk 向量按 provider+维度缓存；`/recall` 与设置面板可视化命中关键词、score、索引状态。
 - **Live2D 面板**：角色包可挂载 Cubism 4/5 模型（`untitled-pixi-live2d-engine` + PixiJS v8），在应用内渲染带 idle 物理/眨眼/呼吸的 Live2D 面板，支持缩放与拖拽。需先运行 `npm run fetch:cubism-core` 取回 Live2D Cubism Core（私有运行时，不入库），再在设置 > 人物包导入模型文件夹。
 
 ## 功能概览
@@ -70,6 +71,16 @@ Demiurge 是一个桌面伴侣 Agent 的“空引擎”。它不绑定具体角�
 - workflow journal/resume。
 - Workflows live panel。
 - `worktree_create` 隔离工作区。
+
+### 角色卡、Lorebook 与向量召回
+
+- **结构化角色卡编辑器**：设置 > 人物包内表单化编辑 Character Card / Runtime / Lorebook / 示例对话 / OOC 规则，保留可折叠原始 JSON 回退；复用 manifest 读写命令往返。
+- **角色包素材管理**：`open_pack_dir` 打开包目录、`import_pack_lore_files` 批量导入 lore、`list_pack_files` / `read_pack_file` 包内文件浏览；manifest 增 `credits` / `license` 字段，zip 导入产出授权缺失警告。
+- **Lorebook RAG**：`lore/*.md`/`.txt` 按 Markdown 标题与段落分块，frontmatter `title/tags/keywords/priority` 进元数据；BM25（k1=1.2, b=0.75）+ 短语/元数据加权召回，IDF 预算并缓存；按文件签名失效与手动重建。
+- **向量召回（远程优先）**：`EmbeddingProvider` trait + 远程 OpenAI 兼容 `/v1/embeddings`（DashScope `text-embedding-v3` / OpenAI `text-embedding-3-small` 等）；BM25 与稠密余弦按 RRF（k=60）融合，`hybrid_weight` 调权；chunk 向量按 provider+维度缓存，切换 model 自动重算；本地 fastembed 通过 cargo feature 预留接口、默认不打包 ONNX runtime。
+- **召回可视化**：`lorebook_index_status` / `lorebook_recall_detail` / `lorebook_rebuild_index` 命令 + `/recall <query>` slash；面板展示索引状态、chunk 列表、命中关键词高亮、score 与 dense_score、embedding 降级徽标。
+- **Memory namespace**：角色卡 `runtime.memory.namespace` 把 user/project 记忆隔离到带后缀文件（`user.{ns}.md` / `memory.{ns}.md`），default 走 legacy；`memory_migrate_namespace` 迁移旧记忆；`/dream` 与自动抽取写 namespaced 路径。
+- **Permission overlay**：角色卡 `runtime.permissions` 解析为 `CardOverlay` 决策，插入 user 规则与 tool 默认之间；`ask_once` 自动 session-remember，`ask_every_time` 禁止持久化；面板暴露 `card_preference`。
 
 ### Reserved Interfaces
 
