@@ -169,11 +169,35 @@ export function LorebookRecallPanel({ packId }: { packId: string }) {
 
       {detail && (
         <div className="mt-2 space-y-1.5">
-          <div className="text-[12px] text-[#7a8088]">
-            {t("settings.persona.recallSummary", {
-              total: detail.total_chunks,
-              hits: detail.hits.length,
-            })}
+          <div className="flex flex-wrap items-center gap-2 text-[12px] text-[#7a8088]">
+            <span>
+              {t("settings.persona.recallSummary", {
+                total: detail.total_chunks,
+                hits: detail.hits.length,
+              })}
+            </span>
+            <span
+              className={`rounded-full border px-2 py-0.5 text-[11px] ${
+                detail.embedding_status === "ok"
+                  ? "border-[#dce6d8] bg-[#f8fbf6] text-[#3f6212]"
+                  : detail.embedding_status === "degraded"
+                    ? "border-[#f3d9a8] bg-[#fff8e8] text-[#9a6700]"
+                    : "border-[#e2e5ea] bg-[#f5f6f7] text-[#5f6368]"
+              }`}
+              title={
+                detail.embedding_status === "ok"
+                  ? "混合 RRF 召回生效"
+                  : detail.embedding_status === "degraded"
+                    ? "provider 报错或无向量，已回落纯 BM25"
+                    : "未启用向量召回（纯 BM25）"
+              }
+            >
+              {detail.embedding_status === "ok"
+                ? "向量: 生效"
+                : detail.embedding_status === "degraded"
+                  ? "向量: 已降级"
+                  : "向量: 未启用"}
+            </span>
           </div>
           {detail.hits.length === 0 ? (
             <div className="rounded-md border border-dashed border-[#d9d9d9] bg-white px-3 py-2 text-[12px] text-[#7a8088]">

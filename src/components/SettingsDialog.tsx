@@ -604,6 +604,8 @@ export default function SettingsDialog({
   const [providerQuery, setProviderQuery] = useState("");
   const [providerTestBusy, setProviderTestBusy] = useState(false);
   const [providerTestStatus, setProviderTestStatus] = useState("");
+  const [embedProbeBusy, setEmbedProbeBusy] = useState(false);
+  const [embedProbeStatus, setEmbedProbeStatus] = useState("");
   const [webSearchTestBusy, setWebSearchTestBusy] = useState(false);
   const [webSearchTestStatus, setWebSearchTestStatus] = useState("");
   const [ocrStatus, setOcrStatus] = useState<OcrModelStatus | null>(null);
@@ -1481,6 +1483,22 @@ export default function SettingsDialog({
       setProviderTestStatus(String(err));
     } finally {
       setProviderTestBusy(false);
+    }
+  }
+
+  async function probeEmbedding() {
+    setEmbedProbeBusy(true);
+    setEmbedProbeStatus("");
+    try {
+      const result = await api.embeddingProbe(form);
+      setEmbedProbeStatus(`${result.detail} (${result.latency_ms} ms)`);
+      if (result.ok && result.dims > 0) {
+        set("embedding_dims", result.dims);
+      }
+    } catch (err) {
+      setEmbedProbeStatus(String(err));
+    } finally {
+      setEmbedProbeBusy(false);
     }
   }
 
@@ -3228,14 +3246,28 @@ export default function SettingsDialog({
                           <span className="text-[#7a8088]">{t("settings.memory.namespaceHint")}</span>
                         </div>
                       )}
+                      {memoryState?.namespace && (
+                        <div className="mt-1 text-[11px] leading-4 text-[#8a9099]">
+                          {t("settings.memory.namespaceLegacyHint")}
+                        </div>
+                      )}
                       <div className="mt-3 flex flex-wrap items-center gap-2 text-[12px]">
                         <span className="text-[#5f6368]">{t("settings.memory.migrateLabel")}</span>
-                        <input
-                          className="h-8 max-w-[200px] rounded-md border border-[#d9d9d9] bg-white px-2 text-[12px] text-[#202124] outline-none focus:border-[#7a7f87]"
-                          placeholder={t("settings.memory.migratePlaceholder")}
+                        <Select
                           value={memoryMigrateTo}
-                          onChange={(e) => setMemoryMigrateTo(e.target.value)}
+                          onChange={setMemoryMigrateTo}
+                          placeholder={t("settings.memory.migratePlaceholder")}
+                          options={Array.from(
+                            new Set(
+                              packs
+                                .map((p) => p.runtime?.memory?.namespace)
+                                .filter((n): n is string => !!n && n !== "default" && n !== memoryState?.namespace)
+                            )
+                          ).map((n) => ({ value: n, label: n }))}
                         />
+                        <span className="text-[#8a9099]">
+                          {t("settings.memory.migrateFrom", { from: memoryState?.namespace || "default" })}
+                        </span>
                         <button
                           type="button"
                           className={secondaryButtonCls}
@@ -3486,14 +3518,33 @@ export default function SettingsDialog({
                                 placeholder={t("settings.embedding.apiKeyPlaceholder")}
                               />
                             </Field>
-                            <Field label={t("settings.embedding.dims")}>
-                              <input
-                                className={inputCls}
-                                type="number"
-                                min={1}
-                                value={form.embedding_dims}
-                                onChange={(e) => set("embedding_dims", Number(e.target.value) || 0)}
-                              />
+                            <Field label={t("settings.embedding.dims")} help={t("settings.embedding.dimsHelp")}>
+                              <div className="flex items-center gap-2">
+                                <input
+                                  className={inputCls}
+                                  type="number"
+                                  min={1}
+                                  value={form.embedding_dims}
+                                  onChange={(e) => set("embedding_dims", Number(e.target.value) || 0)}
+                                />
+                                <button
+                                  type="button"
+                                  className={secondaryButtonCls}
+                                  disabled={embedProbeBusy}
+                                  onClick={probeEmbedding}
+                                >
+                                  {embedProbeBusy ? t("settings.embedding.probing") : t("settings.embedding.probe")}
+                                </button>
+                              </div>
+                              {embedProbeStatus && (
+                                <div className={`mt-2 rounded-md border px-3 py-2 text-[12px] leading-5 ${
+                                  embedProbeStatus.startsWith("连接成功")
+                                    ? "border-[#dce6d8] bg-[#f8fbf6] text-[#3f6212]"
+                                    : "border-[#f3c3c3] bg-[#fff7f7] text-[#b42318]"
+                                }`}>
+                                  {embedProbeStatus}
+                                </div>
+                              )}
                             </Field>
                           </>
                         )}

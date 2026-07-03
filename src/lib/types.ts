@@ -50,6 +50,13 @@ export interface ConnectionTestResult {
   latency_ms: number;
 }
 
+export interface EmbeddingProbeResult {
+  ok: boolean;
+  dims: number;
+  latency_ms: number;
+  detail: string;
+}
+
 export interface Settings {
   provider: ProviderKind;
   permission_mode: PermissionMode;
@@ -681,6 +688,8 @@ export interface LoreRecallDetail {
   query: string;
   total_chunks: number;
   hits: LoreHitDetail[];
+  /** 向量召回状态：disabled / ok / degraded */
+  embedding_status: string;
 }
 
 export interface CharacterCard {
