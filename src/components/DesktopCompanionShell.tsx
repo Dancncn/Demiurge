@@ -118,6 +118,16 @@ export default function DesktopCompanionShell() {
       : t("desktopCompanion.localOnly");
   const suggestion = panel?.suggestions?.[0]?.text || t("desktopCompanion.ready");
   const collapsed = settings?.desktop_companion_collapsed ?? false;
+  const boundaryLine = [
+    settings?.computer_use_enabled ? t("desktopCompanion.screenToolsOn") : t("desktopCompanion.screenToolsOff"),
+    settings?.voice_enabled ? t("desktopCompanion.micManual") : t("desktopCompanion.micOff"),
+    settings?.weather_enabled && settings.weather_location_mode !== "off"
+      ? t("desktopCompanion.locationCity")
+      : t("desktopCompanion.locationOff"),
+    settings?.desktop_companion_click_through
+      ? t("desktopCompanion.clickThroughOn")
+      : t("desktopCompanion.clickThroughOff"),
+  ].join(" / ");
 
   async function updateSettings(patch: Partial<Settings>) {
     const base = settings ?? (await api.getSettings());
@@ -203,10 +213,8 @@ export default function DesktopCompanionShell() {
         </section>
 
         <footer className="flex h-10 shrink-0 items-center justify-between border-t border-[#eceff3] px-2.5">
-          <div className="truncate text-[11px] text-[#7a8088]">
-            {settings.desktop_companion_click_through
-              ? t("desktopCompanion.clickThroughOn")
-              : t("desktopCompanion.clickThroughOff")}
+          <div className="truncate text-[11px] text-[#7a8088]" title={boundaryLine}>
+            {boundaryLine}
           </div>
           <div className="flex items-center gap-1.5">
             <ShellButton

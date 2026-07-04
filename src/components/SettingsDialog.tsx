@@ -2666,6 +2666,27 @@ export default function SettingsDialog({
                           onChange={(checked) => set("desktop_companion_collapsed", checked)}
                         />
                       </div>
+                      <div className="rounded-lg border border-[#dfe7f2] bg-[#f7fbff] p-3 text-[12px] leading-5 text-[#526070]">
+                        <div className="mb-2 font-medium text-[#202124]">{t("settings.companion.boundaryTitle")}</div>
+                        <div className="grid gap-2 sm:grid-cols-3">
+                          <span className="rounded-md border border-[#dfe7f2] bg-white px-2 py-1.5">
+                            {form.computer_use_enabled
+                              ? t("settings.companion.boundaryScreenOn")
+                              : t("settings.companion.boundaryScreenOff")}
+                          </span>
+                          <span className="rounded-md border border-[#dfe7f2] bg-white px-2 py-1.5">
+                            {form.voice_enabled
+                              ? t("settings.companion.boundaryMicManual")
+                              : t("settings.companion.boundaryMicOff")}
+                          </span>
+                          <span className="rounded-md border border-[#dfe7f2] bg-white px-2 py-1.5">
+                            {form.weather_enabled && form.weather_location_mode !== "off"
+                              ? t("settings.companion.boundaryLocationCity")
+                              : t("settings.companion.boundaryLocationOff")}
+                          </span>
+                        </div>
+                        <div className="mt-2">{t("settings.companion.boundaryNote")}</div>
+                      </div>
                       <div className="rounded-lg border border-[#f2d7d5] bg-[#fffafa] p-3 text-[12px] leading-5 text-[#8a4b45]">
                         {t("settings.companion.safety")}
                       </div>
@@ -4033,6 +4054,12 @@ export default function SettingsDialog({
                       description={t("settings.ocr.toggleDesc")}
                       onChange={(checked) => set("computer_use_enabled", checked)}
                     />
+                    <div className="mt-3 rounded-lg border border-[#dfe7f2] bg-[#f7fbff] p-3 text-[12px] leading-5 text-[#526070]">
+                      <div className="font-medium text-[#202124]">
+                        {form.computer_use_enabled ? t("settings.ocr.boundaryOn") : t("settings.ocr.boundaryOff")}
+                      </div>
+                      <div className="mt-1">{t("settings.ocr.boundaryNote")}</div>
+                    </div>
                     <div className="mt-4 grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto_auto]">
                       <Field label={t("settings.ocr.modelSource")} help={t(selectedOcrSource.noteKey)}>
                         <Select
