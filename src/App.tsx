@@ -100,6 +100,8 @@ const PREVIEW_SETTINGS: Settings = {
   voice_emotion: "",
   voice_streaming: false,
   voice_tts_fallback: true,
+  voice_hotkey_enabled: true,
+  voice_hotkey: "Ctrl+Shift+Space",
   computer_use_enabled: false,
   ocr_model_source: "modelscope",
   web_search_provider: "auto",
@@ -203,6 +205,27 @@ function buildUserDisplayText(text: string, attachments: ProcessedAttachment[]) 
   return lines.join("\n");
 }
 
+function matchesHotkey(event: KeyboardEvent, hotkey: string) {
+  const parts = hotkey
+    .split("+")
+    .map((part) => part.trim().toLowerCase())
+    .filter(Boolean);
+  if (!parts.length) return false;
+  const wantsCtrl = parts.includes("ctrl") || parts.includes("control");
+  const wantsShift = parts.includes("shift");
+  const wantsAlt = parts.includes("alt") || parts.includes("option");
+  const wantsMeta = parts.includes("meta") || parts.includes("cmd") || parts.includes("command");
+  const keyPart = parts.find((part) => !["ctrl", "control", "shift", "alt", "option", "meta", "cmd", "command"].includes(part));
+  const key = event.key === " " ? "space" : event.key.toLowerCase();
+  return (
+    event.ctrlKey === wantsCtrl &&
+    event.shiftKey === wantsShift &&
+    event.altKey === wantsAlt &&
+    event.metaKey === wantsMeta &&
+    key === (keyPart || "space")
+  );
+}
+
 export default function App() {
   const { t, setLang } = useI18n();
   const [items, setItems] = useState<DisplayItem[]>([]);
@@ -280,6 +303,20 @@ export default function App() {
       ttsQueue.stop();
     }
   }, [spokenRepliesEnabled, ttsQueue.available]);
+
+  useEffect(() => {
+    if (!settings?.voice_hotkey_enabled) return;
+    const hotkey = settings.voice_hotkey || "Ctrl+Shift+Space";
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!matchesHotkey(event, hotkey)) return;
+      event.preventDefault();
+      setVoicePanelOpen(true);
+      if (!voiceCallActiveRef.current) startVoiceCall();
+      window.setTimeout(() => window.dispatchEvent(new Event("demiurge-voice-hotkey")), 0);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [settings?.voice_hotkey_enabled, settings?.voice_hotkey]);
 
   const activeSession = useMemo(() => sessions.find((s) => s.id === activeId) ?? null, [activeId, sessions]);
   const agentsDir = agentPanel.agents_dir || ".demiurge/agents";

@@ -102,6 +102,8 @@ export interface Settings {
   voice_emotion: string;
   voice_streaming: boolean;
   voice_tts_fallback: boolean;
+  voice_hotkey_enabled: boolean;
+  voice_hotkey: string;
   computer_use_enabled: boolean;
   ocr_model_source: OcrModelSource;
   web_search_provider: WebSearchProvider;

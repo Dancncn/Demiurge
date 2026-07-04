@@ -1691,6 +1691,8 @@ export default function SettingsDialog({
       voice_emotion: form.voice_emotion.trim(),
       voice_streaming: form.voice_streaming,
       voice_tts_fallback: form.voice_tts_fallback,
+      voice_hotkey_enabled: form.voice_hotkey_enabled,
+      voice_hotkey: form.voice_hotkey.trim() || "Ctrl+Shift+Space",
       ocr_model_source: form.ocr_model_source || "modelscope",
       web_search_provider: normalizeWebSearchProvider(form.web_search_provider),
       tavily_api_key: form.tavily_api_key.trim(),
@@ -4454,6 +4456,22 @@ export default function SettingsDialog({
                         description={t("settings.voice.fallbackDesc")}
                         onChange={(checked) => set("voice_tts_fallback", checked)}
                       />
+                    </div>
+                    <div className="mt-4 grid gap-4 sm:grid-cols-[minmax(0,1fr)_220px]">
+                      <ToggleRow
+                        checked={form.voice_hotkey_enabled}
+                        title={t("settings.voice.hotkey")}
+                        description={t("settings.voice.hotkeyDesc")}
+                        onChange={(checked) => set("voice_hotkey_enabled", checked)}
+                      />
+                      <Field label={t("settings.voice.hotkeyKeys")}>
+                        <input
+                          className={inputCls}
+                          value={form.voice_hotkey}
+                          placeholder="Ctrl+Shift+Space"
+                          onChange={(e) => set("voice_hotkey", e.target.value)}
+                        />
+                      </Field>
                     </div>
                     <div className="mt-4 flex flex-wrap items-center gap-3">
                       <button

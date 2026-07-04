@@ -138,6 +138,14 @@ fn default_voice_tts_fallback() -> bool {
     true
 }
 
+fn default_voice_hotkey_enabled() -> bool {
+    true
+}
+
+fn default_voice_hotkey() -> String {
+    "Ctrl+Shift+Space".to_string()
+}
+
 fn default_computer_use_enabled() -> bool {
     DEFAULT_COMPUTER_USE_ENABLED
 }
@@ -383,6 +391,10 @@ pub struct Settings {
     pub voice_streaming: bool,
     #[serde(default = "default_voice_tts_fallback")]
     pub voice_tts_fallback: bool,
+    #[serde(default = "default_voice_hotkey_enabled")]
+    pub voice_hotkey_enabled: bool,
+    #[serde(default = "default_voice_hotkey")]
+    pub voice_hotkey: String,
     #[serde(default = "default_computer_use_enabled")]
     pub computer_use_enabled: bool,
     #[serde(default = "default_ocr_model_source")]
@@ -469,6 +481,8 @@ impl Default for Settings {
             voice_emotion: String::new(),
             voice_streaming: default_voice_streaming(),
             voice_tts_fallback: default_voice_tts_fallback(),
+            voice_hotkey_enabled: default_voice_hotkey_enabled(),
+            voice_hotkey: default_voice_hotkey(),
             computer_use_enabled: DEFAULT_COMPUTER_USE_ENABLED,
             ocr_model_source: default_ocr_model_source(),
             web_search_provider: default_web_search_provider(),
@@ -667,6 +681,8 @@ mod tests {
         assert!(settings.voice_emotion.is_empty());
         assert!(!settings.voice_streaming);
         assert!(settings.voice_tts_fallback);
+        assert!(settings.voice_hotkey_enabled);
+        assert_eq!(settings.voice_hotkey, "Ctrl+Shift+Space");
         assert!(!settings.computer_use_enabled);
         assert_eq!(settings.ocr_model_source, "modelscope");
         assert_eq!(settings.web_search_provider, "auto");
