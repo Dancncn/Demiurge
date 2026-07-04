@@ -18,6 +18,7 @@ use crate::media::{dashscope_api_key, dashscope_base_url};
 use crate::store::Settings;
 
 const VOICE_CONNECTION_TEST_TIMEOUT_SECS: u64 = 20;
+const VOICE_TTS_TIMEOUT_SECS: u64 = 90;
 const VOICE_CONNECTION_TEST_TEXT: &str = "Demiurge voice test.";
 
 #[derive(Clone, Debug, Serialize)]
@@ -292,7 +293,8 @@ pub async fn voice_tts_check(
         return Err("语音未启用。".to_string());
     }
     let backend = normalize_tts_backend(&settings.voice_tts_backend);
-    let options = TtsOptions::from_settings(&settings, None, None, None, Some(false));
+    let mut options = TtsOptions::from_settings(&settings, None, None, None, Some(false));
+    options.timeout_secs = VOICE_CONNECTION_TEST_TIMEOUT_SECS;
     let target = voice_tts_target(&settings, &backend);
     let started = Instant::now();
     let url = synthesize_with_backend(
@@ -325,6 +327,7 @@ struct TtsOptions {
     emotion: String,
     streaming: bool,
     allow_fallback: bool,
+    timeout_secs: u64,
 }
 
 impl TtsOptions {
@@ -344,6 +347,7 @@ impl TtsOptions {
                 .to_string(),
             streaming: streaming.unwrap_or(settings.voice_streaming),
             allow_fallback: settings.voice_tts_fallback,
+            timeout_secs: VOICE_TTS_TIMEOUT_SECS,
         }
     }
 }
@@ -415,7 +419,7 @@ async fn synthesize_with_dashscope(
     let resp = state
         .http
         .post(url)
-        .timeout(Duration::from_secs(VOICE_CONNECTION_TEST_TIMEOUT_SECS))
+        .timeout(Duration::from_secs(options.timeout_secs))
         .bearer_auth(key)
         .json(&body)
         .send()
@@ -536,7 +540,7 @@ async fn synthesize_with_gpt_sovits(
 
     let resp = http
         .post(url)
-        .timeout(Duration::from_secs(VOICE_CONNECTION_TEST_TIMEOUT_SECS))
+        .timeout(Duration::from_secs(options.timeout_secs))
         .json(&body)
         .send()
         .await
@@ -571,7 +575,7 @@ async fn synthesize_with_cosyvoice(
     }
     let resp = http
         .post(url)
-        .timeout(Duration::from_secs(VOICE_CONNECTION_TEST_TIMEOUT_SECS))
+        .timeout(Duration::from_secs(options.timeout_secs))
         .json(&body)
         .send()
         .await

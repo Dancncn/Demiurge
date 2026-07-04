@@ -2236,7 +2236,9 @@ pub fn run() {
             *state.settings.lock().unwrap() = settings;
             *state.sessions.lock().unwrap() = sessions;
             let settings_snapshot = state.settings.lock().unwrap().clone();
-            sync_desktop_companion_window(app.handle(), &settings_snapshot)?;
+            if let Err(e) = sync_desktop_companion_window(app.handle(), &settings_snapshot) {
+                eprintln!("Demiurge desktop companion startup warning: {e}");
+            }
             agent::workflow_runtime::hydrate_persisted_runs(state.inner());
             pomodoro::hydrate(app.handle().clone(), state.inner());
             // 保证落盘一次（迁移/初始化后）

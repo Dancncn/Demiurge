@@ -38,7 +38,9 @@ export function useStreamingTtsQueue(settings: Settings | null) {
   const queueRef = useRef<string[]>([]);
   const bufferRef = useRef("");
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const finishAudioRef = useRef<(() => void) | null>(null);
   const drainingRef = useRef(false);
+  const drainRef = useRef<(() => Promise<void>) | null>(null);
   const generationRef = useRef(0);
   const activeRef = useRef(false);
   const mutedRef = useRef(false);
@@ -69,6 +71,8 @@ export function useStreamingTtsQueue(settings: Settings | null) {
 
   const stopAudio = useCallback(() => {
     generationRef.current += 1;
+    const finishAudio = finishAudioRef.current;
+    finishAudioRef.current = null;
     const audio = audioRef.current;
     audioRef.current = null;
     if (audio) {
@@ -77,6 +81,7 @@ export function useStreamingTtsQueue(settings: Settings | null) {
       audio.pause();
       audio.src = "";
     }
+    finishAudio?.();
   }, []);
 
   const drain = useCallback(async () => {
@@ -101,15 +106,36 @@ export function useStreamingTtsQueue(settings: Settings | null) {
           });
           if (ticket !== generationRef.current || mutedRef.current || !activeRef.current) break;
           await new Promise<void>((resolve, reject) => {
+            let settled = false;
             const audio = new Audio(url);
+            let cancelPlayback: () => void = () => undefined;
+            const settle = (fn: () => void) => {
+              if (settled) return;
+              settled = true;
+              if (finishAudioRef.current === cancelPlayback) finishAudioRef.current = null;
+              if (audioRef.current === audio) audioRef.current = null;
+              audio.onended = null;
+              audio.onerror = null;
+              fn();
+            };
+            cancelPlayback = () => settle(resolve);
+            const failPlayback = (err: unknown) =>
+              settle(() => reject(err instanceof Error ? err : new Error(String(err))));
             audioRef.current = audio;
+            finishAudioRef.current = cancelPlayback;
             audio.playbackRate = settings?.voice_speed || 1;
-            audio.onended = () => resolve();
-            audio.onerror = () => reject(new Error("Audio playback failed."));
-            void audio.play().catch(reject);
+            audio.onended = () => settle(resolve);
+            audio.onerror = () => failPlayback(new Error("Audio playback failed."));
+            void audio.play().catch(failPlayback);
           });
           if (ticket === generationRef.current) {
-            refreshStatus({ playedSegments: status.playedSegments + 1 });
+            setStatus((current) => ({
+              ...current,
+              active: activeRef.current,
+              muted: mutedRef.current,
+              queued: queueRef.current.length,
+              playedSegments: current.playedSegments + 1,
+            }));
           }
         } catch (err) {
           refreshStatus({ error: String(err), speaking: false, currentText: "" });
@@ -120,9 +146,16 @@ export function useStreamingTtsQueue(settings: Settings | null) {
       }
     } finally {
       drainingRef.current = false;
-      refreshStatus({ speaking: false, currentText: queueRef.current.length ? status.currentText : "" });
+      refreshStatus({ speaking: false, currentText: "" });
+      if (activeRef.current && !mutedRef.current && queueRef.current.length > 0) {
+        window.setTimeout(() => void drainRef.current?.(), 0);
+      }
     }
-  }, [refreshStatus, status.currentText, status.playedSegments]);
+  }, [refreshStatus]);
+
+  useEffect(() => {
+    drainRef.current = drain;
+  }, [drain]);
 
   const enqueue = useCallback(
     (text: string) => {

@@ -67,6 +67,9 @@ export default function VoiceCallPanel({
   const chunksRef = useRef<Blob[]>([]);
   const vadTimerRef = useRef<number | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
+  const recordingTokenRef = useRef(0);
+  const discardRecordingRef = useRef(false);
+  const transcriptionTokenRef = useRef(0);
 
   useEffect(() => {
     if (!active) return;
@@ -86,6 +89,9 @@ export default function VoiceCallPanel({
 
   useEffect(() => {
     return () => {
+      discardRecordingRef.current = true;
+      transcriptionTokenRef.current += 1;
+      chunksRef.current = [];
       stopVad();
       releaseStream();
       try {
@@ -93,8 +99,14 @@ export default function VoiceCallPanel({
       } catch {
         /* ignore */
       }
+      recorderRef.current = null;
     };
   }, []);
+
+  useEffect(() => {
+    if (!open) cancelVoiceInput();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
 
   function releaseStream() {
     streamRef.current?.getTracks().forEach((track) => track.stop());
@@ -148,10 +160,17 @@ export default function VoiceCallPanel({
     onStopAudio();
     setError("");
     setLastTranscript("");
+    const recordingToken = recordingTokenRef.current + 1;
+    recordingTokenRef.current = recordingToken;
+    discardRecordingRef.current = false;
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
       });
+      if (discardRecordingRef.current || recordingToken !== recordingTokenRef.current) {
+        stream.getTracks().forEach((track) => track.stop());
+        return;
+      }
       streamRef.current = stream;
       chunksRef.current = [];
       const recorder = new MediaRecorder(stream);
@@ -161,11 +180,13 @@ export default function VoiceCallPanel({
       };
       recorder.onstop = () => {
         const blob = new Blob(chunksRef.current, { type: recorder.mimeType || "audio/webm" });
+        const shouldTranscribe = !discardRecordingRef.current && recordingToken === recordingTokenRef.current;
         chunksRef.current = [];
+        recorderRef.current = null;
         stopVad();
         releaseStream();
         setRecording(false);
-        if (blob.size > 0) void transcribe(blob);
+        if (shouldTranscribe && blob.size > 0) void transcribe(blob, recordingToken);
       };
       recorder.start();
       startVad(stream);
@@ -174,36 +195,62 @@ export default function VoiceCallPanel({
       stopVad();
       releaseStream();
       setRecording(false);
-      setError(String(err));
+      if (!discardRecordingRef.current) setError(String(err));
     }
   }
 
   function stopRecording() {
+    discardRecordingRef.current = false;
     const recorder = recorderRef.current;
     if (recorder && recorder.state !== "inactive") {
       recorder.stop();
     } else {
+      recorderRef.current = null;
       stopVad();
       releaseStream();
       setRecording(false);
     }
   }
 
-  async function transcribe(blob: Blob) {
+  function cancelVoiceInput() {
+    discardRecordingRef.current = true;
+    transcriptionTokenRef.current += 1;
+    chunksRef.current = [];
+    const recorder = recorderRef.current;
+    if (recorder && recorder.state !== "inactive") {
+      try {
+        recorder.stop();
+      } catch {
+        recorderRef.current = null;
+      }
+    } else {
+      recorderRef.current = null;
+      stopVad();
+      releaseStream();
+      setRecording(false);
+    }
+    setTranscribing(false);
+  }
+
+  async function transcribe(blob: Blob, recordingToken: number) {
+    const transcriptionToken = transcriptionTokenRef.current + 1;
+    transcriptionTokenRef.current = transcriptionToken;
     setTranscribing(true);
     setError("");
     try {
       const status = await api.voiceStatus();
+      if (transcriptionToken !== transcriptionTokenRef.current || recordingToken !== recordingTokenRef.current) return;
       if (!status.ready) throw new Error(status.reason || t("voice.call.sttNotReady"));
       const audio = Array.from(new Uint8Array(await blob.arrayBuffer()));
       const text = (await api.voiceTranscribe(audio, blob.type || "audio/webm")).trim();
+      if (transcriptionToken !== transcriptionTokenRef.current || recordingToken !== recordingTokenRef.current) return;
       if (!text) return;
       setLastTranscript(text);
       await onTranscript(text);
     } catch (err) {
-      setError(String(err));
+      if (transcriptionToken === transcriptionTokenRef.current) setError(String(err));
     } finally {
-      setTranscribing(false);
+      if (transcriptionToken === transcriptionTokenRef.current) setTranscribing(false);
     }
   }
 
@@ -213,9 +260,15 @@ export default function VoiceCallPanel({
   }
 
   function endCall() {
-    if (recording) stopRecording();
+    cancelVoiceInput();
     onStopAudio();
     onEnd();
+  }
+
+  function closePanel() {
+    cancelVoiceInput();
+    onStopAudio();
+    onClose();
   }
 
   if (!open) return null;
@@ -290,7 +343,7 @@ export default function VoiceCallPanel({
           <button
             type="button"
             className="grid h-8 w-8 place-items-center rounded-md text-[#7a8088] hover:bg-[#eef1f5]"
-            onClick={onClose}
+            onClick={closePanel}
             aria-label={t("voice.call.close")}
             title={t("voice.call.close")}
           >
