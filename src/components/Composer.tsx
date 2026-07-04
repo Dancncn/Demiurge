@@ -526,7 +526,7 @@ export function Composer({
             onKeyDown={handleKeyDown}
             placeholder={t("composer.placeholder")}
             style={{ maxHeight: MAX_TEXTAREA_HEIGHT }}
-            className="block max-h-[200px] min-h-[28px] w-full resize-none overflow-y-auto bg-transparent px-3 py-2 text-[14px] leading-6 outline-none placeholder:text-[#8a9099]"
+            className="block max-h-[200px] min-h-[28px] w-full resize-none overflow-y-auto bg-transparent px-3 py-2 text-[16px] leading-6 outline-none placeholder:text-[#8a9099]"
           />
         </div>
 

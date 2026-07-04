@@ -231,6 +231,45 @@ function matchesHotkey(event: KeyboardEvent, hotkey: string) {
   );
 }
 
+function waitForNextPaint() {
+  return new Promise<void>((resolve) => {
+    requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+  });
+}
+
+function lastUserIndex(items: DisplayItem[]) {
+  for (let i = items.length - 1; i >= 0; i -= 1) {
+    if (items[i].kind === "user") return i;
+  }
+  return -1;
+}
+
+function hasCompletedAssistantAfterLastUser(items: DisplayItem[]) {
+  const userIndex = lastUserIndex(items);
+  return items.some(
+    (item, index) =>
+      index > userIndex &&
+      item.kind === "assistant" &&
+      !item.streaming &&
+      !item.error &&
+      Boolean(item.text.trim() || item.reasoning?.trim()),
+  );
+}
+
+function hasSameAssistantTextAfterLastUser(items: DisplayItem[], text: string) {
+  const userIndex = lastUserIndex(items);
+  const normalized = text.trim();
+  if (!normalized) return false;
+  return items.some(
+    (item, index) =>
+      index > userIndex &&
+      item.kind === "assistant" &&
+      !item.streaming &&
+      !item.error &&
+      item.text.trim() === normalized,
+  );
+}
+
 export default function App() {
   const { t, setLang } = useI18n();
   const [items, setItems] = useState<DisplayItem[]>([]);
@@ -285,6 +324,16 @@ export default function App() {
   const spokenRepliesEnabledRef = useRef(spokenRepliesEnabled);
   const voiceCallActiveRef = useRef(voiceCallActive);
   const ttsQueueRef = useRef(ttsQueue);
+  const itemsRef = useRef<DisplayItem[]>(items);
+  const activeIdRef = useRef(activeId);
+
+  useEffect(() => {
+    itemsRef.current = items;
+  }, [items]);
+
+  useEffect(() => {
+    activeIdRef.current = activeId;
+  }, [activeId]);
 
   useEffect(() => {
     spokenRepliesEnabledRef.current = spokenRepliesEnabled;
@@ -514,12 +563,18 @@ export default function App() {
           if (id) {
             setItems((p) =>
               p.map((it) =>
-                it.id === id && it.kind === "assistant" ? { ...it, streaming: false, text: it.text || text } : it,
+                it.id === id && it.kind === "assistant"
+                  ? { ...it, streaming: false, text: it.text.trim() ? it.text : text }
+                  : it,
               ),
             );
-          } else if (text) {
+          } else if (text.trim()) {
             const nid = genId();
-            setItems((p) => [...p, { id: nid, kind: "assistant", text, streaming: false }]);
+            setItems((p) =>
+              hasSameAssistantTextAfterLastUser(p, text)
+                ? p
+                : [...p, { id: nid, kind: "assistant", text, streaming: false }],
+            );
           }
           curAssistantId.current = null;
           setBusy(false);
@@ -667,6 +722,8 @@ export default function App() {
     const text = (textArg ?? input).trim();
     const attachmentPrompt = buildAttachmentPrompt(attachments);
     if ((!text && !attachmentPrompt) || appBusy) return false;
+    const turnSessionId = activeId;
+    let completed = false;
     setInput("");
     setActiveView("chat");
     assistantErrorDelivered.current = false;
@@ -681,6 +738,7 @@ export default function App() {
       } else {
         await api.send(prompt);
       }
+      completed = true;
     } catch (err) {
       const id = curAssistantId.current;
       if (id) {
@@ -706,6 +764,7 @@ export default function App() {
       }
     } finally {
       setBusy(false);
+      if (completed) await syncHistoryIfMissingAssistant(turnSessionId);
       void refreshSessions();
       void refreshGoalPanel();
     }
@@ -756,6 +815,21 @@ export default function App() {
   function resetTurnRefs() {
     curAssistantId.current = null;
     toolItemIds.current.clear();
+  }
+
+  async function syncHistoryIfMissingAssistant(sessionId: string) {
+    await waitForNextPaint();
+    if (sessionId && activeIdRef.current && activeIdRef.current !== sessionId) return;
+    if (hasCompletedAssistantAfterLastUser(itemsRef.current)) return;
+
+    try {
+      const hist = await api.getHistory();
+      if (sessionId && activeIdRef.current && activeIdRef.current !== sessionId) return;
+      resetTurnRefs();
+      setItems(buildHistory(hist));
+    } catch (e) {
+      console.error("Failed to sync chat history after turn", e);
+    }
   }
 
   async function handleNewChat() {
@@ -1368,7 +1442,7 @@ export default function App() {
                   </div>
                 )}
 
-                <div className="hidden min-w-0 flex-col border-l border-[#dfe3e8] pl-3 text-[11px] text-[#8a9099] sm:flex">
+                <div className="hidden min-w-0 flex-col border-l border-[#dfe3e8] pl-3 text-[14px] text-[#8a9099] sm:flex">
                   <span className="max-w-[28vw] truncate font-medium text-[#3f3f3f]" title={activeSession?.title ?? t("chat.newChat")}>
                     {activeSession?.title ?? t("chat.newChat")}
                   </span>

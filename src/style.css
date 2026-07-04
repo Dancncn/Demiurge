@@ -231,7 +231,7 @@ body {
   background: var(--bg);
   color: var(--text);
   font-family: var(--font-sans);
-  font-size: 15px; /* 桌面 UI 比 16px 更克制，贴近 ChatGPT 的观感 */
+  font-size: 18px; /* 桌面 UI 比 16px 更克制，贴近 ChatGPT 的观感 */
   line-height: 1.55; /* 中英混排留足呼吸 */
   font-weight: 400;
   letter-spacing: -0.005em; /* Inter 极轻收紧，提升精致感而不拥挤 */
@@ -292,7 +292,7 @@ html[data-window="desktop-companion"] #app {
   gap: 8px;
   padding: 0 10px;
   color: #4f5661;
-  font-size: 12px;
+  font-size: 16px;
   font-weight: 650;
   letter-spacing: 0;
 }
@@ -316,7 +316,7 @@ html[data-window="desktop-companion"] #app {
   border-radius: 6px;
   padding: 0 9px;
   color: #4f5661;
-  font-size: 12px;
+  font-size: 14px;
   font-weight: 520;
   letter-spacing: 0;
   transition:

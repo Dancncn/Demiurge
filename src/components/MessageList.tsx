@@ -25,7 +25,7 @@ const UserMessage = memo(function UserMessage({ text }: { text: string }) {
   return (
     <article className="cf-message-in flex justify-end">
       <div className="max-w-[min(680px,78%)]">
-        <div className="whitespace-pre-wrap rounded-lg bg-[#eef1f5] px-4 py-2.5 text-[14px] leading-[1.6] text-[#202124]">
+        <div className="whitespace-pre-wrap rounded-lg bg-[#eef1f5] px-4 py-2.5 text-[16px] leading-[1.6] text-[#202124]">
           {text}
         </div>
       </div>
@@ -92,9 +92,9 @@ const AssistantMessage = memo(function AssistantMessage({
 
   return (
     <article className="cf-message-in group flex justify-start">
-      <img src={AVATAR} alt="AI" className="mr-3 mt-0.5 size-7 shrink-0 rounded-md border border-[#dfe3e8] bg-white object-contain" />
+      <img src={AVATAR} alt="AI" className="mr-3 mt-0.5 size-10 shrink-0 rounded-md border border-[#dfe3e8] bg-white object-contain" />
       <div className="min-w-0 max-w-[min(900px,82%)]">
-        <div className="py-0.5 text-[14px] leading-[1.6]">
+        <div className="py-0.5 text-[16px] leading-[1.6]">
           {reasoning && reasoning.trim() && !error && (
             <ReasoningBlock text={reasoning} active={streaming && !text} />
           )}
@@ -191,7 +191,7 @@ export function MessageList({ items, thinking, greeting, onRetry, onOpenFortune 
             )}
             {thinking && (
               <article className="cf-message-in flex justify-start">
-                <img src={AVATAR} alt="AI" className="mr-3 mt-0.5 size-7 shrink-0 rounded-md border border-[#dfe3e8] bg-white object-contain" />
+                <img src={AVATAR} alt="AI" className="mr-3 mt-0.5 size-8 shrink-0 rounded-md border border-[#dfe3e8] bg-white object-contain" />
                 <div className="py-1.5">
                   <ThinkingDots label="Thinking..." />
                 </div>

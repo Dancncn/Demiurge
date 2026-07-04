@@ -141,11 +141,11 @@ export default function MediaStudio({ settings, onOpenSettings }: Props) {
 
       <section className="flex min-w-0 flex-1 flex-col bg-[#f6f7f9]">
         <div className="flex h-12 shrink-0 items-center border-b border-[#e5e8ed] bg-white px-4">
-          <div className="flex items-center gap-2 text-[13px] font-semibold text-[#202124]">
+          <div className="flex items-center gap-2 text-[16px] font-semibold text-[#202124]">
             <ImageIcon size={17} />
             {t("mediaStudio.title")}
           </div>
-          <div className="ml-3 truncate text-[12px] text-[#7a8088]">
+          <div className="ml-3 truncate text-[14px] text-[#7a8088]">
             {t("mediaStudio.subtitle")}
           </div>
           <button
@@ -206,7 +206,7 @@ export default function MediaStudio({ settings, onOpenSettings }: Props) {
               <input
                 value={model}
                 onChange={(e) => setModel(e.target.value)}
-                className="h-9 rounded-md border border-[#dfe3e8] px-2.5 text-[12px] outline-none"
+                className="h-9 rounded-md border border-[#dfe3e8] px-2.5 text-[14px] outline-none"
                 placeholder="qwen-image-2.0"
               />
               <Select
@@ -218,13 +218,13 @@ export default function MediaStudio({ settings, onOpenSettings }: Props) {
               <input
                 value={seed}
                 onChange={(e) => setSeed(e.target.value.replace(/[^\d]/g, ""))}
-                className="h-9 rounded-md border border-[#dfe3e8] px-2.5 text-[12px] outline-none"
+                className="h-9 rounded-md border border-[#dfe3e8] px-2.5 text-[14px] outline-none"
                 placeholder={t("mediaStudio.seed")}
               />
               <input
                 value={negativePrompt}
                 onChange={(e) => setNegativePrompt(e.target.value)}
-                className="h-9 rounded-md border border-[#dfe3e8] px-2.5 text-[12px] outline-none"
+                className="h-9 rounded-md border border-[#dfe3e8] px-2.5 text-[14px] outline-none"
                 placeholder={t("mediaStudio.negativePrompt")}
               />
               <button

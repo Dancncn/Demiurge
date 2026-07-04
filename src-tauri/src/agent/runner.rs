@@ -66,6 +66,33 @@ fn assistant_error_payload(err: &str) -> session_engine::AssistantErrorEvent {
     }
 }
 
+fn empty_assistant_response_message(finish_reason: &str, language: &str) -> String {
+    let reason = finish_reason.trim();
+    let reason = if reason.is_empty() { "stop" } else { reason };
+    let is_zh =
+        language.eq_ignore_ascii_case("zh") || language.to_ascii_lowercase().starts_with("zh-");
+
+    if is_zh {
+        match reason {
+            "content_filter" => "模型这次没有返回可见内容，响应可能被提供商的安全策略过滤了。请换一种问法，或检查当前模型/端点设置。".to_string(),
+            "length" => "模型这次在输出 token 上限耗尽前没有返回可见内容。请提高预留输出 token，或缩短上下文后重试。".to_string(),
+            "stop" => "模型这次没有返回可见内容。请重试；如果持续出现，请检查当前模型、端点和流式输出设置。".to_string(),
+            other => format!(
+                "模型这次没有返回可见内容（finish_reason: {other}）。请重试；如果持续出现，请检查当前模型、端点和能力设置。"
+            ),
+        }
+    } else {
+        match reason {
+            "content_filter" => "The model returned no visible content. The provider may have filtered the response. Try rephrasing, or check the current model and endpoint settings.".to_string(),
+            "length" => "The model returned no visible content before the output token limit was reached. Increase reserved output tokens or shorten the context, then retry.".to_string(),
+            "stop" => "The model returned no visible content. Retry once; if it keeps happening, check the current model, endpoint, and streaming settings.".to_string(),
+            other => format!(
+                "The model returned no visible content (finish_reason: {other}). Retry once; if it keeps happening, check the current model, endpoint, and capability settings."
+            ),
+        }
+    }
+}
+
 fn tool_error_hint(name: &str, result: &str, ok: bool, denied: bool) -> Option<String> {
     if denied {
         return Some("Permission denied before execution. Change the permission rule or retry and allow once.".to_string());
@@ -396,7 +423,11 @@ pub async fn run_turn_with_options(
 
         // 没有工具调用 → 最终答复
         if turn.tool_calls.is_empty() {
-            let assistant_text = turn.content.clone();
+            let assistant_text = if turn.content.trim().is_empty() {
+                empty_assistant_response_message(&turn.finish_reason, &settings.language)
+            } else {
+                turn.content.clone()
+            };
             push(Message::assistant_text(assistant_text.clone()));
             if !exact_usage_recorded {
                 goal::add_estimated_tokens(state, &sid, &original_user_text);
@@ -682,5 +713,17 @@ mod tests {
         assert!(
             source_quality_hint("read_file", "Sources:\n- [A](https://a.example)", true).is_none()
         );
+    }
+
+    #[test]
+    fn empty_assistant_response_message_explains_empty_turns() {
+        let zh = empty_assistant_response_message("stop", "zh");
+        assert!(zh.contains("没有返回可见内容"));
+
+        let en = empty_assistant_response_message("length", "en");
+        assert!(en.contains("output token limit"));
+
+        let unknown = empty_assistant_response_message("provider_blank", "en");
+        assert!(unknown.contains("finish_reason: provider_blank"));
     }
 }
