@@ -8,7 +8,7 @@ Demiurge 是一个 Tauri 桌面应用。前端负责展示和交互，Rust 后�
 
 ```text
 React UI
-  ├─ invoke: send / settings / connection tests / sessions / workflow / memory / permission / plan / MCP / WebDAV / OCR / voice commands
+  ├─ invoke: send / settings / connection tests / sessions / workflow / memory / permission / plan / MCP / WebDAV / OCR / voice / desktop companion commands
   └─ listen: assistant/tool/agent-event/session-engine/confirm/goal/workflow/plan events
         │
         ▼
@@ -55,12 +55,14 @@ Demiurge/
 │  ├─ components/
 │  │  ├─ Composer.tsx
 │  │  ├─ ConfirmDialog.tsx
+│  │  ├─ DesktopCompanionShell.tsx
 │  │  ├─ Markdown.tsx
 │  │  ├─ MarkdownRenderer.tsx
 │  │  ├─ MessageList.tsx
 │  │  ├─ SettingsDialog.tsx
 │  │  ├─ Sidebar.tsx
 │  │  ├─ ToolCard.tsx
+│  │  ├─ VoiceCallPanel.tsx
 │  │  └─ WorkflowsPanel.tsx
 │  └─ lib/
 │     ├─ api.ts
@@ -102,11 +104,11 @@ Demiurge/
 
 | 模块 | 职责 | 关键入口 |
 |---|---|---|
-| `lib.rs` | Tauri command 注册、全局 `AppState`、应用初始化、`send` 分发和上下文面板聚合 | `run()` / `send()` / `context_panel_state()` |
+| `lib.rs` | Tauri command 注册、全局 `AppState`、应用初始化、`send` 分发、上下文面板聚合和桌面陪伴壳窗口同步 | `run()` / `send()` / `context_panel_state()` / `desktop_companion_show_main()` |
 | `connection_tests.rs` | Settings 连接测试；用当前表单设置验证 LLM Provider、Web Search 和 WebDAV 以外的网络 key，不要求先保存密钥 | `test_provider()` / `test_web_search()` |
 | `credentials.rs` | keyring 凭据读写，避免 LLM/Web Search/WebDAV/MCP env 密钥落入 settings 明文 | `hydrate_or_migrate_settings()` / `save_mcp_env_secrets()` |
 | `ocr.rs` | OCR 模型路径、ModelScope/Hugging Face 源、下载进度事件、缺模型检查、手动安装提示和 OCR 推理入口 | `model_status()` / `download_models()` / `recognize_rgba()` |
-| `voice.rs` | STT(ASR) 已接入云端转写后端（DashScope `qwen3-asr-flash` / OpenAI 兼容 Whisper，由 `voice_stt_backend` 选择并校验凭据）；TTS 已接通双后端——DashScope（默认音色 Cherry、模型 `qwen3-tts-flash`，返回音频 URL）与 GPT-SoVITS（默认 base `http://127.0.0.1:9880`，返回 base64 data URI），由 `voice_tts_backend` 选择；流式合成、播放队列、打断、语速/情感参数等待办 | `voice_transcribe()` / `voice_synthesize()` / `voice_status()` |
+| `voice.rs` | STT(ASR) 已接入云端转写后端（DashScope `qwen3-asr-flash` / OpenAI 兼容 Whisper，由 `voice_stt_backend` 选择并校验凭据）；TTS 已接通 DashScope + GPT-SoVITS / CosyVoice(alias) 本地后端，支持语速、情感、streaming 请求参数、连接测试和本地失败后 DashScope 降级；本地语音模型不随默认安装包分发 | `voice_transcribe()` / `voice_synthesize()` / `voice_status()` / `voice_tts_check()` |
 | `media.rs` | DashScope 媒体后端（图像生成）与 voice 用的 dashscope 凭据 / base_url 辅助 | `generate_image()` / `dashscope_api_key()` |
 | `pomodoro.rs` | 番茄钟运行时、持久化状态、完成事件、节奏记忆和勿扰联动所需的面板状态 | `pomodoro_state()` / `pomodoro_start()` / `pomodoro_pause()` / `pomodoro_resume()` / `pomodoro_skip()` |
 | `agent/session_engine.rs` | turn runtime state、入口互斥、中断标记、统一 agent event envelope 和会话写入封装 | `begin_turn()` / `finish_turn()` / `TurnEventEmitter` / `SessionTurnStore` |
@@ -143,14 +145,17 @@ Demiurge/
 
 | 模块 | 职责 |
 |---|---|
-| `src/App.tsx` | 主状态编排，订阅后端事件，维护消息流、设置、会话、Agent 选择、Plan Mode 控制、backend-driven busy/cancel 状态和 workflow panel |
+| `src/App.tsx` | 主状态编排，订阅后端事件，维护消息流、设置、会话、Agent 选择、Plan Mode 控制、backend-driven busy/cancel 状态、workflow panel、语音通话入口和桌面陪伴壳开关 |
 | `src/lib/api.ts` | Tauri invoke/event 的 typed wrapper，包含 `session_engine_state`、`session-engine-updated` 和统一 `agent-event` |
 | `src/lib/types.ts` | 前后端共享 TypeScript 类型 |
 | `src/lib/fileProcessing.ts` | 附件读取与提示词拼接辅助；PDF.js 与 JSZip 仅在处理对应附件时按需导入 |
+| `src/lib/useStreamingTtsQueue.ts` | 把 assistant 流式文本按句切分成 TTS 播放队列，支持停止、静音、队列状态和语速/情感/streaming 参数透传 |
 | `components/Sidebar.tsx` | 会话列表、会话重命名/删除、角色包选择、基础入口 |
 | `components/Composer.tsx` | 输入框、中断/发送状态 |
 | `components/MessageList.tsx` | 用户消息、助手消息、工具卡片渲染 |
 | `components/PomodoroCard.tsx` | 聊天页番茄钟控制面板，支持任务绑定、暂停/继续/跳过、中断原因、桌面通知和节奏摘要 |
+| `components/VoiceCallPanel.tsx` | 第一阶段语音通话面板：接通/挂断、静音、时长、按键说话、简单 VAD 端点检测、STT → LLM → 流式 TTS 和本地半双工打断 |
+| `components/DesktopCompanionShell.tsx` | 独立透明桌面陪伴壳窗口：展示头像、陪伴状态、天气/建议、置顶、点击穿透、收起/展开和权限边界状态 |
 | `components/Markdown.tsx` | 轻量 Markdown 入口，通过 `React.lazy` 延迟加载完整渲染器 |
 | `components/MarkdownRenderer.tsx` | GFM、代码块、highlight.js、KaTeX 与 Mermaid 渲染；KaTeX/highlight 样式随渲染器加载 |
 | `components/ToolCard.tsx` | tool-start/tool-end 展示，包含 MCP tool/resource 进度摘要 |
@@ -259,6 +264,14 @@ Companion memory 走独立的用户确认链路：手动陪伴建议和授权后
 
 天气使用 provider 抽象，当前默认实现是无 key 的 Open-Meteo：手动城市会先地理编码再查询 forecast；粗略定位模式只在用户开启且未填写城市时通过 IP 估算城市，并仅缓存城市级信息。天气缓存和粗略位置缓存均为 30 分钟 TTL，可从 Companion 卡片或 Settings 天气数据治理区域清理。天气卡片展示 provider、缓存过期、错误降级、温度/体感/AQI/UV 等摘要；建议覆盖降雨、通勤降雨概率、体感高低温、昼夜温差、紫外线、空气质量、湿度、风力和极端天气信号，文案保持低频克制。
 
+## Voice / Desktop Companion Shell
+
+语音链路分三层：`VoiceCallPanel` 负责前端录音与通话 UI，`voice_transcribe` 负责 STT，`useStreamingTtsQueue` 负责把模型流式增量按句切分后调用 `voice_synthesize` 播放。Settings 的 Voice 页可配置 STT/TTS backend、音色、语速、情感、streaming 请求参数、失败降级、应用聚焦快捷键和 TTS 连接测试。TTS backend 支持 DashScope、GPT-SoVITS 和 CosyVoice alias；本地后端默认只连 `media_base_url` 指向的外部服务，不把模型权重打进安装包。
+
+语音通话当前是第一阶段回合制体验：点击电话按钮或语音快捷键打开面板，接通后按键说话，录音结束走 STT，转写文本进入当前会话，assistant 流式回答同步进入 TTS 队列。面板显示接通/挂断、静音、时长和 TTS 队列状态，并在开始录音前停止当前 TTS，形成本地半双工打断。简单 VAD 用音量阈值检测端点；通话记忆归档与 Live2D 口型/动作联动尚未接入。
+
+桌面陪伴壳是非 Live2D 的独立 Tauri webview window，label 为 `desktop_companion`。`lib.rs` 根据 `Settings` 中的 `desktop_companion_enabled / always_on_top / click_through / collapsed` 创建或隐藏透明无边框窗口，并用 `set_ignore_cursor_events` 实现点击穿透。`main.tsx` 根据当前窗口 label 渲染 `DesktopCompanionShell` 或主应用；陪伴壳展示当前角色头像、陪伴 focus/mood、天气/建议摘要、置顶/穿透/收起控制、主窗口入口和屏幕/麦克风/位置状态。
+
 ## Pomodoro / Focus Rhythm
 
 `pomodoro.rs` 负责本地番茄钟状态和节奏陪伴。状态持久化到 `pomodoro.json`，包含当前 timer、任务绑定、连续专注计数、偏好时长计数、中断原因计数、高效小时计数和最近完成时间。前端通过 `PomodoroCard` 调用 `pomodoro_start/pause/resume/skip`，可选择专注、短休息、长休息或自定义时长，并把计时绑定到当前会话、Goal、Workflow run 或手动标题。
@@ -327,6 +340,8 @@ MCP 工具是运行时动态注册的：`agent::runner` 在生成工具 schema �
 - 文件工具只能访问沙盒目录。
 - 路径先做词法校验，再对最近存在祖先做 canonicalize，防止符号链接和 junction 逃逸。
 - 写入、shell、open_path、截图/OCR 等操作走确认门。
+- 屏幕感知工具受 `computer_use_enabled` 统一开关和逐次确认门控；关闭时 `screen_list_windows`、截图和 OCR 入口会拒绝执行，Settings 的 OCR 区域展示当前边界。
+- 桌面陪伴壳只是透明状态窗口，不默认读取屏幕、麦克风或精确位置；小窗和 Settings 会展示屏幕工具、语音与位置/天气状态。麦克风只由录音按钮或应用聚焦快捷键触发，天气只按设置中的手动城市或粗略城市模式查询。
 - confirm 支持 once/session/project scope。
 - `interrupt` 会唤醒所有待确认项并按拒绝处理。
 - shell 限制 cwd、timeout、output cap 和环境变量；所有 shell 子进程使用独立进程组/进程树，超时时终止整棵进程树。
