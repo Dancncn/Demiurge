@@ -3,6 +3,7 @@ import * as api from "../lib/api";
 import type { ImageGenerationResult, Settings, SpeechSynthesisResult } from "../lib/types";
 import { DownloadIcon, ImageIcon, SparklesIcon, VolumeIcon } from "./Icons";
 import { Select } from "./Select";
+import { useI18n } from "../lib/i18n";
 
 type Props = {
   settings: Settings | null;
@@ -28,6 +29,7 @@ function usageSummary(result?: ImageGenerationResult | SpeechSynthesisResult | n
 }
 
 export default function MediaStudio({ settings, onOpenSettings }: Props) {
+  const { t } = useI18n();
   const [prompt, setPrompt] = useState("");
   const [negativePrompt, setNegativePrompt] = useState("");
   const [model, setModel] = useState(settings?.image_model || "qwen-image-2.0");
@@ -118,7 +120,7 @@ export default function MediaStudio({ settings, onOpenSettings }: Props) {
             setPrompt("");
           }}
           className="grid h-12 w-12 shrink-0 place-items-center rounded-lg border border-dashed border-[#cfd5dd] text-[#687180] transition hover:bg-[#eef1f5] hover:text-[#111827]"
-          title="New image"
+          title={t("mediaStudio.newImage")}
         >
           <SparklesIcon size={18} />
         </button>
@@ -141,17 +143,17 @@ export default function MediaStudio({ settings, onOpenSettings }: Props) {
         <div className="flex h-12 shrink-0 items-center border-b border-[#e5e8ed] bg-white px-4">
           <div className="flex items-center gap-2 text-[13px] font-semibold text-[#202124]">
             <ImageIcon size={17} />
-            Image Studio
+            {t("mediaStudio.title")}
           </div>
           <div className="ml-3 truncate text-[12px] text-[#7a8088]">
-            DashScope native image generation / TTS
+            {t("mediaStudio.subtitle")}
           </div>
           <button
             type="button"
             onClick={onOpenSettings}
             className="ml-auto h-8 rounded-md border border-[#d9dfe7] bg-white px-3 text-[12px] font-medium text-[#4f5661] transition hover:bg-[#f5f6f8]"
           >
-            Media settings
+            {t("mediaStudio.settings")}
           </button>
         </div>
 
@@ -168,7 +170,7 @@ export default function MediaStudio({ settings, onOpenSettings }: Props) {
                 target="_blank"
                 rel="noreferrer"
                 className="absolute right-5 top-5 grid h-9 w-9 place-items-center rounded-md border border-[#dfe3e8] bg-white/90 text-[#4f5661] shadow-sm transition hover:bg-white hover:text-[#111827]"
-                title="Open generated image"
+                title={t("mediaStudio.openGeneratedImage")}
               >
                 <DownloadIcon size={17} />
               </a>
@@ -178,14 +180,14 @@ export default function MediaStudio({ settings, onOpenSettings }: Props) {
               <div className="grid size-16 place-items-center rounded-xl border border-[#dfe3e8] bg-white text-[#687180]">
                 <ImageIcon size={28} />
               </div>
-              <div className="mt-4 text-[15px] font-medium text-[#3f4652]">No image generated yet</div>
-              <div className="mt-1 text-[12px]">Write a prompt below and generate from DashScope.</div>
+              <div className="mt-4 text-[15px] font-medium text-[#3f4652]">{t("mediaStudio.emptyTitle")}</div>
+              <div className="mt-1 text-[12px]">{t("mediaStudio.emptyDesc")}</div>
             </div>
           )}
           {busy && (
             <div className="absolute inset-0 grid place-items-center bg-white/45 backdrop-blur-[1px]">
               <div className="rounded-lg border border-[#dfe3e8] bg-white px-5 py-4 text-[13px] font-medium text-[#3f4652] shadow-lg">
-                Generating image...
+                {t("mediaStudio.generating")}
               </div>
             </div>
           )}
@@ -197,7 +199,7 @@ export default function MediaStudio({ settings, onOpenSettings }: Props) {
               value={prompt}
               onChange={(e) => setPrompt(e.target.value)}
               rows={3}
-              placeholder="Describe the image..."
+              placeholder={t("mediaStudio.promptPlaceholder")}
               className="min-h-20 w-full resize-none rounded-lg border border-[#dfe3e8] bg-[#fbfcfd] px-3 py-2.5 text-[13px] leading-6 outline-none transition focus:border-[#aeb6c2] focus:bg-white"
             />
             <div className="mt-2 grid gap-2 md:grid-cols-[160px_150px_120px_minmax(0,1fr)_auto_auto]">
@@ -217,13 +219,13 @@ export default function MediaStudio({ settings, onOpenSettings }: Props) {
                 value={seed}
                 onChange={(e) => setSeed(e.target.value.replace(/[^\d]/g, ""))}
                 className="h-9 rounded-md border border-[#dfe3e8] px-2.5 text-[12px] outline-none"
-                placeholder="Seed"
+                placeholder={t("mediaStudio.seed")}
               />
               <input
                 value={negativePrompt}
                 onChange={(e) => setNegativePrompt(e.target.value)}
                 className="h-9 rounded-md border border-[#dfe3e8] px-2.5 text-[12px] outline-none"
-                placeholder="Negative prompt"
+                placeholder={t("mediaStudio.negativePrompt")}
               />
               <button
                 type="button"
@@ -232,7 +234,7 @@ export default function MediaStudio({ settings, onOpenSettings }: Props) {
                 className="inline-flex h-9 items-center justify-center gap-1.5 rounded-md border border-[#d9dfe7] bg-white px-3 text-[12px] font-medium text-[#4f5661] transition hover:bg-[#f5f6f8] disabled:cursor-not-allowed disabled:opacity-50"
               >
                 <VolumeIcon size={15} />
-                {ttsBusy ? "Speaking" : "TTS"}
+                {ttsBusy ? t("mediaStudio.speaking") : t("mediaStudio.tts")}
               </button>
               <button
                 type="button"
@@ -241,7 +243,7 @@ export default function MediaStudio({ settings, onOpenSettings }: Props) {
                 className="inline-flex h-9 items-center justify-center gap-1.5 rounded-md bg-[#111827] px-4 text-[12px] font-medium text-white transition hover:bg-[#2b3442] disabled:cursor-not-allowed disabled:bg-[#b8bec8]"
               >
                 <SparklesIcon size={15} />
-                Generate
+                {t("mediaStudio.generate")}
               </button>
             </div>
             {(error || lastResult || ttsResult) && (
