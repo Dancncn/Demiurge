@@ -98,6 +98,10 @@ export interface Settings {
   voice_stt_backend: string;
   voice_tts_backend: string;
   voice_id: string;
+  voice_speed: number;
+  voice_emotion: string;
+  voice_streaming: boolean;
+  voice_tts_fallback: boolean;
   computer_use_enabled: boolean;
   ocr_model_source: OcrModelSource;
   web_search_provider: WebSearchProvider;
@@ -371,6 +375,8 @@ export interface SpeechSynthesisRequest {
   model?: string;
   voice?: string;
   language_type?: string;
+  speed?: number;
+  emotion?: string;
 }
 
 export interface SpeechSynthesisResult {
@@ -444,6 +450,12 @@ export interface VoiceStatus {
   voice_id: string;
   ready: boolean;
   reason: string;
+  tts_ready: boolean;
+  tts_reason: string;
+  speed: number;
+  emotion: string;
+  streaming: boolean;
+  fallback_enabled: boolean;
 }
 
 export type WorkflowStatus = "running" | "stale_running" | "done" | "failed" | "killed" | "journaled";

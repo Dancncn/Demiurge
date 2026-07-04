@@ -190,8 +190,22 @@ export const renameSession = (id: string, title: string) => invoke<string>("rena
 export const voiceStatus = () => invoke<VoiceStatus>("voice_status");
 export const voiceTranscribe = (audio: number[], mimeType?: string, language?: string) =>
   invoke<string>("voice_transcribe", { audio, mimeType, language });
-export const voiceSynthesize = (text: string, voiceId?: string) =>
-  invoke<string>("voice_synthesize", { text, voiceId });
+export interface VoiceSynthesizeOptions {
+  speed?: number;
+  emotion?: string;
+  streaming?: boolean;
+}
+
+export const voiceSynthesize = (text: string, voiceId?: string, options: VoiceSynthesizeOptions = {}) =>
+  invoke<string>("voice_synthesize", {
+    text,
+    voiceId,
+    speed: options.speed ?? null,
+    emotion: options.emotion ?? null,
+    streaming: options.streaming ?? null,
+  });
+export const voiceTtsCheck = (settings: Settings) =>
+  invoke<ConnectionTestResult>("voice_tts_check", { settings });
 
 export const ocrModelStatus = () => invoke<OcrModelStatus>("ocr_model_status");
 export const ocrImageBytes = (bytes: number[]) => invoke<string>("ocr_image_bytes", { bytes });

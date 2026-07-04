@@ -113,6 +113,7 @@ const voiceTtsOptions = [
   { value: "none", labelKey: "settings.voice.backend.none", helpKey: "settings.voice.tts.noneHelp" },
   { value: "dashscope", labelKey: "settings.voice.backend.dashscope", helpKey: "settings.voice.tts.dashscopeHelp" },
   { value: "gpt-sovits", labelKey: "settings.voice.backend.gptSovits", helpKey: "settings.voice.tts.gptSovitsHelp" },
+  { value: "cosyvoice", labelKey: "settings.voice.backend.cosyVoice", helpKey: "settings.voice.tts.cosyVoiceHelp" },
 ];
 
 const inputCls =
@@ -608,6 +609,8 @@ export default function SettingsDialog({
   const [embedProbeStatus, setEmbedProbeStatus] = useState("");
   const [webSearchTestBusy, setWebSearchTestBusy] = useState(false);
   const [webSearchTestStatus, setWebSearchTestStatus] = useState("");
+  const [voiceTestBusy, setVoiceTestBusy] = useState(false);
+  const [voiceTestStatus, setVoiceTestStatus] = useState("");
   const [ocrStatus, setOcrStatus] = useState<OcrModelStatus | null>(null);
   const [ocrProgress, setOcrProgress] = useState<OcrDownloadProgress | null>(null);
   const [ocrBusy, setOcrBusy] = useState(false);
@@ -895,6 +898,23 @@ export default function SettingsDialog({
     }
     if (["web_search_provider", "tavily_api_key", "brave_search_api_key", "exa_api_key"].includes(key)) {
       setWebSearchTestStatus("");
+    }
+    if (
+      [
+        "voice_enabled",
+        "voice_tts_backend",
+        "voice_id",
+        "voice_speed",
+        "voice_emotion",
+        "voice_streaming",
+        "voice_tts_fallback",
+        "media_base_url",
+        "media_api_key",
+        "tts_model",
+        "tts_voice",
+      ].includes(key)
+    ) {
+      setVoiceTestStatus("");
     }
   };
   const runMemoryAction = async (action: () => Promise<MemoryPanelState>) => {
@@ -1486,6 +1506,19 @@ export default function SettingsDialog({
     }
   }
 
+  async function checkVoiceTtsConnection() {
+    setVoiceTestBusy(true);
+    setVoiceTestStatus("");
+    try {
+      const result = await api.voiceTtsCheck(form);
+      setVoiceTestStatus(formatConnectionTestResult(result));
+    } catch (err) {
+      setVoiceTestStatus(String(err));
+    } finally {
+      setVoiceTestBusy(false);
+    }
+  }
+
   async function probeEmbedding() {
     setEmbedProbeBusy(true);
     setEmbedProbeStatus("");
@@ -1654,6 +1687,10 @@ export default function SettingsDialog({
       voice_stt_backend: form.voice_stt_backend.trim() || "none",
       voice_tts_backend: form.voice_tts_backend.trim() || "none",
       voice_id: form.voice_id.trim(),
+      voice_speed: Math.min(Math.max(Number(form.voice_speed) || 1, 0.5), 2),
+      voice_emotion: form.voice_emotion.trim(),
+      voice_streaming: form.voice_streaming,
+      voice_tts_fallback: form.voice_tts_fallback,
       ocr_model_source: form.ocr_model_source || "modelscope",
       web_search_provider: normalizeWebSearchProvider(form.web_search_provider),
       tavily_api_key: form.tavily_api_key.trim(),
@@ -4371,6 +4408,74 @@ export default function SettingsDialog({
                           onChange={(e) => set("media_base_url", e.target.value)}
                         />
                       </Field>
+                    </div>
+                    <div className="mt-4 grid gap-4 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+                      <Field label={t("settings.voice.speed")} help={t("settings.voice.speedHelp")}>
+                        <div className="flex items-center gap-3">
+                          <input
+                            className="h-2 min-w-0 flex-1 accent-[#111827]"
+                            type="range"
+                            min={0.5}
+                            max={2}
+                            step={0.05}
+                            value={form.voice_speed}
+                            onChange={(e) => set("voice_speed", Number(e.target.value) || 1)}
+                          />
+                          <input
+                            className={`${inputCls} w-20 shrink-0 text-center`}
+                            type="number"
+                            min={0.5}
+                            max={2}
+                            step={0.05}
+                            value={form.voice_speed}
+                            onChange={(e) => set("voice_speed", Number(e.target.value) || 1)}
+                          />
+                        </div>
+                      </Field>
+                      <Field label={t("settings.voice.emotion")} help={t("settings.voice.emotionHelp")}>
+                        <input
+                          className={inputCls}
+                          value={form.voice_emotion}
+                          placeholder="neutral / happy / calm"
+                          onChange={(e) => set("voice_emotion", e.target.value)}
+                        />
+                      </Field>
+                    </div>
+                    <div className="mt-4 grid gap-3 md:grid-cols-2">
+                      <ToggleRow
+                        checked={form.voice_streaming}
+                        title={t("settings.voice.streaming")}
+                        description={t("settings.voice.streamingDesc")}
+                        onChange={(checked) => set("voice_streaming", checked)}
+                      />
+                      <ToggleRow
+                        checked={form.voice_tts_fallback}
+                        title={t("settings.voice.fallback")}
+                        description={t("settings.voice.fallbackDesc")}
+                        onChange={(checked) => set("voice_tts_fallback", checked)}
+                      />
+                    </div>
+                    <div className="mt-4 flex flex-wrap items-center gap-3">
+                      <button
+                        className={secondaryButtonCls}
+                        type="button"
+                        disabled={voiceTestBusy}
+                        onClick={checkVoiceTtsConnection}
+                      >
+                        {voiceTestBusy ? t("settings.provider.testing") : t("settings.voice.testTts")}
+                      </button>
+                      {voiceTestStatus && (
+                        <div
+                          className={`min-w-0 flex-1 rounded-md border px-3 py-2 text-[12px] leading-5 ${
+                            voiceTestStatus.startsWith("TTS connection ok") ||
+                            voiceTestStatus.startsWith("TTS 连接成功")
+                              ? "border-[#d8eadf] bg-[#f6fbf8] text-[#177245]"
+                              : "border-[#f2d7d5] bg-[#fffafa] text-[#8a4b45]"
+                          }`}
+                        >
+                          {voiceTestStatus}
+                        </div>
+                      )}
                     </div>
                     {["gpt-sovits", "gpt_sovits", "gptsovits"].includes(
                       form.voice_tts_backend.trim().toLowerCase(),

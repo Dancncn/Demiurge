@@ -45,6 +45,10 @@ pub struct SpeechSynthesisRequest {
     pub voice: String,
     #[serde(default)]
     pub language_type: String,
+    #[serde(default)]
+    pub speed: Option<f32>,
+    #[serde(default)]
+    pub emotion: String,
 }
 
 #[derive(Serialize)]
@@ -258,7 +262,19 @@ pub async fn synthesize_speech(
     } else {
         request.language_type.trim()
     };
-    let body = json!({
+    let mut parameters = json!({});
+    if let Some(speed) = request.speed {
+        let speed = speed.clamp(0.5, 2.0);
+        if (speed - 1.0).abs() > f32::EPSILON {
+            parameters["speed"] = json!(speed);
+        }
+    }
+    let emotion = request.emotion.trim();
+    if !emotion.is_empty() {
+        parameters["emotion"] = json!(emotion);
+    }
+
+    let mut body = json!({
         "model": model,
         "input": {
             "text": text,
@@ -266,6 +282,13 @@ pub async fn synthesize_speech(
             "language_type": language_type
         }
     });
+    if parameters
+        .as_object()
+        .map(|m| !m.is_empty())
+        .unwrap_or(false)
+    {
+        body["parameters"] = parameters;
+    }
     let value = dashscope_post(state, &settings, body).await?;
     let url = value["output"]["audio"]["url"]
         .as_str()

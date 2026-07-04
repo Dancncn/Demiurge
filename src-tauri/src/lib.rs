@@ -2232,6 +2232,7 @@ pub fn run() {
             voice::voice_status,
             voice::voice_transcribe,
             voice::voice_synthesize,
+            voice::voice_tts_check,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

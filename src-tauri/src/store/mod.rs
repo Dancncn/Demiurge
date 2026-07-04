@@ -126,6 +126,18 @@ fn default_voice_tts_backend() -> String {
     "none".to_string()
 }
 
+fn default_voice_speed() -> f32 {
+    1.0
+}
+
+fn default_voice_streaming() -> bool {
+    false
+}
+
+fn default_voice_tts_fallback() -> bool {
+    true
+}
+
 fn default_computer_use_enabled() -> bool {
     DEFAULT_COMPUTER_USE_ENABLED
 }
@@ -363,6 +375,14 @@ pub struct Settings {
     pub voice_tts_backend: String,
     #[serde(default)]
     pub voice_id: String,
+    #[serde(default = "default_voice_speed")]
+    pub voice_speed: f32,
+    #[serde(default)]
+    pub voice_emotion: String,
+    #[serde(default = "default_voice_streaming")]
+    pub voice_streaming: bool,
+    #[serde(default = "default_voice_tts_fallback")]
+    pub voice_tts_fallback: bool,
     #[serde(default = "default_computer_use_enabled")]
     pub computer_use_enabled: bool,
     #[serde(default = "default_ocr_model_source")]
@@ -445,6 +465,10 @@ impl Default for Settings {
             voice_stt_backend: default_voice_stt_backend(),
             voice_tts_backend: default_voice_tts_backend(),
             voice_id: String::new(),
+            voice_speed: default_voice_speed(),
+            voice_emotion: String::new(),
+            voice_streaming: default_voice_streaming(),
+            voice_tts_fallback: default_voice_tts_fallback(),
             computer_use_enabled: DEFAULT_COMPUTER_USE_ENABLED,
             ocr_model_source: default_ocr_model_source(),
             web_search_provider: default_web_search_provider(),
@@ -639,6 +663,10 @@ mod tests {
         assert!(!settings.voice_enabled);
         assert_eq!(settings.voice_stt_backend, "none");
         assert_eq!(settings.voice_tts_backend, "none");
+        assert_eq!(settings.voice_speed, 1.0);
+        assert!(settings.voice_emotion.is_empty());
+        assert!(!settings.voice_streaming);
+        assert!(settings.voice_tts_fallback);
         assert!(!settings.computer_use_enabled);
         assert_eq!(settings.ocr_model_source, "modelscope");
         assert_eq!(settings.web_search_provider, "auto");

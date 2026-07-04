@@ -9,11 +9,16 @@
 //! HTTP service for one-shot synthesis.
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine};
 use serde::Serialize;
-use serde_json::json;
+use serde_json::{json, Value};
+use std::time::{Duration, Instant};
 use tauri::State;
 
-use crate::media::{self, dashscope_api_key, dashscope_base_url, SpeechSynthesisRequest};
+use crate::connection_tests::ConnectionTestResult;
+use crate::media::{dashscope_api_key, dashscope_base_url};
 use crate::store::Settings;
+
+const VOICE_CONNECTION_TEST_TIMEOUT_SECS: u64 = 20;
+const VOICE_CONNECTION_TEST_TEXT: &str = "Demiurge voice test.";
 
 #[derive(Clone, Debug, Serialize)]
 pub struct VoiceStatus {
@@ -23,6 +28,12 @@ pub struct VoiceStatus {
     pub voice_id: String,
     pub ready: bool,
     pub reason: String,
+    pub tts_ready: bool,
+    pub tts_reason: String,
+    pub speed: f32,
+    pub emotion: String,
+    pub streaming: bool,
+    pub fallback_enabled: bool,
 }
 
 /// Whether STT is actually usable for the given settings: enabled, a supported
@@ -68,10 +79,49 @@ fn stt_ready(settings: &Settings) -> (bool, String) {
     }
 }
 
+fn tts_ready(settings: &Settings) -> (bool, String) {
+    if !settings.voice_enabled {
+        return (false, "语音未启用。".to_string());
+    }
+    match normalize_tts_backend(&settings.voice_tts_backend).as_str() {
+        "dashscope" => {
+            if dashscope_api_key(settings).is_some() {
+                (true, "DashScope TTS 已就绪。".to_string())
+            } else {
+                (
+                    false,
+                    "DashScope TTS 未找到 API 密钥（请在「媒体」或当前供应商中配置）。".to_string(),
+                )
+            }
+        }
+        "gpt-sovits" => {
+            if resolve_voice_id(settings, None).is_some() {
+                (true, "GPT-SoVITS 本地 TTS 已配置参考音频。".to_string())
+            } else {
+                (
+                    false,
+                    "GPT-SoVITS 需要参考音频路径，请填写 Voice ID 或 DEMIURGE_GPT_SOVITS_REF_AUDIO。"
+                        .to_string(),
+                )
+            }
+        }
+        "cosyvoice" => (
+            true,
+            "CosyVoice 本地 TTS 将通过本地 HTTP 服务测试。".to_string(),
+        ),
+        "none" | "" => (false, "未选择 TTS 后端。".to_string()),
+        other => (
+            false,
+            format!("未知的 TTS 后端「{other}」（支持 dashscope / gpt-sovits / cosyvoice）。"),
+        ),
+    }
+}
+
 #[tauri::command]
 pub fn voice_status(state: State<'_, crate::AppState>) -> VoiceStatus {
     let settings = state.settings.lock().unwrap().clone();
     let (ready, reason) = stt_ready(&settings);
+    let (tts_ready, tts_reason) = tts_ready(&settings);
     VoiceStatus {
         enabled: settings.voice_enabled,
         stt_backend: settings.voice_stt_backend.clone(),
@@ -79,6 +129,12 @@ pub fn voice_status(state: State<'_, crate::AppState>) -> VoiceStatus {
         voice_id: settings.voice_id.clone(),
         ready,
         reason,
+        tts_ready,
+        tts_reason,
+        speed: normalized_speed(settings.voice_speed),
+        emotion: settings.voice_emotion.clone(),
+        streaming: settings.voice_streaming,
+        fallback_enabled: settings.voice_tts_fallback,
     }
 }
 
@@ -194,9 +250,11 @@ async fn transcribe_multipart(
 pub async fn voice_synthesize(
     text: String,
     voice_id: Option<String>,
+    speed: Option<f32>,
+    emotion: Option<String>,
+    streaming: Option<bool>,
     state: State<'_, crate::AppState>,
 ) -> Result<String, String> {
-    let requested_voice_id = voice_id;
     let settings = state.settings.lock().unwrap().clone();
     if !settings.voice_enabled {
         return Err("语音未启用。".to_string());
@@ -206,46 +264,223 @@ pub async fn voice_synthesize(
         return Err("Speech synthesis text is required.".to_string());
     }
 
-    let backend = settings.voice_tts_backend.trim().to_ascii_lowercase();
-    match backend.as_str() {
-        "dashscope" | "aliyun" | "bailian" | "media" => {
-            let voice = requested_voice_id
-                .as_deref()
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .or_else(|| {
-                    let value = settings.voice_id.trim();
-                    (!value.is_empty()).then_some(value)
+    let options = TtsOptions::from_settings(&settings, voice_id, speed, emotion, streaming);
+    let backend = normalize_tts_backend(&settings.voice_tts_backend);
+    match synthesize_with_backend(state.inner(), &settings, text, &backend, &options).await {
+        Ok(url) => Ok(url),
+        Err(primary_error)
+            if options.allow_fallback
+                && backend != "dashscope"
+                && dashscope_api_key(&settings).is_some() =>
+        {
+            synthesize_with_backend(state.inner(), &settings, text, "dashscope", &options)
+                .await
+                .map_err(|fallback_error| {
+                    format!("{primary_error}\nDashScope fallback also failed: {fallback_error}")
                 })
-                .or_else(|| {
-                    let value = settings.tts_voice.trim();
-                    (!value.is_empty()).then_some(value)
-                })
-                .unwrap_or("Cherry")
-                .to_string();
-            let result = media::synthesize_speech(
-                state.inner(),
-                SpeechSynthesisRequest {
-                    text: text.to_string(),
-                    model: settings.tts_model.clone(),
-                    voice,
-                    language_type: "Chinese".to_string(),
-                },
-            )
-            .await?;
-            Ok(result.url)
         }
-        "gpt-sovits" | "gpt_sovits" | "gptsovits" => {
-            synthesize_with_gpt_sovits(&state.http, &settings, text, requested_voice_id).await
+        Err(error) => Err(error),
+    }
+}
+
+#[tauri::command]
+pub async fn voice_tts_check(
+    settings: Settings,
+    state: State<'_, crate::AppState>,
+) -> Result<ConnectionTestResult, String> {
+    if !settings.voice_enabled {
+        return Err("语音未启用。".to_string());
+    }
+    let backend = normalize_tts_backend(&settings.voice_tts_backend);
+    let options = TtsOptions::from_settings(&settings, None, None, None, Some(false));
+    let target = voice_tts_target(&settings, &backend);
+    let started = Instant::now();
+    let url = synthesize_with_backend(
+        state.inner(),
+        &settings,
+        VOICE_CONNECTION_TEST_TEXT,
+        &backend,
+        &options,
+    )
+    .await?;
+    Ok(ConnectionTestResult {
+        ok: true,
+        target,
+        detail: format!(
+            "TTS connection ok. Received {} audio reference.",
+            if url.starts_with("data:") {
+                "inline"
+            } else {
+                "remote"
+            }
+        ),
+        latency_ms: started.elapsed().as_millis() as u64,
+    })
+}
+
+#[derive(Clone, Debug)]
+struct TtsOptions {
+    requested_voice_id: Option<String>,
+    speed: f32,
+    emotion: String,
+    streaming: bool,
+    allow_fallback: bool,
+}
+
+impl TtsOptions {
+    fn from_settings(
+        settings: &Settings,
+        requested_voice_id: Option<String>,
+        speed: Option<f32>,
+        emotion: Option<String>,
+        streaming: Option<bool>,
+    ) -> Self {
+        TtsOptions {
+            requested_voice_id,
+            speed: normalized_speed(speed.unwrap_or(settings.voice_speed)),
+            emotion: emotion
+                .unwrap_or_else(|| settings.voice_emotion.clone())
+                .trim()
+                .to_string(),
+            streaming: streaming.unwrap_or(settings.voice_streaming),
+            allow_fallback: settings.voice_tts_fallback,
         }
+    }
+}
+
+async fn synthesize_with_backend(
+    state: &crate::AppState,
+    settings: &Settings,
+    text: &str,
+    backend: &str,
+    options: &TtsOptions,
+) -> Result<String, String> {
+    match backend {
+        "dashscope" => synthesize_with_dashscope(state, settings, text, options).await,
+        "gpt-sovits" => synthesize_with_gpt_sovits(&state.http, settings, text, options).await,
+        "cosyvoice" => synthesize_with_cosyvoice(&state.http, settings, text, options).await,
         "none" | "" => Err(
-            "No TTS backend selected. Set voice TTS backend to dashscope or gpt-sovits."
+            "No TTS backend selected. Set voice TTS backend to dashscope, gpt-sovits, or cosyvoice."
                 .to_string(),
         ),
         other => Err(format!(
-            "Unknown TTS backend `{other}`. Supported backends: dashscope, gpt-sovits."
+            "Unknown TTS backend `{other}`. Supported backends: dashscope, gpt-sovits, cosyvoice."
         )),
     }
+}
+
+async fn synthesize_with_dashscope(
+    state: &crate::AppState,
+    settings: &Settings,
+    text: &str,
+    options: &TtsOptions,
+) -> Result<String, String> {
+    let voice = resolve_dashscope_voice(settings, options);
+    let key = dashscope_api_key(settings).ok_or_else(|| {
+        "Media API Key is missing. Configure DashScope in Settings > Providers or Media."
+            .to_string()
+    })?;
+    let model = settings.tts_model.trim();
+    let model = if model.is_empty() {
+        "qwen3-tts-flash"
+    } else {
+        model
+    };
+    let mut parameters = json!({});
+    if (options.speed - 1.0).abs() > f32::EPSILON {
+        parameters["speed"] = json!(options.speed);
+    }
+    if !options.emotion.is_empty() {
+        parameters["emotion"] = json!(options.emotion);
+    }
+    let mut body = json!({
+        "model": model,
+        "input": {
+            "text": text,
+            "voice": voice,
+            "language_type": "Chinese"
+        }
+    });
+    if parameters
+        .as_object()
+        .map(|m| !m.is_empty())
+        .unwrap_or(false)
+    {
+        body["parameters"] = parameters;
+    }
+    let url = format!(
+        "{}/api/v1/services/aigc/multimodal-generation/generation",
+        dashscope_base_url(settings)
+    );
+    let resp = state
+        .http
+        .post(url)
+        .timeout(Duration::from_secs(VOICE_CONNECTION_TEST_TIMEOUT_SECS))
+        .bearer_auth(key)
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("DashScope TTS request failed: {e}"))?;
+    let status = resp.status();
+    let text = resp.text().await.unwrap_or_default();
+    if !status.is_success() {
+        return Err(format!("DashScope TTS returned HTTP {status}: {text}"));
+    }
+    let value: Value = serde_json::from_str(&text)
+        .map_err(|e| format!("DashScope TTS returned invalid JSON: {e}"))?;
+    value["output"]["audio"]["url"]
+        .as_str()
+        .map(str::to_string)
+        .ok_or_else(|| "DashScope TTS returned no audio URL.".to_string())
+}
+
+fn normalize_tts_backend(value: &str) -> String {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "aliyun" | "bailian" | "media" => "dashscope".to_string(),
+        "gpt_sovits" | "gptsovits" => "gpt-sovits".to_string(),
+        "cosy" | "cosy_voice" | "cosy-voice" => "cosyvoice".to_string(),
+        other => other.to_string(),
+    }
+}
+
+fn voice_tts_target(settings: &Settings, backend: &str) -> String {
+    match backend {
+        "dashscope" => format!(
+            "{}/api/v1/services/aigc/multimodal-generation/generation ({})",
+            dashscope_base_url(settings),
+            settings.tts_model.trim()
+        ),
+        "gpt-sovits" | "cosyvoice" => format!("{}/tts ({backend})", gpt_sovits_base_url(settings)),
+        other => other.to_string(),
+    }
+}
+
+fn normalized_speed(speed: f32) -> f32 {
+    if speed.is_finite() {
+        (speed * 100.0).round().clamp(50.0, 200.0) / 100.0
+    } else {
+        1.0
+    }
+}
+
+fn resolve_voice_id(settings: &Settings, requested: Option<&str>) -> Option<String> {
+    requested
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .or_else(|| {
+            let value = settings.voice_id.trim();
+            (!value.is_empty()).then_some(value)
+        })
+        .map(str::to_string)
+}
+
+fn resolve_dashscope_voice(settings: &Settings, options: &TtsOptions) -> String {
+    resolve_voice_id(settings, options.requested_voice_id.as_deref())
+        .or_else(|| {
+            let value = settings.tts_voice.trim();
+            (!value.is_empty()).then(|| value.to_string())
+        })
+        .unwrap_or_else(|| "Cherry".to_string())
 }
 
 fn env_value(name: &str) -> Option<String> {
@@ -268,17 +503,9 @@ async fn synthesize_with_gpt_sovits(
     http: &reqwest::Client,
     settings: &Settings,
     text: &str,
-    requested_voice_id: Option<String>,
+    options: &TtsOptions,
 ) -> Result<String, String> {
-    let ref_audio_path = requested_voice_id
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .or_else(|| {
-            let value = settings.voice_id.trim();
-            (!value.is_empty()).then_some(value)
-        })
-        .map(str::to_string)
+    let ref_audio_path = resolve_voice_id(settings, options.requested_voice_id.as_deref())
         .or_else(|| env_value("DEMIURGE_GPT_SOVITS_REF_AUDIO"))
         .ok_or_else(|| {
             "GPT-SoVITS requires a reference audio path. Set Voice ID or DEMIURGE_GPT_SOVITS_REF_AUDIO."
@@ -290,7 +517,7 @@ async fn synthesize_with_gpt_sovits(
         env_value("DEMIURGE_GPT_SOVITS_PROMPT_LANG").unwrap_or_else(|| "zh".to_string());
     let text_lang = env_value("DEMIURGE_GPT_SOVITS_TEXT_LANG").unwrap_or_else(|| "zh".to_string());
     let url = format!("{}/tts", gpt_sovits_base_url(settings));
-    let body = json!({
+    let mut body = json!({
         "text": text,
         "text_lang": text_lang,
         "ref_audio_path": ref_audio_path,
@@ -299,16 +526,60 @@ async fn synthesize_with_gpt_sovits(
         "text_split_method": "cut5",
         "batch_size": 1,
         "media_type": "wav",
-        "streaming_mode": false,
+        "streaming_mode": options.streaming,
         "parallel_infer": true,
+        "speed_factor": options.speed,
     });
+    if !options.emotion.is_empty() {
+        body["emotion"] = json!(options.emotion);
+    }
 
     let resp = http
         .post(url)
+        .timeout(Duration::from_secs(VOICE_CONNECTION_TEST_TIMEOUT_SECS))
         .json(&body)
         .send()
         .await
         .map_err(|e| format!("GPT-SoVITS request failed: {e}"))?;
+    decode_audio_response(resp, "GPT-SoVITS").await
+}
+
+async fn synthesize_with_cosyvoice(
+    http: &reqwest::Client,
+    settings: &Settings,
+    text: &str,
+    options: &TtsOptions,
+) -> Result<String, String> {
+    let voice = resolve_voice_id(settings, options.requested_voice_id.as_deref())
+        .or_else(|| {
+            let value = settings.tts_voice.trim();
+            (!value.is_empty()).then(|| value.to_string())
+        })
+        .unwrap_or_else(|| "default".to_string());
+    let url = format!("{}/tts", gpt_sovits_base_url(settings));
+    let mut body = json!({
+        "text": text,
+        "voice": voice,
+        "speaker": voice,
+        "speed": options.speed,
+        "stream": options.streaming,
+        "streaming_mode": options.streaming,
+        "format": "wav",
+    });
+    if !options.emotion.is_empty() {
+        body["emotion"] = json!(options.emotion);
+    }
+    let resp = http
+        .post(url)
+        .timeout(Duration::from_secs(VOICE_CONNECTION_TEST_TIMEOUT_SECS))
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("CosyVoice request failed: {e}"))?;
+    decode_audio_response(resp, "CosyVoice").await
+}
+
+async fn decode_audio_response(resp: reqwest::Response, label: &str) -> Result<String, String> {
     let status = resp.status();
     let content_type = resp
         .headers()
@@ -323,13 +594,38 @@ async fn synthesize_with_gpt_sovits(
     let bytes = resp
         .bytes()
         .await
-        .map_err(|e| format!("GPT-SoVITS response read failed: {e}"))?;
+        .map_err(|e| format!("{label} response read failed: {e}"))?;
     if !status.is_success() {
         let detail = String::from_utf8_lossy(&bytes);
-        return Err(format!("GPT-SoVITS returned HTTP {status}: {detail}"));
+        return Err(format!("{label} returned HTTP {status}: {detail}"));
     }
     if bytes.is_empty() {
-        return Err("GPT-SoVITS returned empty audio.".to_string());
+        return Err(format!("{label} returned empty audio."));
+    }
+    if content_type.contains("json") {
+        let value: Value = serde_json::from_slice(&bytes)
+            .map_err(|e| format!("{label} returned invalid JSON audio response: {e}"))?;
+        if let Some(url) = value
+            .pointer("/url")
+            .and_then(Value::as_str)
+            .or_else(|| value.pointer("/audio_url").and_then(Value::as_str))
+            .or_else(|| value.pointer("/output/audio/url").and_then(Value::as_str))
+        {
+            return Ok(url.to_string());
+        }
+        if let Some(data) = value
+            .pointer("/audio")
+            .and_then(Value::as_str)
+            .or_else(|| value.pointer("/data").and_then(Value::as_str))
+        {
+            if data.starts_with("data:") {
+                return Ok(data.to_string());
+            }
+            return Ok(format!("data:audio/wav;base64,{data}"));
+        }
+        return Err(format!(
+            "{label} JSON response did not include an audio URL or base64 audio."
+        ));
     }
 
     Ok(format!(
@@ -337,4 +633,47 @@ async fn synthesize_with_gpt_sovits(
         content_type,
         BASE64_STANDARD.encode(bytes)
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalizes_tts_backend_aliases() {
+        assert_eq!(normalize_tts_backend("gpt_sovits"), "gpt-sovits");
+        assert_eq!(normalize_tts_backend("cosy-voice"), "cosyvoice");
+        assert_eq!(normalize_tts_backend("media"), "dashscope");
+    }
+
+    #[test]
+    fn clamps_voice_speed_for_provider_requests() {
+        assert_eq!(normalized_speed(0.1), 0.5);
+        assert_eq!(normalized_speed(2.8), 2.0);
+        assert_eq!(normalized_speed(f32::NAN), 1.0);
+        assert_eq!(normalized_speed(1.234), 1.23);
+    }
+
+    #[test]
+    fn tts_options_prefer_explicit_values() {
+        let settings = Settings {
+            voice_speed: 0.9,
+            voice_emotion: "calm".to_string(),
+            voice_streaming: false,
+            voice_tts_fallback: true,
+            ..Settings::default()
+        };
+        let options = TtsOptions::from_settings(
+            &settings,
+            Some("voice-a".to_string()),
+            Some(1.4),
+            Some("happy".to_string()),
+            Some(true),
+        );
+        assert_eq!(options.requested_voice_id.as_deref(), Some("voice-a"));
+        assert_eq!(options.speed, 1.4);
+        assert_eq!(options.emotion, "happy");
+        assert!(options.streaming);
+        assert!(options.allow_fallback);
+    }
 }
