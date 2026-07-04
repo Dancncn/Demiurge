@@ -243,6 +243,33 @@ body {
   font-optical-sizing: auto;
 }
 
+html[data-window="desktop-companion"],
+html[data-window="desktop-companion"] body,
+html[data-window="desktop-companion"] #app {
+  background: transparent !important;
+}
+
+.desktop-companion-shell,
+.desktop-companion-shell * {
+  -webkit-app-region: no-drag;
+  user-select: none;
+}
+
+.desktop-companion-drag {
+  -webkit-app-region: drag;
+}
+
+.desktop-companion-control {
+  -webkit-app-region: no-drag;
+}
+
+.line-clamp-2 {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
 .app-titlebar {
   display: flex;
   height: 34px;

@@ -102,6 +102,10 @@ fn default_companion_focus() -> String {
     "available".to_string()
 }
 
+fn default_desktop_companion_always_on_top() -> bool {
+    true
+}
+
 fn default_weather_enabled() -> bool {
     DEFAULT_WEATHER_ENABLED
 }
@@ -124,6 +128,26 @@ fn default_voice_stt_backend() -> String {
 
 fn default_voice_tts_backend() -> String {
     "none".to_string()
+}
+
+fn default_voice_speed() -> f32 {
+    1.0
+}
+
+fn default_voice_streaming() -> bool {
+    false
+}
+
+fn default_voice_tts_fallback() -> bool {
+    true
+}
+
+fn default_voice_hotkey_enabled() -> bool {
+    true
+}
+
+fn default_voice_hotkey() -> String {
+    "Ctrl+Shift+Space".to_string()
 }
 
 fn default_computer_use_enabled() -> bool {
@@ -347,6 +371,14 @@ pub struct Settings {
     pub companion_focus: String,
     #[serde(default)]
     pub companion_do_not_disturb: String,
+    #[serde(default)]
+    pub desktop_companion_enabled: bool,
+    #[serde(default = "default_desktop_companion_always_on_top")]
+    pub desktop_companion_always_on_top: bool,
+    #[serde(default)]
+    pub desktop_companion_click_through: bool,
+    #[serde(default)]
+    pub desktop_companion_collapsed: bool,
     #[serde(default = "default_weather_enabled")]
     pub weather_enabled: bool,
     #[serde(default = "default_weather_location_mode")]
@@ -363,6 +395,18 @@ pub struct Settings {
     pub voice_tts_backend: String,
     #[serde(default)]
     pub voice_id: String,
+    #[serde(default = "default_voice_speed")]
+    pub voice_speed: f32,
+    #[serde(default)]
+    pub voice_emotion: String,
+    #[serde(default = "default_voice_streaming")]
+    pub voice_streaming: bool,
+    #[serde(default = "default_voice_tts_fallback")]
+    pub voice_tts_fallback: bool,
+    #[serde(default = "default_voice_hotkey_enabled")]
+    pub voice_hotkey_enabled: bool,
+    #[serde(default = "default_voice_hotkey")]
+    pub voice_hotkey: String,
     #[serde(default = "default_computer_use_enabled")]
     pub computer_use_enabled: bool,
     #[serde(default = "default_ocr_model_source")]
@@ -437,6 +481,10 @@ impl Default for Settings {
             companion_energy: default_companion_energy(),
             companion_focus: default_companion_focus(),
             companion_do_not_disturb: String::new(),
+            desktop_companion_enabled: false,
+            desktop_companion_always_on_top: default_desktop_companion_always_on_top(),
+            desktop_companion_click_through: false,
+            desktop_companion_collapsed: false,
             weather_enabled: DEFAULT_WEATHER_ENABLED,
             weather_location_mode: default_weather_location_mode(),
             weather_city: String::new(),
@@ -445,6 +493,12 @@ impl Default for Settings {
             voice_stt_backend: default_voice_stt_backend(),
             voice_tts_backend: default_voice_tts_backend(),
             voice_id: String::new(),
+            voice_speed: default_voice_speed(),
+            voice_emotion: String::new(),
+            voice_streaming: default_voice_streaming(),
+            voice_tts_fallback: default_voice_tts_fallback(),
+            voice_hotkey_enabled: default_voice_hotkey_enabled(),
+            voice_hotkey: default_voice_hotkey(),
             computer_use_enabled: DEFAULT_COMPUTER_USE_ENABLED,
             ocr_model_source: default_ocr_model_source(),
             web_search_provider: default_web_search_provider(),
@@ -639,6 +693,16 @@ mod tests {
         assert!(!settings.voice_enabled);
         assert_eq!(settings.voice_stt_backend, "none");
         assert_eq!(settings.voice_tts_backend, "none");
+        assert_eq!(settings.voice_speed, 1.0);
+        assert!(settings.voice_emotion.is_empty());
+        assert!(!settings.voice_streaming);
+        assert!(settings.voice_tts_fallback);
+        assert!(settings.voice_hotkey_enabled);
+        assert_eq!(settings.voice_hotkey, "Ctrl+Shift+Space");
+        assert!(!settings.desktop_companion_enabled);
+        assert!(settings.desktop_companion_always_on_top);
+        assert!(!settings.desktop_companion_click_through);
+        assert!(!settings.desktop_companion_collapsed);
         assert!(!settings.computer_use_enabled);
         assert_eq!(settings.ocr_model_source, "modelscope");
         assert_eq!(settings.web_search_provider, "auto");

@@ -160,6 +160,28 @@ export function MaximizeIcon(props: IconProps) {
   );
 }
 
+export function PinIcon(props: IconProps) {
+  return (
+    <Icon strokeWidth={1.8} {...props}>
+      <path d="M12 17v5" />
+      <path d="M5 17h14" />
+      <path d="m8 3 8 8" />
+      <path d="m7 8 9 9" />
+      <path d="M14 4 7 11" />
+      <path d="m17 7-7 7" />
+    </Icon>
+  );
+}
+
+export function MousePointerIcon(props: IconProps) {
+  return (
+    <Icon strokeWidth={1.8} {...props}>
+      <path d="M4 3 19 14l-7 1.5L8.5 22Z" />
+      <path d="m13 14 5 5" />
+    </Icon>
+  );
+}
+
 export function SettingsIcon(props: IconProps) {
   return (
     <Icon strokeWidth={1.7} {...props}>
@@ -289,6 +311,14 @@ export function VolumeIcon(props: IconProps) {
       <path d="M11 5 6 9H3v6h3l5 4Z" />
       <path d="M15.5 8.5a5 5 0 0 1 0 7" />
       <path d="M18.5 5.5a9 9 0 0 1 0 13" />
+    </Icon>
+  );
+}
+
+export function PhoneIcon(props: IconProps) {
+  return (
+    <Icon strokeWidth={1.8} {...props}>
+      <path d="M22 16.9v3a2 2 0 0 1-2.18 2 19.8 19.8 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.1 4.18 2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.72c.12.9.33 1.77.63 2.61a2 2 0 0 1-.45 2.11L8 9.72a16 16 0 0 0 6.28 6.28l1.28-1.28a2 2 0 0 1 2.11-.45c.84.3 1.71.51 2.61.63A2 2 0 0 1 22 16.9Z" />
     </Icon>
   );
 }

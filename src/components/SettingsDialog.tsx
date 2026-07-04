@@ -113,6 +113,7 @@ const voiceTtsOptions = [
   { value: "none", labelKey: "settings.voice.backend.none", helpKey: "settings.voice.tts.noneHelp" },
   { value: "dashscope", labelKey: "settings.voice.backend.dashscope", helpKey: "settings.voice.tts.dashscopeHelp" },
   { value: "gpt-sovits", labelKey: "settings.voice.backend.gptSovits", helpKey: "settings.voice.tts.gptSovitsHelp" },
+  { value: "cosyvoice", labelKey: "settings.voice.backend.cosyVoice", helpKey: "settings.voice.tts.cosyVoiceHelp" },
 ];
 
 const inputCls =
@@ -608,6 +609,8 @@ export default function SettingsDialog({
   const [embedProbeStatus, setEmbedProbeStatus] = useState("");
   const [webSearchTestBusy, setWebSearchTestBusy] = useState(false);
   const [webSearchTestStatus, setWebSearchTestStatus] = useState("");
+  const [voiceTestBusy, setVoiceTestBusy] = useState(false);
+  const [voiceTestStatus, setVoiceTestStatus] = useState("");
   const [ocrStatus, setOcrStatus] = useState<OcrModelStatus | null>(null);
   const [ocrProgress, setOcrProgress] = useState<OcrDownloadProgress | null>(null);
   const [ocrBusy, setOcrBusy] = useState(false);
@@ -895,6 +898,23 @@ export default function SettingsDialog({
     }
     if (["web_search_provider", "tavily_api_key", "brave_search_api_key", "exa_api_key"].includes(key)) {
       setWebSearchTestStatus("");
+    }
+    if (
+      [
+        "voice_enabled",
+        "voice_tts_backend",
+        "voice_id",
+        "voice_speed",
+        "voice_emotion",
+        "voice_streaming",
+        "voice_tts_fallback",
+        "media_base_url",
+        "media_api_key",
+        "tts_model",
+        "tts_voice",
+      ].includes(key)
+    ) {
+      setVoiceTestStatus("");
     }
   };
   const runMemoryAction = async (action: () => Promise<MemoryPanelState>) => {
@@ -1486,6 +1506,19 @@ export default function SettingsDialog({
     }
   }
 
+  async function checkVoiceTtsConnection() {
+    setVoiceTestBusy(true);
+    setVoiceTestStatus("");
+    try {
+      const result = await api.voiceTtsCheck(form);
+      setVoiceTestStatus(formatConnectionTestResult(result));
+    } catch (err) {
+      setVoiceTestStatus(String(err));
+    } finally {
+      setVoiceTestBusy(false);
+    }
+  }
+
   async function probeEmbedding() {
     setEmbedProbeBusy(true);
     setEmbedProbeStatus("");
@@ -1648,12 +1681,22 @@ export default function SettingsDialog({
       companion_energy: form.companion_energy.trim() || "normal",
       companion_focus: form.companion_focus.trim() || "available",
       companion_do_not_disturb: form.companion_do_not_disturb.trim(),
+      desktop_companion_enabled: form.desktop_companion_enabled,
+      desktop_companion_always_on_top: form.desktop_companion_always_on_top,
+      desktop_companion_click_through: form.desktop_companion_click_through,
+      desktop_companion_collapsed: form.desktop_companion_collapsed,
       weather_location_mode: form.weather_location_mode.trim() || "manual",
       weather_city: form.weather_city.trim(),
       weather_provider: form.weather_provider.trim() || "open_meteo",
       voice_stt_backend: form.voice_stt_backend.trim() || "none",
       voice_tts_backend: form.voice_tts_backend.trim() || "none",
       voice_id: form.voice_id.trim(),
+      voice_speed: Math.min(Math.max(Number(form.voice_speed) || 1, 0.5), 2),
+      voice_emotion: form.voice_emotion.trim(),
+      voice_streaming: form.voice_streaming,
+      voice_tts_fallback: form.voice_tts_fallback,
+      voice_hotkey_enabled: form.voice_hotkey_enabled,
+      voice_hotkey: form.voice_hotkey.trim() || "Ctrl+Shift+Space",
       ocr_model_source: form.ocr_model_source || "modelscope",
       web_search_provider: normalizeWebSearchProvider(form.web_search_provider),
       tavily_api_key: form.tavily_api_key.trim(),
@@ -2597,6 +2640,53 @@ export default function SettingsDialog({
                           onChange={(e) => set("companion_do_not_disturb", e.target.value)}
                         />
                       </Field>
+                      <div className="grid gap-4 md:grid-cols-2">
+                        <ToggleRow
+                          checked={form.desktop_companion_enabled}
+                          title={t("settings.companion.desktopShell")}
+                          description={t("settings.companion.desktopShellDesc")}
+                          onChange={(checked) => set("desktop_companion_enabled", checked)}
+                        />
+                        <ToggleRow
+                          checked={form.desktop_companion_always_on_top}
+                          title={t("settings.companion.desktopAlwaysOnTop")}
+                          description={t("settings.companion.desktopAlwaysOnTopDesc")}
+                          onChange={(checked) => set("desktop_companion_always_on_top", checked)}
+                        />
+                        <ToggleRow
+                          checked={form.desktop_companion_click_through}
+                          title={t("settings.companion.desktopClickThrough")}
+                          description={t("settings.companion.desktopClickThroughDesc")}
+                          onChange={(checked) => set("desktop_companion_click_through", checked)}
+                        />
+                        <ToggleRow
+                          checked={form.desktop_companion_collapsed}
+                          title={t("settings.companion.desktopCollapsed")}
+                          description={t("settings.companion.desktopCollapsedDesc")}
+                          onChange={(checked) => set("desktop_companion_collapsed", checked)}
+                        />
+                      </div>
+                      <div className="rounded-lg border border-[#dfe7f2] bg-[#f7fbff] p-3 text-[12px] leading-5 text-[#526070]">
+                        <div className="mb-2 font-medium text-[#202124]">{t("settings.companion.boundaryTitle")}</div>
+                        <div className="grid gap-2 sm:grid-cols-3">
+                          <span className="rounded-md border border-[#dfe7f2] bg-white px-2 py-1.5">
+                            {form.computer_use_enabled
+                              ? t("settings.companion.boundaryScreenOn")
+                              : t("settings.companion.boundaryScreenOff")}
+                          </span>
+                          <span className="rounded-md border border-[#dfe7f2] bg-white px-2 py-1.5">
+                            {form.voice_enabled
+                              ? t("settings.companion.boundaryMicManual")
+                              : t("settings.companion.boundaryMicOff")}
+                          </span>
+                          <span className="rounded-md border border-[#dfe7f2] bg-white px-2 py-1.5">
+                            {form.weather_enabled && form.weather_location_mode !== "off"
+                              ? t("settings.companion.boundaryLocationCity")
+                              : t("settings.companion.boundaryLocationOff")}
+                          </span>
+                        </div>
+                        <div className="mt-2">{t("settings.companion.boundaryNote")}</div>
+                      </div>
                       <div className="rounded-lg border border-[#f2d7d5] bg-[#fffafa] p-3 text-[12px] leading-5 text-[#8a4b45]">
                         {t("settings.companion.safety")}
                       </div>
@@ -3964,6 +4054,12 @@ export default function SettingsDialog({
                       description={t("settings.ocr.toggleDesc")}
                       onChange={(checked) => set("computer_use_enabled", checked)}
                     />
+                    <div className="mt-3 rounded-lg border border-[#dfe7f2] bg-[#f7fbff] p-3 text-[12px] leading-5 text-[#526070]">
+                      <div className="font-medium text-[#202124]">
+                        {form.computer_use_enabled ? t("settings.ocr.boundaryOn") : t("settings.ocr.boundaryOff")}
+                      </div>
+                      <div className="mt-1">{t("settings.ocr.boundaryNote")}</div>
+                    </div>
                     <div className="mt-4 grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto_auto]">
                       <Field label={t("settings.ocr.modelSource")} help={t(selectedOcrSource.noteKey)}>
                         <Select
@@ -4371,6 +4467,90 @@ export default function SettingsDialog({
                           onChange={(e) => set("media_base_url", e.target.value)}
                         />
                       </Field>
+                    </div>
+                    <div className="mt-4 grid gap-4 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+                      <Field label={t("settings.voice.speed")} help={t("settings.voice.speedHelp")}>
+                        <div className="flex items-center gap-3">
+                          <input
+                            className="h-2 min-w-0 flex-1 accent-[#111827]"
+                            type="range"
+                            min={0.5}
+                            max={2}
+                            step={0.05}
+                            value={form.voice_speed}
+                            onChange={(e) => set("voice_speed", Number(e.target.value) || 1)}
+                          />
+                          <input
+                            className={`${inputCls} w-20 shrink-0 text-center`}
+                            type="number"
+                            min={0.5}
+                            max={2}
+                            step={0.05}
+                            value={form.voice_speed}
+                            onChange={(e) => set("voice_speed", Number(e.target.value) || 1)}
+                          />
+                        </div>
+                      </Field>
+                      <Field label={t("settings.voice.emotion")} help={t("settings.voice.emotionHelp")}>
+                        <input
+                          className={inputCls}
+                          value={form.voice_emotion}
+                          placeholder="neutral / happy / calm"
+                          onChange={(e) => set("voice_emotion", e.target.value)}
+                        />
+                      </Field>
+                    </div>
+                    <div className="mt-4 grid gap-3 md:grid-cols-2">
+                      <ToggleRow
+                        checked={form.voice_streaming}
+                        title={t("settings.voice.streaming")}
+                        description={t("settings.voice.streamingDesc")}
+                        onChange={(checked) => set("voice_streaming", checked)}
+                      />
+                      <ToggleRow
+                        checked={form.voice_tts_fallback}
+                        title={t("settings.voice.fallback")}
+                        description={t("settings.voice.fallbackDesc")}
+                        onChange={(checked) => set("voice_tts_fallback", checked)}
+                      />
+                    </div>
+                    <div className="mt-4 grid gap-4 sm:grid-cols-[minmax(0,1fr)_220px]">
+                      <ToggleRow
+                        checked={form.voice_hotkey_enabled}
+                        title={t("settings.voice.hotkey")}
+                        description={t("settings.voice.hotkeyDesc")}
+                        onChange={(checked) => set("voice_hotkey_enabled", checked)}
+                      />
+                      <Field label={t("settings.voice.hotkeyKeys")}>
+                        <input
+                          className={inputCls}
+                          value={form.voice_hotkey}
+                          placeholder="Ctrl+Shift+Space"
+                          onChange={(e) => set("voice_hotkey", e.target.value)}
+                        />
+                      </Field>
+                    </div>
+                    <div className="mt-4 flex flex-wrap items-center gap-3">
+                      <button
+                        className={secondaryButtonCls}
+                        type="button"
+                        disabled={voiceTestBusy}
+                        onClick={checkVoiceTtsConnection}
+                      >
+                        {voiceTestBusy ? t("settings.provider.testing") : t("settings.voice.testTts")}
+                      </button>
+                      {voiceTestStatus && (
+                        <div
+                          className={`min-w-0 flex-1 rounded-md border px-3 py-2 text-[12px] leading-5 ${
+                            voiceTestStatus.startsWith("TTS connection ok") ||
+                            voiceTestStatus.startsWith("TTS 连接成功")
+                              ? "border-[#d8eadf] bg-[#f6fbf8] text-[#177245]"
+                              : "border-[#f2d7d5] bg-[#fffafa] text-[#8a4b45]"
+                          }`}
+                        >
+                          {voiceTestStatus}
+                        </div>
+                      )}
                     </div>
                     {["gpt-sovits", "gpt_sovits", "gptsovits"].includes(
                       form.voice_tts_backend.trim().toLowerCase(),

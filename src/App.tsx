@@ -32,6 +32,7 @@ import SkillsPanel from "./components/SkillsPanel";
 import FortuneDialog from "./components/FortuneDialog";
 import CompanionCard from "./components/CompanionCard";
 import PomodoroCard from "./components/PomodoroCard";
+import VoiceCallPanel from "./components/VoiceCallPanel";
 import {
   CheckIcon,
   ChevronDownIcon,
@@ -39,14 +40,18 @@ import {
   MaximizeIcon,
   MinimizeIcon,
   PanelLeftIcon,
+  PhoneIcon,
+  PinIcon,
   SettingsIcon,
   SparklesIcon,
+  VolumeIcon,
 } from "./components/Icons";
 import { attachmentKindLabel, buildAttachmentPrompt, formatAttachmentSize, type ProcessedAttachment } from "./lib/fileProcessing";
 import { autoContextBudget } from "./lib/providers";
 import { canDrawToday, isAutoPromptEnabled, isDismissedToday } from "./lib/fortune";
 import { useI18n } from "./lib/i18n";
 import { useClickOutside } from "./lib/hooks";
+import { useStreamingTtsQueue } from "./lib/useStreamingTtsQueue";
 
 const Live2DPanel = lazy(() => import("./components/Live2DPanel"));
 
@@ -84,6 +89,10 @@ const PREVIEW_SETTINGS: Settings = {
   companion_energy: "normal",
   companion_focus: "available",
   companion_do_not_disturb: "",
+  desktop_companion_enabled: false,
+  desktop_companion_always_on_top: true,
+  desktop_companion_click_through: false,
+  desktop_companion_collapsed: false,
   weather_enabled: false,
   weather_location_mode: "manual",
   weather_city: "",
@@ -92,6 +101,12 @@ const PREVIEW_SETTINGS: Settings = {
   voice_stt_backend: "",
   voice_tts_backend: "",
   voice_id: "",
+  voice_speed: 1,
+  voice_emotion: "",
+  voice_streaming: false,
+  voice_tts_fallback: true,
+  voice_hotkey_enabled: true,
+  voice_hotkey: "Ctrl+Shift+Space",
   computer_use_enabled: false,
   ocr_model_source: "modelscope",
   web_search_provider: "auto",
@@ -195,6 +210,27 @@ function buildUserDisplayText(text: string, attachments: ProcessedAttachment[]) 
   return lines.join("\n");
 }
 
+function matchesHotkey(event: KeyboardEvent, hotkey: string) {
+  const parts = hotkey
+    .split("+")
+    .map((part) => part.trim().toLowerCase())
+    .filter(Boolean);
+  if (!parts.length) return false;
+  const wantsCtrl = parts.includes("ctrl") || parts.includes("control");
+  const wantsShift = parts.includes("shift");
+  const wantsAlt = parts.includes("alt") || parts.includes("option");
+  const wantsMeta = parts.includes("meta") || parts.includes("cmd") || parts.includes("command");
+  const keyPart = parts.find((part) => !["ctrl", "control", "shift", "alt", "option", "meta", "cmd", "command"].includes(part));
+  const key = event.key === " " ? "space" : event.key.toLowerCase();
+  return (
+    event.ctrlKey === wantsCtrl &&
+    event.shiftKey === wantsShift &&
+    event.altKey === wantsAlt &&
+    event.metaKey === wantsMeta &&
+    key === (keyPart || "space")
+  );
+}
+
 export default function App() {
   const { t, setLang } = useI18n();
   const [items, setItems] = useState<DisplayItem[]>([]);
@@ -221,6 +257,12 @@ export default function App() {
   const [confirmReq, setConfirmReq] = useState<ConfirmRequestEvent | null>(null);
   const [planState, setPlanState] = useState<PlanState>({ active: false, approved: false });
   const [fortuneOpen, setFortuneOpen] = useState(false);
+  const [spokenRepliesEnabled, setSpokenRepliesEnabled] = useState(false);
+  const [voicePanelOpen, setVoicePanelOpen] = useState(false);
+  const [voiceCallActive, setVoiceCallActive] = useState(false);
+  const [voiceCallStartedAt, setVoiceCallStartedAt] = useState<number | null>(null);
+  const [voiceCallMuted, setVoiceCallMuted] = useState(false);
+  const ttsQueue = useStreamingTtsQueue(settings);
 
   const seq = useRef(0);
   const genId = () => `it_${++seq.current}`;
@@ -240,6 +282,46 @@ export default function App() {
   const toyMenuRef = useRef<HTMLDivElement | null>(null);
   const titleMenuRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const spokenRepliesEnabledRef = useRef(spokenRepliesEnabled);
+  const voiceCallActiveRef = useRef(voiceCallActive);
+  const ttsQueueRef = useRef(ttsQueue);
+
+  useEffect(() => {
+    spokenRepliesEnabledRef.current = spokenRepliesEnabled;
+  }, [spokenRepliesEnabled]);
+
+  useEffect(() => {
+    voiceCallActiveRef.current = voiceCallActive;
+  }, [voiceCallActive]);
+
+  useEffect(() => {
+    ttsQueueRef.current = ttsQueue;
+  }, [ttsQueue]);
+
+  useEffect(() => {
+    ttsQueue.setMuted(voiceCallMuted);
+  }, [voiceCallMuted]);
+
+  useEffect(() => {
+    if (spokenRepliesEnabled && !ttsQueue.available) {
+      setSpokenRepliesEnabled(false);
+      ttsQueue.stop();
+    }
+  }, [spokenRepliesEnabled, ttsQueue.available]);
+
+  useEffect(() => {
+    if (!settings?.voice_hotkey_enabled) return;
+    const hotkey = settings.voice_hotkey || "Ctrl+Shift+Space";
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!matchesHotkey(event, hotkey)) return;
+      event.preventDefault();
+      setVoicePanelOpen(true);
+      if (!voiceCallActiveRef.current) startVoiceCall();
+      window.setTimeout(() => window.dispatchEvent(new Event("demiurge-voice-hotkey")), 0);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [settings?.voice_hotkey_enabled, settings?.voice_hotkey]);
 
   const activeSession = useMemo(() => sessions.find((s) => s.id === activeId) ?? null, [activeId, sessions]);
   const agentsDir = agentPanel.agents_dir || ".demiurge/agents";
@@ -412,9 +494,13 @@ export default function App() {
 
     api
       .listenAgentEvents({
-        onAssistantStart: () => finalizeAssistant(),
+        onAssistantStart: () => {
+          finalizeAssistant();
+          ttsQueueRef.current.beginTurn(spokenRepliesEnabledRef.current || voiceCallActiveRef.current);
+        },
         onAssistantDelta: (text) => {
           pendingStream.current.content += text;
+          if (spokenRepliesEnabledRef.current || voiceCallActiveRef.current) ttsQueueRef.current.pushText(text);
           scheduleFlush();
         },
         onAssistantReasoning: (text) => {
@@ -423,6 +509,7 @@ export default function App() {
         },
         onAssistantDone: (text) => {
           flushPending();
+          if (spokenRepliesEnabledRef.current || voiceCallActiveRef.current) ttsQueueRef.current.flush();
           const id = curAssistantId.current;
           if (id) {
             setItems((p) =>
@@ -440,6 +527,7 @@ export default function App() {
         },
         onAssistantError: (e) => {
           finalizeAssistant();
+          ttsQueueRef.current.stop();
           assistantErrorDelivered.current = true;
           const friendly = friendlyAssistantError(e.message, e);
           setItems((p) => [
@@ -460,6 +548,7 @@ export default function App() {
         },
         onAssistantInterrupted: () => {
           finalizeAssistant();
+          ttsQueueRef.current.stop();
           setBusy(false);
           void refreshGoalPanel();
         },
@@ -834,6 +923,55 @@ export default function App() {
   const canSend = input.trim().length > 0 && !appBusy;
   const titleMenuButtonClass = (menu: typeof titleMenuOpen) =>
     `app-title-menu-button ${titleMenuOpen === menu ? "is-active" : ""}`;
+
+  function toggleSpokenReplies() {
+    setSpokenRepliesEnabled((enabled) => {
+      const next = !enabled;
+      if (!next) ttsQueue.stop();
+      return next;
+    });
+  }
+
+  async function toggleDesktopCompanion() {
+    if (!settings) return;
+    const enabled = !settings.desktop_companion_enabled;
+    const next = {
+      ...settings,
+      desktop_companion_enabled: enabled,
+      desktop_companion_click_through: enabled ? settings.desktop_companion_click_through : false,
+    };
+    setSettings(next);
+    try {
+      await api.saveSettings(next);
+    } catch (e) {
+      console.error("Failed to toggle desktop companion", e);
+      setSettings(settings);
+    }
+  }
+
+  function startVoiceCall() {
+    setVoicePanelOpen(true);
+    setVoiceCallActive(true);
+    setVoiceCallStartedAt((value) => value ?? Date.now());
+    setSpokenRepliesEnabled(false);
+  }
+
+  function endVoiceCall() {
+    setVoiceCallActive(false);
+    setVoiceCallStartedAt(null);
+    ttsQueue.stop();
+  }
+
+  function closeVoicePanel() {
+    endVoiceCall();
+    setVoicePanelOpen(false);
+  }
+
+  async function handleVoiceTranscript(text: string) {
+    if (!text.trim() || appBusy) return false;
+    startVoiceCall();
+    return handleSend(text);
+  }
 
   async function handleWindowMinimize() {
     if (!("__TAURI_INTERNALS__" in window)) return;
@@ -1253,6 +1391,69 @@ export default function App() {
                     </div>
                   )}
 
+                  <button
+                    type="button"
+                    onClick={() => void toggleDesktopCompanion()}
+                    disabled={!settings}
+                    className={`grid h-8 w-8 place-items-center rounded-md transition ${
+                      settings?.desktop_companion_enabled
+                        ? "bg-[#eef5ff] text-[#0b57d0]"
+                        : "text-[#59616d] hover:bg-[#eef1f5]"
+                    } disabled:cursor-not-allowed disabled:opacity-40`}
+                    aria-label={t("desktopCompanion.toggle")}
+                    title={t("desktopCompanion.toggle")}
+                  >
+                    <PinIcon size={16} />
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setVoicePanelOpen(true);
+                      if (!voiceCallActive) startVoiceCall();
+                    }}
+                    disabled={!settings?.voice_enabled}
+                    className={`grid h-8 w-8 place-items-center rounded-md transition ${
+                      voicePanelOpen
+                        ? "bg-[#eef5ff] text-[#0b57d0]"
+                        : "text-[#59616d] hover:bg-[#eef1f5]"
+                    } disabled:cursor-not-allowed disabled:opacity-40`}
+                    aria-label={t("voice.call.title")}
+                    title={t("voice.call.title")}
+                  >
+                    <PhoneIcon size={16} />
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={toggleSpokenReplies}
+                    disabled={!ttsQueue.available}
+                    className={`grid h-8 w-8 place-items-center rounded-md transition ${
+                      spokenRepliesEnabled
+                        ? "bg-[#eef5ff] text-[#0b57d0]"
+                        : "text-[#59616d] hover:bg-[#eef1f5]"
+                    } disabled:cursor-not-allowed disabled:opacity-40`}
+                    aria-label={spokenRepliesEnabled ? t("voice.stopSpokenReplies") : t("voice.startSpokenReplies")}
+                    title={spokenRepliesEnabled ? t("voice.stopSpokenReplies") : t("voice.startSpokenReplies")}
+                  >
+                    <VolumeIcon size={17} />
+                  </button>
+
+                  {(spokenRepliesEnabled || ttsQueue.status.speaking || ttsQueue.status.queued > 0) && (
+                    <div className="hidden max-w-[180px] items-center gap-1 rounded-md border border-[#e2e5ea] bg-white px-2 py-1 text-[11px] text-[#6f7782] lg:flex">
+                      <span
+                        className={`size-1.5 rounded-full ${
+                          ttsQueue.status.speaking ? "bg-[#177245]" : "bg-[#c7ccd4]"
+                        }`}
+                      />
+                      <span className="truncate">
+                        {ttsQueue.status.speaking
+                          ? t("voice.speaking")
+                          : t("voice.queue", { n: ttsQueue.status.queued })}
+                      </span>
+                    </div>
+                  )}
+
                   <div ref={toyMenuRef} className="relative">
                     <button
                       type="button"
@@ -1319,6 +1520,22 @@ export default function App() {
 
               <GoalBar goal={goalPanel} busy={appBusy} progress={goalProgress} onAction={handleGoalAction} />
 
+              <VoiceCallPanel
+                open={voicePanelOpen}
+                active={voiceCallActive}
+                muted={voiceCallMuted}
+                busy={appBusy}
+                startedAt={voiceCallStartedAt}
+                settings={settings}
+                ttsStatus={ttsQueue.status}
+                onStart={startVoiceCall}
+                onEnd={endVoiceCall}
+                onClose={closeVoicePanel}
+                onMutedChange={setVoiceCallMuted}
+                onTranscript={handleVoiceTranscript}
+                onStopAudio={ttsQueue.stop}
+              />
+
               <MessageList
                 items={items}
                 thinking={thinking}
@@ -1345,6 +1562,7 @@ export default function App() {
                 textareaRef={textareaRef}
                 onSubmit={(attachments) => handleSend(undefined, attachments)}
                 onStop={() => {
+                  ttsQueue.stop();
                   void api.interrupt();
                   setConfirmReq(null);
                 }}
