@@ -41,12 +41,14 @@ import {
   PanelLeftIcon,
   SettingsIcon,
   SparklesIcon,
+  VolumeIcon,
 } from "./components/Icons";
 import { attachmentKindLabel, buildAttachmentPrompt, formatAttachmentSize, type ProcessedAttachment } from "./lib/fileProcessing";
 import { autoContextBudget } from "./lib/providers";
 import { canDrawToday, isAutoPromptEnabled, isDismissedToday } from "./lib/fortune";
 import { useI18n } from "./lib/i18n";
 import { useClickOutside } from "./lib/hooks";
+import { useStreamingTtsQueue } from "./lib/useStreamingTtsQueue";
 
 const Live2DPanel = lazy(() => import("./components/Live2DPanel"));
 
@@ -225,6 +227,8 @@ export default function App() {
   const [confirmReq, setConfirmReq] = useState<ConfirmRequestEvent | null>(null);
   const [planState, setPlanState] = useState<PlanState>({ active: false, approved: false });
   const [fortuneOpen, setFortuneOpen] = useState(false);
+  const [spokenRepliesEnabled, setSpokenRepliesEnabled] = useState(false);
+  const ttsQueue = useStreamingTtsQueue(settings);
 
   const seq = useRef(0);
   const genId = () => `it_${++seq.current}`;
@@ -244,6 +248,23 @@ export default function App() {
   const toyMenuRef = useRef<HTMLDivElement | null>(null);
   const titleMenuRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const spokenRepliesEnabledRef = useRef(spokenRepliesEnabled);
+  const ttsQueueRef = useRef(ttsQueue);
+
+  useEffect(() => {
+    spokenRepliesEnabledRef.current = spokenRepliesEnabled;
+  }, [spokenRepliesEnabled]);
+
+  useEffect(() => {
+    ttsQueueRef.current = ttsQueue;
+  }, [ttsQueue]);
+
+  useEffect(() => {
+    if (spokenRepliesEnabled && !ttsQueue.available) {
+      setSpokenRepliesEnabled(false);
+      ttsQueue.stop();
+    }
+  }, [spokenRepliesEnabled, ttsQueue.available]);
 
   const activeSession = useMemo(() => sessions.find((s) => s.id === activeId) ?? null, [activeId, sessions]);
   const agentsDir = agentPanel.agents_dir || ".demiurge/agents";
@@ -416,9 +437,13 @@ export default function App() {
 
     api
       .listenAgentEvents({
-        onAssistantStart: () => finalizeAssistant(),
+        onAssistantStart: () => {
+          finalizeAssistant();
+          ttsQueueRef.current.beginTurn(spokenRepliesEnabledRef.current);
+        },
         onAssistantDelta: (text) => {
           pendingStream.current.content += text;
+          if (spokenRepliesEnabledRef.current) ttsQueueRef.current.pushText(text);
           scheduleFlush();
         },
         onAssistantReasoning: (text) => {
@@ -427,6 +452,7 @@ export default function App() {
         },
         onAssistantDone: (text) => {
           flushPending();
+          if (spokenRepliesEnabledRef.current) ttsQueueRef.current.flush();
           const id = curAssistantId.current;
           if (id) {
             setItems((p) =>
@@ -444,6 +470,7 @@ export default function App() {
         },
         onAssistantError: (e) => {
           finalizeAssistant();
+          ttsQueueRef.current.stop();
           assistantErrorDelivered.current = true;
           const friendly = friendlyAssistantError(e.message, e);
           setItems((p) => [
@@ -464,6 +491,7 @@ export default function App() {
         },
         onAssistantInterrupted: () => {
           finalizeAssistant();
+          ttsQueueRef.current.stop();
           setBusy(false);
           void refreshGoalPanel();
         },
@@ -838,6 +866,14 @@ export default function App() {
   const canSend = input.trim().length > 0 && !appBusy;
   const titleMenuButtonClass = (menu: typeof titleMenuOpen) =>
     `app-title-menu-button ${titleMenuOpen === menu ? "is-active" : ""}`;
+
+  function toggleSpokenReplies() {
+    setSpokenRepliesEnabled((enabled) => {
+      const next = !enabled;
+      if (!next) ttsQueue.stop();
+      return next;
+    });
+  }
 
   async function handleWindowMinimize() {
     if (!("__TAURI_INTERNALS__" in window)) return;
@@ -1257,6 +1293,36 @@ export default function App() {
                     </div>
                   )}
 
+                  <button
+                    type="button"
+                    onClick={toggleSpokenReplies}
+                    disabled={!ttsQueue.available}
+                    className={`grid h-8 w-8 place-items-center rounded-md transition ${
+                      spokenRepliesEnabled
+                        ? "bg-[#eef5ff] text-[#0b57d0]"
+                        : "text-[#59616d] hover:bg-[#eef1f5]"
+                    } disabled:cursor-not-allowed disabled:opacity-40`}
+                    aria-label={spokenRepliesEnabled ? t("voice.stopSpokenReplies") : t("voice.startSpokenReplies")}
+                    title={spokenRepliesEnabled ? t("voice.stopSpokenReplies") : t("voice.startSpokenReplies")}
+                  >
+                    <VolumeIcon size={17} />
+                  </button>
+
+                  {(spokenRepliesEnabled || ttsQueue.status.speaking || ttsQueue.status.queued > 0) && (
+                    <div className="hidden max-w-[180px] items-center gap-1 rounded-md border border-[#e2e5ea] bg-white px-2 py-1 text-[11px] text-[#6f7782] lg:flex">
+                      <span
+                        className={`size-1.5 rounded-full ${
+                          ttsQueue.status.speaking ? "bg-[#177245]" : "bg-[#c7ccd4]"
+                        }`}
+                      />
+                      <span className="truncate">
+                        {ttsQueue.status.speaking
+                          ? t("voice.speaking")
+                          : t("voice.queue", { n: ttsQueue.status.queued })}
+                      </span>
+                    </div>
+                  )}
+
                   <div ref={toyMenuRef} className="relative">
                     <button
                       type="button"
@@ -1349,6 +1415,7 @@ export default function App() {
                 textareaRef={textareaRef}
                 onSubmit={(attachments) => handleSend(undefined, attachments)}
                 onStop={() => {
+                  ttsQueue.stop();
                   void api.interrupt();
                   setConfirmReq(null);
                 }}
