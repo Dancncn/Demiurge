@@ -160,6 +160,28 @@ export function MaximizeIcon(props: IconProps) {
   );
 }
 
+export function PinIcon(props: IconProps) {
+  return (
+    <Icon strokeWidth={1.8} {...props}>
+      <path d="M12 17v5" />
+      <path d="M5 17h14" />
+      <path d="m8 3 8 8" />
+      <path d="m7 8 9 9" />
+      <path d="M14 4 7 11" />
+      <path d="m17 7-7 7" />
+    </Icon>
+  );
+}
+
+export function MousePointerIcon(props: IconProps) {
+  return (
+    <Icon strokeWidth={1.8} {...props}>
+      <path d="M4 3 19 14l-7 1.5L8.5 22Z" />
+      <path d="m13 14 5 5" />
+    </Icon>
+  );
+}
+
 export function SettingsIcon(props: IconProps) {
   return (
     <Icon strokeWidth={1.7} {...props}>

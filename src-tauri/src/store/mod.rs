@@ -102,6 +102,10 @@ fn default_companion_focus() -> String {
     "available".to_string()
 }
 
+fn default_desktop_companion_always_on_top() -> bool {
+    true
+}
+
 fn default_weather_enabled() -> bool {
     DEFAULT_WEATHER_ENABLED
 }
@@ -367,6 +371,14 @@ pub struct Settings {
     pub companion_focus: String,
     #[serde(default)]
     pub companion_do_not_disturb: String,
+    #[serde(default)]
+    pub desktop_companion_enabled: bool,
+    #[serde(default = "default_desktop_companion_always_on_top")]
+    pub desktop_companion_always_on_top: bool,
+    #[serde(default)]
+    pub desktop_companion_click_through: bool,
+    #[serde(default)]
+    pub desktop_companion_collapsed: bool,
     #[serde(default = "default_weather_enabled")]
     pub weather_enabled: bool,
     #[serde(default = "default_weather_location_mode")]
@@ -469,6 +481,10 @@ impl Default for Settings {
             companion_energy: default_companion_energy(),
             companion_focus: default_companion_focus(),
             companion_do_not_disturb: String::new(),
+            desktop_companion_enabled: false,
+            desktop_companion_always_on_top: default_desktop_companion_always_on_top(),
+            desktop_companion_click_through: false,
+            desktop_companion_collapsed: false,
             weather_enabled: DEFAULT_WEATHER_ENABLED,
             weather_location_mode: default_weather_location_mode(),
             weather_city: String::new(),
@@ -683,6 +699,10 @@ mod tests {
         assert!(settings.voice_tts_fallback);
         assert!(settings.voice_hotkey_enabled);
         assert_eq!(settings.voice_hotkey, "Ctrl+Shift+Space");
+        assert!(!settings.desktop_companion_enabled);
+        assert!(settings.desktop_companion_always_on_top);
+        assert!(!settings.desktop_companion_click_through);
+        assert!(!settings.desktop_companion_collapsed);
         assert!(!settings.computer_use_enabled);
         assert_eq!(settings.ocr_model_source, "modelscope");
         assert_eq!(settings.web_search_provider, "auto");

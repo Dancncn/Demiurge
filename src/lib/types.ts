@@ -90,6 +90,10 @@ export interface Settings {
   companion_energy: string;
   companion_focus: string;
   companion_do_not_disturb: string;
+  desktop_companion_enabled: boolean;
+  desktop_companion_always_on_top: boolean;
+  desktop_companion_click_through: boolean;
+  desktop_companion_collapsed: boolean;
   weather_enabled: boolean;
   weather_location_mode: string;
   weather_city: string;

@@ -1681,6 +1681,10 @@ export default function SettingsDialog({
       companion_energy: form.companion_energy.trim() || "normal",
       companion_focus: form.companion_focus.trim() || "available",
       companion_do_not_disturb: form.companion_do_not_disturb.trim(),
+      desktop_companion_enabled: form.desktop_companion_enabled,
+      desktop_companion_always_on_top: form.desktop_companion_always_on_top,
+      desktop_companion_click_through: form.desktop_companion_click_through,
+      desktop_companion_collapsed: form.desktop_companion_collapsed,
       weather_location_mode: form.weather_location_mode.trim() || "manual",
       weather_city: form.weather_city.trim(),
       weather_provider: form.weather_provider.trim() || "open_meteo",
@@ -2636,6 +2640,32 @@ export default function SettingsDialog({
                           onChange={(e) => set("companion_do_not_disturb", e.target.value)}
                         />
                       </Field>
+                      <div className="grid gap-4 md:grid-cols-2">
+                        <ToggleRow
+                          checked={form.desktop_companion_enabled}
+                          title={t("settings.companion.desktopShell")}
+                          description={t("settings.companion.desktopShellDesc")}
+                          onChange={(checked) => set("desktop_companion_enabled", checked)}
+                        />
+                        <ToggleRow
+                          checked={form.desktop_companion_always_on_top}
+                          title={t("settings.companion.desktopAlwaysOnTop")}
+                          description={t("settings.companion.desktopAlwaysOnTopDesc")}
+                          onChange={(checked) => set("desktop_companion_always_on_top", checked)}
+                        />
+                        <ToggleRow
+                          checked={form.desktop_companion_click_through}
+                          title={t("settings.companion.desktopClickThrough")}
+                          description={t("settings.companion.desktopClickThroughDesc")}
+                          onChange={(checked) => set("desktop_companion_click_through", checked)}
+                        />
+                        <ToggleRow
+                          checked={form.desktop_companion_collapsed}
+                          title={t("settings.companion.desktopCollapsed")}
+                          description={t("settings.companion.desktopCollapsedDesc")}
+                          onChange={(checked) => set("desktop_companion_collapsed", checked)}
+                        />
+                      </div>
                       <div className="rounded-lg border border-[#f2d7d5] bg-[#fffafa] p-3 text-[12px] leading-5 text-[#8a4b45]">
                         {t("settings.companion.safety")}
                       </div>

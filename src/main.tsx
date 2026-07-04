@@ -1,6 +1,8 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import App from "./App";
+import DesktopCompanionShell from "./components/DesktopCompanionShell";
 import { LanguageProvider } from "./lib/i18n";
 import "@fontsource-variable/inter";
 import "@fontsource-variable/jetbrains-mono";
@@ -9,10 +11,13 @@ import "@fontsource-variable/jetbrains-mono";
 import "./assets/fonts/misans-subset.css";
 import "./style.css";
 
+const currentWindowLabel = "__TAURI_INTERNALS__" in window ? getCurrentWindow().label : "main";
+const Root = currentWindowLabel === "desktop_companion" ? DesktopCompanionShell : App;
+
 ReactDOM.createRoot(document.getElementById("app") as HTMLElement).render(
   <React.StrictMode>
     <LanguageProvider>
-      <App />
+      <Root />
     </LanguageProvider>
   </React.StrictMode>,
 );

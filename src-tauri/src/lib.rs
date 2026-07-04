@@ -36,6 +36,11 @@ use store::{PermissionMode, Session, SessionMeta, SessionStore, Settings};
 
 const DEFAULT_WINDOW_WIDTH: u32 = 1811;
 const DEFAULT_WINDOW_HEIGHT: u32 = 1213;
+const DESKTOP_COMPANION_WINDOW_LABEL: &str = "desktop_companion";
+const DESKTOP_COMPANION_EXPANDED_WIDTH: u32 = 320;
+const DESKTOP_COMPANION_EXPANDED_HEIGHT: u32 = 178;
+const DESKTOP_COMPANION_COLLAPSED_WIDTH: u32 = 188;
+const DESKTOP_COMPANION_COLLAPSED_HEIGHT: u32 = 64;
 
 /// 全局共享状态。路径类字段在 setup() 里填充（需要 AppHandle 才能拿到 app_data_dir）。
 pub struct AppState {
@@ -251,6 +256,91 @@ pub(crate) fn emit_settings_updated(app: &AppHandle, settings: &Settings) {
     let _ = app.emit("settings-updated", settings.clone());
 }
 
+fn desktop_companion_size(settings: &Settings) -> PhysicalSize<u32> {
+    if settings.desktop_companion_collapsed {
+        PhysicalSize {
+            width: DESKTOP_COMPANION_COLLAPSED_WIDTH,
+            height: DESKTOP_COMPANION_COLLAPSED_HEIGHT,
+        }
+    } else {
+        PhysicalSize {
+            width: DESKTOP_COMPANION_EXPANDED_WIDTH,
+            height: DESKTOP_COMPANION_EXPANDED_HEIGHT,
+        }
+    }
+}
+
+fn ensure_desktop_companion_window(
+    app: &AppHandle,
+    settings: &Settings,
+) -> Result<tauri::WebviewWindow, String> {
+    if let Some(window) = app.get_webview_window(DESKTOP_COMPANION_WINDOW_LABEL) {
+        return Ok(window);
+    }
+
+    let size = desktop_companion_size(settings);
+    tauri::WebviewWindowBuilder::new(
+        app,
+        DESKTOP_COMPANION_WINDOW_LABEL,
+        tauri::WebviewUrl::App("index.html".into()),
+    )
+    .title("Demiurge Companion")
+    .inner_size(size.width as f64, size.height as f64)
+    .min_inner_size(
+        DESKTOP_COMPANION_COLLAPSED_WIDTH as f64,
+        DESKTOP_COMPANION_COLLAPSED_HEIGHT as f64,
+    )
+    .max_inner_size(
+        DESKTOP_COMPANION_EXPANDED_WIDTH as f64,
+        DESKTOP_COMPANION_EXPANDED_HEIGHT as f64,
+    )
+    .resizable(false)
+    .decorations(false)
+    .transparent(true)
+    .shadow(false)
+    .always_on_top(settings.desktop_companion_always_on_top)
+    .skip_taskbar(true)
+    .focused(false)
+    .visible(false)
+    .center()
+    .build()
+    .map_err(|e| format!("Failed to create desktop companion window: {e}"))
+}
+
+fn sync_desktop_companion_window(app: &AppHandle, settings: &Settings) -> Result<(), String> {
+    if !settings.desktop_companion_enabled {
+        if let Some(window) = app.get_webview_window(DESKTOP_COMPANION_WINDOW_LABEL) {
+            let _ = window.set_ignore_cursor_events(false);
+            window
+                .hide()
+                .map_err(|e| format!("Failed to hide desktop companion window: {e}"))?;
+        }
+        return Ok(());
+    }
+
+    let window = ensure_desktop_companion_window(app, settings)?;
+    let size = desktop_companion_size(settings);
+    window
+        .set_always_on_top(settings.desktop_companion_always_on_top)
+        .map_err(|e| format!("Failed to update desktop companion pin state: {e}"))?;
+    window
+        .set_skip_taskbar(true)
+        .map_err(|e| format!("Failed to update desktop companion taskbar state: {e}"))?;
+    window
+        .set_size(Size::Logical(tauri::LogicalSize {
+            width: size.width as f64,
+            height: size.height as f64,
+        }))
+        .map_err(|e| format!("Failed to resize desktop companion window: {e}"))?;
+    window
+        .set_ignore_cursor_events(settings.desktop_companion_click_through)
+        .map_err(|e| format!("Failed to update desktop companion click-through state: {e}"))?;
+    window
+        .show()
+        .map_err(|e| format!("Failed to show desktop companion window: {e}"))?;
+    Ok(())
+}
+
 fn persist_direct_reply(
     state: &AppState,
     session_id: &str,
@@ -432,7 +522,22 @@ fn save_settings(
     *state.settings.lock().unwrap() = settings.clone();
     let dir = state.data_dir.lock().unwrap().clone();
     store::save_settings(&dir, &settings)?;
+    sync_desktop_companion_window(&app, &settings)?;
     emit_settings_updated(&app, &settings);
+    Ok(())
+}
+
+#[tauri::command]
+fn desktop_companion_show_main(app: AppHandle) -> Result<(), String> {
+    let Some(window) = app.get_webview_window("main") else {
+        return Ok(());
+    };
+    window
+        .show()
+        .map_err(|e| format!("Failed to show main window: {e}"))?;
+    window
+        .set_focus()
+        .map_err(|e| format!("Failed to focus main window: {e}"))?;
     Ok(())
 }
 
@@ -2130,6 +2235,8 @@ pub fn run() {
             *state.packs_dir.lock().unwrap() = packs;
             *state.settings.lock().unwrap() = settings;
             *state.sessions.lock().unwrap() = sessions;
+            let settings_snapshot = state.settings.lock().unwrap().clone();
+            sync_desktop_companion_window(app.handle(), &settings_snapshot)?;
             agent::workflow_runtime::hydrate_persisted_runs(state.inner());
             pomodoro::hydrate(app.handle().clone(), state.inner());
             // 保证落盘一次（迁移/初始化后）
@@ -2211,6 +2318,7 @@ pub fn run() {
             media_synthesize_speech,
             companion_panel_state,
             companion_clear_weather_cache,
+            desktop_companion_show_main,
             pomodoro_state,
             pomodoro_start,
             pomodoro_pause,

@@ -41,6 +41,7 @@ import {
   MinimizeIcon,
   PanelLeftIcon,
   PhoneIcon,
+  PinIcon,
   SettingsIcon,
   SparklesIcon,
   VolumeIcon,
@@ -88,6 +89,10 @@ const PREVIEW_SETTINGS: Settings = {
   companion_energy: "normal",
   companion_focus: "available",
   companion_do_not_disturb: "",
+  desktop_companion_enabled: false,
+  desktop_companion_always_on_top: true,
+  desktop_companion_click_through: false,
+  desktop_companion_collapsed: false,
   weather_enabled: false,
   weather_location_mode: "manual",
   weather_city: "",
@@ -927,6 +932,23 @@ export default function App() {
     });
   }
 
+  async function toggleDesktopCompanion() {
+    if (!settings) return;
+    const enabled = !settings.desktop_companion_enabled;
+    const next = {
+      ...settings,
+      desktop_companion_enabled: enabled,
+      desktop_companion_click_through: enabled ? settings.desktop_companion_click_through : false,
+    };
+    setSettings(next);
+    try {
+      await api.saveSettings(next);
+    } catch (e) {
+      console.error("Failed to toggle desktop companion", e);
+      setSettings(settings);
+    }
+  }
+
   function startVoiceCall() {
     setVoicePanelOpen(true);
     setVoiceCallActive(true);
@@ -1368,6 +1390,21 @@ export default function App() {
                       </button>
                     </div>
                   )}
+
+                  <button
+                    type="button"
+                    onClick={() => void toggleDesktopCompanion()}
+                    disabled={!settings}
+                    className={`grid h-8 w-8 place-items-center rounded-md transition ${
+                      settings?.desktop_companion_enabled
+                        ? "bg-[#eef5ff] text-[#0b57d0]"
+                        : "text-[#59616d] hover:bg-[#eef1f5]"
+                    } disabled:cursor-not-allowed disabled:opacity-40`}
+                    aria-label={t("desktopCompanion.toggle")}
+                    title={t("desktopCompanion.toggle")}
+                  >
+                    <PinIcon size={16} />
+                  </button>
 
                   <button
                     type="button"
