@@ -32,6 +32,7 @@ import SkillsPanel from "./components/SkillsPanel";
 import FortuneDialog from "./components/FortuneDialog";
 import CompanionCard from "./components/CompanionCard";
 import PomodoroCard from "./components/PomodoroCard";
+import VoiceCallPanel from "./components/VoiceCallPanel";
 import {
   CheckIcon,
   ChevronDownIcon,
@@ -39,6 +40,7 @@ import {
   MaximizeIcon,
   MinimizeIcon,
   PanelLeftIcon,
+  PhoneIcon,
   SettingsIcon,
   SparklesIcon,
   VolumeIcon,
@@ -228,6 +230,10 @@ export default function App() {
   const [planState, setPlanState] = useState<PlanState>({ active: false, approved: false });
   const [fortuneOpen, setFortuneOpen] = useState(false);
   const [spokenRepliesEnabled, setSpokenRepliesEnabled] = useState(false);
+  const [voicePanelOpen, setVoicePanelOpen] = useState(false);
+  const [voiceCallActive, setVoiceCallActive] = useState(false);
+  const [voiceCallStartedAt, setVoiceCallStartedAt] = useState<number | null>(null);
+  const [voiceCallMuted, setVoiceCallMuted] = useState(false);
   const ttsQueue = useStreamingTtsQueue(settings);
 
   const seq = useRef(0);
@@ -249,6 +255,7 @@ export default function App() {
   const titleMenuRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const spokenRepliesEnabledRef = useRef(spokenRepliesEnabled);
+  const voiceCallActiveRef = useRef(voiceCallActive);
   const ttsQueueRef = useRef(ttsQueue);
 
   useEffect(() => {
@@ -256,8 +263,16 @@ export default function App() {
   }, [spokenRepliesEnabled]);
 
   useEffect(() => {
+    voiceCallActiveRef.current = voiceCallActive;
+  }, [voiceCallActive]);
+
+  useEffect(() => {
     ttsQueueRef.current = ttsQueue;
   }, [ttsQueue]);
+
+  useEffect(() => {
+    ttsQueue.setMuted(voiceCallMuted);
+  }, [voiceCallMuted]);
 
   useEffect(() => {
     if (spokenRepliesEnabled && !ttsQueue.available) {
@@ -439,11 +454,11 @@ export default function App() {
       .listenAgentEvents({
         onAssistantStart: () => {
           finalizeAssistant();
-          ttsQueueRef.current.beginTurn(spokenRepliesEnabledRef.current);
+          ttsQueueRef.current.beginTurn(spokenRepliesEnabledRef.current || voiceCallActiveRef.current);
         },
         onAssistantDelta: (text) => {
           pendingStream.current.content += text;
-          if (spokenRepliesEnabledRef.current) ttsQueueRef.current.pushText(text);
+          if (spokenRepliesEnabledRef.current || voiceCallActiveRef.current) ttsQueueRef.current.pushText(text);
           scheduleFlush();
         },
         onAssistantReasoning: (text) => {
@@ -452,7 +467,7 @@ export default function App() {
         },
         onAssistantDone: (text) => {
           flushPending();
-          if (spokenRepliesEnabledRef.current) ttsQueueRef.current.flush();
+          if (spokenRepliesEnabledRef.current || voiceCallActiveRef.current) ttsQueueRef.current.flush();
           const id = curAssistantId.current;
           if (id) {
             setItems((p) =>
@@ -875,6 +890,30 @@ export default function App() {
     });
   }
 
+  function startVoiceCall() {
+    setVoicePanelOpen(true);
+    setVoiceCallActive(true);
+    setVoiceCallStartedAt((value) => value ?? Date.now());
+    setSpokenRepliesEnabled(false);
+  }
+
+  function endVoiceCall() {
+    setVoiceCallActive(false);
+    setVoiceCallStartedAt(null);
+    ttsQueue.stop();
+  }
+
+  function closeVoicePanel() {
+    endVoiceCall();
+    setVoicePanelOpen(false);
+  }
+
+  async function handleVoiceTranscript(text: string) {
+    if (!text.trim() || appBusy) return false;
+    startVoiceCall();
+    return handleSend(text);
+  }
+
   async function handleWindowMinimize() {
     if (!("__TAURI_INTERNALS__" in window)) return;
     await getCurrentWindow().minimize();
@@ -1295,6 +1334,24 @@ export default function App() {
 
                   <button
                     type="button"
+                    onClick={() => {
+                      setVoicePanelOpen(true);
+                      if (!voiceCallActive) startVoiceCall();
+                    }}
+                    disabled={!settings?.voice_enabled}
+                    className={`grid h-8 w-8 place-items-center rounded-md transition ${
+                      voicePanelOpen
+                        ? "bg-[#eef5ff] text-[#0b57d0]"
+                        : "text-[#59616d] hover:bg-[#eef1f5]"
+                    } disabled:cursor-not-allowed disabled:opacity-40`}
+                    aria-label={t("voice.call.title")}
+                    title={t("voice.call.title")}
+                  >
+                    <PhoneIcon size={16} />
+                  </button>
+
+                  <button
+                    type="button"
                     onClick={toggleSpokenReplies}
                     disabled={!ttsQueue.available}
                     className={`grid h-8 w-8 place-items-center rounded-md transition ${
@@ -1388,6 +1445,22 @@ export default function App() {
               </header>
 
               <GoalBar goal={goalPanel} busy={appBusy} progress={goalProgress} onAction={handleGoalAction} />
+
+              <VoiceCallPanel
+                open={voicePanelOpen}
+                active={voiceCallActive}
+                muted={voiceCallMuted}
+                busy={appBusy}
+                startedAt={voiceCallStartedAt}
+                settings={settings}
+                ttsStatus={ttsQueue.status}
+                onStart={startVoiceCall}
+                onEnd={endVoiceCall}
+                onClose={closeVoicePanel}
+                onMutedChange={setVoiceCallMuted}
+                onTranscript={handleVoiceTranscript}
+                onStopAudio={ttsQueue.stop}
+              />
 
               <MessageList
                 items={items}
