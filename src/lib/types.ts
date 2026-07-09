@@ -668,6 +668,17 @@ export interface PackFileContent {
   truncated: boolean;
 }
 
+export interface Live2DAsset {
+  path: string;
+  mime: string;
+  data: string;
+}
+
+export interface Live2DBundle {
+  model_json: string;
+  assets: Live2DAsset[];
+}
+
 export interface PackLoreFile {
   name: string;
   bytes: number[];

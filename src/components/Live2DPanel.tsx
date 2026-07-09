@@ -1,7 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { convertFileSrc } from "@tauri-apps/api/core";
 import * as api from "../lib/api";
-import { loadLive2DModel, type Live2DModelLike, type Live2DPixiApp } from "../lib/live2d";
+import {
+  createLive2DBlobModelUrl,
+  loadLive2DModel,
+  type Live2DBlobModelUrl,
+  type Live2DModelLike,
+  type Live2DPixiApp,
+} from "../lib/live2d";
 import { useI18n } from "../lib/i18n";
 import { RotateCwIcon } from "./Icons";
 
@@ -12,57 +17,157 @@ interface Props {
   onOpenSettings?: () => void;
 }
 
+function positiveNumber(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : null;
+}
+
+function getModelSize(model: Live2DModelLike) {
+  const candidates = [
+    {
+      source: "original",
+      width: positiveNumber(model.internalModel?.originalWidth),
+      height: positiveNumber(model.internalModel?.originalHeight),
+    },
+    {
+      source: "layout",
+      width: positiveNumber(model.internalModel?.width),
+      height: positiveNumber(model.internalModel?.height),
+    },
+    {
+      source: "bounds",
+      width: positiveNumber(model.width),
+      height: positiveNumber(model.height),
+    },
+  ];
+  return candidates.find((item) => item.width && item.height) ?? null;
+}
+
+function clamp(value: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, value));
+}
+
 export default function Live2DPanel({ packId, onOpenSettings }: Props) {
   const { t } = useI18n();
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const appRef = useRef<Live2DPixiApp | null>(null);
   const modelRef = useRef<Live2DModelLike | null>(null);
+  const blobModelRef = useRef<Live2DBlobModelUrl | null>(null);
+  const loadIdRef = useRef(0);
+  const scaleRef = useRef(1.0);
 
   const [status, setStatus] = useState<Status>("idle");
   const [error, setError] = useState("");
+  const [debugInfo, setDebugInfo] = useState("");
   const [scale, setScale] = useState(1.0);
+  const [canvasRevision, setCanvasRevision] = useState(0);
+
+  const fitModel = useCallback((app: Live2DPixiApp, model: Live2DModelLike, zoom: number) => {
+    const viewport = canvasRef.current?.parentElement;
+    const screenWidth = Math.max(1, viewport?.clientWidth ?? app.screen.width);
+    const screenHeight = Math.max(1, viewport?.clientHeight ?? app.screen.height);
+    app.renderer?.resize(screenWidth, screenHeight);
+
+    const modelSize = getModelSize(model);
+    model.anchor.set(0.5);
+    model.position.set(screenWidth / 2, screenHeight / 2);
+
+    if (!modelSize?.width || !modelSize.height) {
+      model.scale.set(zoom);
+      app.render?.();
+      return `screen ${Math.round(screenWidth)}x${Math.round(screenHeight)}, model size unknown, scale ${zoom.toFixed(2)}`;
+    }
+
+    const fitScale = Math.min((screenWidth * 0.78) / modelSize.width, (screenHeight * 0.9) / modelSize.height);
+    const finalScale = clamp(fitScale * zoom, 0.02, 3);
+    model.scale.set(finalScale);
+    app.render?.();
+
+    return `screen ${Math.round(screenWidth)}x${Math.round(screenHeight)}, ${modelSize.source} ${Math.round(
+      modelSize.width,
+    )}x${Math.round(modelSize.height)}, scale ${finalScale.toFixed(3)}`;
+  }, []);
+
+  const fitCurrentModel = useCallback(() => {
+    if (!appRef.current || !modelRef.current) return;
+    setDebugInfo(fitModel(appRef.current, modelRef.current, scaleRef.current));
+  }, [fitModel]);
+
+  const disposeCurrentModel = useCallback(() => {
+    const app = appRef.current;
+    const blobModel = blobModelRef.current;
+    appRef.current = null;
+    modelRef.current = null;
+    blobModelRef.current = null;
+
+    // The canvas belongs to React. Removing it here leaves canvasRef pointing at
+    // a detached element, so a subsequent reload renders off-screen.
+    app?.destroy(
+      { removeView: false },
+      { children: true, texture: false, textureSource: false },
+    );
+    blobModel?.revoke();
+  }, []);
 
   const loadModel = useCallback(async () => {
     if (!canvasRef.current) return;
-    if (appRef.current) {
-      appRef.current.destroy(true);
-      appRef.current = null;
-      modelRef.current = null;
-    }
+    const loadId = ++loadIdRef.current;
+    const canvas = canvasRef.current;
     setStatus("loading");
     setError("");
+    setDebugInfo("");
+    let pendingBlobModel: Live2DBlobModelUrl | null = null;
     try {
-      const absPath = await api.resolvePackLive2dPath(packId);
-      const url = convertFileSrc(absPath);
-      const { app, model } = await loadLive2DModel(url, canvasRef.current);
+      const bundle = await api.packLive2dBundle(packId);
+      if (loadId !== loadIdRef.current) return;
+
+      pendingBlobModel = createLive2DBlobModelUrl(bundle);
+      const { app, model } = await loadLive2DModel(pendingBlobModel.url, canvas);
+      if (loadId !== loadIdRef.current) {
+        app.destroy(
+          { removeView: false },
+          { children: true, texture: false, textureSource: false },
+        );
+        pendingBlobModel.revoke();
+        return;
+      }
+
+      blobModelRef.current = pendingBlobModel;
+      pendingBlobModel = null;
       appRef.current = app;
       modelRef.current = model;
-      model.anchor.set(0.5);
-      model.position.set(app.screen.width / 2, app.screen.height / 2);
-      model.scale.set(scale);
       app.stage.addChild(model);
+      setDebugInfo(fitModel(app, model, scaleRef.current));
+      requestAnimationFrame(fitCurrentModel);
       setStatus("ready");
     } catch (e) {
+      pendingBlobModel?.revoke();
+      if (loadId !== loadIdRef.current) return;
       setStatus("error");
       setError(String(e));
     }
-  }, [packId, scale]);
+  }, [disposeCurrentModel, fitCurrentModel, fitModel, packId]);
 
   useEffect(() => {
     void loadModel();
     return () => {
-      if (appRef.current) {
-        appRef.current.destroy(true);
-        appRef.current = null;
-        modelRef.current = null;
-      }
+      loadIdRef.current += 1;
+      disposeCurrentModel();
     };
-  }, [loadModel]);
+  }, [canvasRevision, disposeCurrentModel, loadModel]);
 
   // 缩放变化时应用到当前模型。
   useEffect(() => {
-    if (modelRef.current) modelRef.current.scale.set(scale);
-  }, [scale]);
+    scaleRef.current = scale;
+    fitCurrentModel();
+  }, [fitCurrentModel, scale]);
+
+  useEffect(() => {
+    const viewport = canvasRef.current?.parentElement;
+    if (!viewport) return;
+    const observer = new ResizeObserver(() => fitCurrentModel());
+    observer.observe(viewport);
+    return () => observer.disconnect();
+  }, [fitCurrentModel]);
 
   const onPointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     const model = modelRef.current;
@@ -103,8 +208,9 @@ export default function Live2DPanel({ packId, onOpenSettings }: Props) {
             />
           </label>
           <button
-            onClick={() => void loadModel()}
-            className="grid size-8 place-items-center rounded-md text-[#4f5661] transition hover:bg-[#eef1f5]"
+            onClick={() => setCanvasRevision((revision) => revision + 1)}
+            disabled={status === "loading"}
+            className="grid size-8 place-items-center rounded-md text-[#4f5661] transition hover:bg-[#eef1f5] disabled:cursor-wait disabled:opacity-45"
             aria-label={t("live2d.reload")}
             title={t("live2d.reload")}
           >
@@ -139,7 +245,12 @@ export default function Live2DPanel({ packId, onOpenSettings }: Props) {
             </div>
           </div>
         )}
-        <canvas ref={canvasRef} className="h-full w-full touch-none" />
+        {import.meta.env.DEV && status === "ready" && debugInfo && (
+          <div className="pointer-events-none absolute bottom-3 left-3 max-w-[70%] rounded-md border border-[#dfe3e8] bg-white/90 px-2.5 py-1.5 text-[11px] text-[#69707a] shadow-sm">
+            Live2D ready: {debugInfo}
+          </div>
+        )}
+        <canvas key={canvasRevision} ref={canvasRef} className="h-full w-full touch-none" />
       </div>
     </div>
   );

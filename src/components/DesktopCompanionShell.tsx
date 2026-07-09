@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import * as api from "../lib/api";
 import type { CompanionPanelState, PackManifest, Settings } from "../lib/types";
 import { CloseIcon, MaximizeIcon, MinimizeIcon, MousePointerIcon, PinIcon, SettingsIcon, SparklesIcon } from "./Icons";
@@ -141,6 +142,11 @@ export default function DesktopCompanionShell() {
     }
   }
 
+  function startDragging(event: React.PointerEvent<HTMLElement>) {
+    if (event.button !== 0 || (event.target as HTMLElement).closest(".desktop-companion-control")) return;
+    void getCurrentWindow().startDragging();
+  }
+
   if (!settings) {
     return (
       <main className="grid h-screen w-screen place-items-center bg-transparent p-2">
@@ -155,6 +161,7 @@ export default function DesktopCompanionShell() {
         <div
           className="desktop-companion-drag flex h-full w-full items-center gap-2 rounded-lg border border-[#dfe3e8] bg-white/92 px-2.5 shadow-[0_8px_24px_rgba(15,23,42,0.12)] backdrop-blur"
           data-tauri-drag-region
+          onPointerDown={startDragging}
         >
           <img src={avatar} alt="" className="size-8 shrink-0 rounded-md border border-[#dfe3e8] bg-white object-cover" />
           <div className="min-w-0 flex-1">
@@ -177,6 +184,7 @@ export default function DesktopCompanionShell() {
       <div
         className="desktop-companion-drag flex h-full w-full flex-col rounded-lg border border-[#dfe3e8] bg-white/92 shadow-[0_8px_24px_rgba(15,23,42,0.12)] backdrop-blur"
         data-tauri-drag-region
+        onPointerDown={startDragging}
       >
         <header className="flex h-12 shrink-0 items-center gap-2 border-b border-[#eceff3] px-2.5">
           <img src={avatar} alt="" className="size-8 shrink-0 rounded-md border border-[#dfe3e8] bg-white object-cover" />

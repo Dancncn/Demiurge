@@ -301,7 +301,10 @@ fn ensure_desktop_companion_window(
     .always_on_top(settings.desktop_companion_always_on_top)
     .skip_taskbar(true)
     .focused(false)
-    .visible(false)
+    // This builder is only reached for an enabled companion. Creating it hidden
+    // and immediately calling show() during setup can race with the initial
+    // Windows visibility state, leaving the shell hidden after startup.
+    .visible(true)
     .center()
     .build()
     .map_err(|e| format!("Failed to create desktop companion window: {e}"))
@@ -829,6 +832,16 @@ fn import_pack_live2d_folder(
 fn resolve_pack_live2d_path(state: State<'_, AppState>, pack_id: String) -> Result<String, String> {
     let dir = state.packs_dir.lock().unwrap().clone();
     pack::resolve_live2d_model_path(&dir, &pack_id)
+}
+
+/// 读取当前角色包 Live2D 模型及依赖资源，前端会转为 blob: URL 加载。
+#[tauri::command]
+fn pack_live2d_bundle(
+    state: State<'_, AppState>,
+    pack_id: String,
+) -> Result<pack::Live2DBundle, String> {
+    let dir = state.packs_dir.lock().unwrap().clone();
+    pack::live2d_bundle(&dir, &pack_id)
 }
 
 /// 移除角色包的 Live2D 模型（删 live2d/ 目录并清空 manifest.live2d）。
@@ -2285,6 +2298,7 @@ pub fn run() {
             preview_pack_lorebook,
             import_pack_live2d_folder,
             resolve_pack_live2d_path,
+            pack_live2d_bundle,
             remove_pack_live2d,
             agent_panel_state,
             agent_template_json,

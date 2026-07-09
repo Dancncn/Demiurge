@@ -27,7 +27,11 @@
       "csp": null,
       "assetProtocol": {
         "enable": true,
-        "scope": ["$APPDATA/packs/**"]
+        "scope": [
+          "$APPDATA/packs/**",
+          "$APPDATA/com.demiurge.engine/packs/**",
+          "$APPLOCALDATA/com.demiurge.engine/packs/**"
+        ]
       }
     }
   },

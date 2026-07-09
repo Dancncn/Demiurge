@@ -17,6 +17,7 @@ import type {
   GoalProgressEvent,
   ImageGenerationRequest,
   ImageGenerationResult,
+  Live2DBundle,
   Message,
   LoreIndexStatus,
   LoreRecallDetail,
@@ -96,6 +97,8 @@ export const importPackLive2dFolder = (packId: string, srcDir: string) =>
   invoke<PackManifest>("import_pack_live2d_folder", { packId, srcDir });
 export const resolvePackLive2dPath = (packId: string) =>
   invoke<string>("resolve_pack_live2d_path", { packId });
+export const packLive2dBundle = (packId: string) =>
+  invoke<Live2DBundle>("pack_live2d_bundle", { packId });
 export const removePackLive2d = (packId: string) =>
   invoke<PackManifest>("remove_pack_live2d", { packId });
 export const openPackDir = (id: string) => invoke<void>("open_pack_dir", { id });
