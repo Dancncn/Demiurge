@@ -90,7 +90,7 @@ Demiurge 是一个桌面伴侣 Agent 的“空引擎”。它不绑定具体角�
 - **向量召回（远程优先）**：`EmbeddingProvider` trait + 远程 OpenAI 兼容 `/v1/embeddings`（DashScope `text-embedding-v3` / OpenAI `text-embedding-3-small` 等）；BM25 与稠密余弦按 RRF（k=60）融合，`hybrid_weight` 调权；chunk 向量按 provider+维度缓存，切换 model 自动重算；本地 fastembed 通过 cargo feature 预留接口、默认不打包 ONNX runtime。
 - **召回可视化**：`lorebook_index_status` / `lorebook_recall_detail` / `lorebook_rebuild_index` 命令 + `/recall <query>` slash；面板展示索引状态、chunk 列表、命中关键词高亮、score 与 dense_score、embedding 降级徽标。
 - **Memory namespace**：角色卡 `runtime.memory.namespace` 把 user/project 记忆隔离到带后缀文件（`user.{ns}.md` / `memory.{ns}.md`），default 走 legacy；`memory_migrate_namespace` 迁移旧记忆；`/dream` 与自动抽取写 namespaced 路径。
-- **Permission overlay**：角色卡 `runtime.permissions` 解析为 `CardOverlay` 决策，插入 user 规则与 tool 默认之间；`ask_once` 自动 session-remember，`ask_every_time` 禁止持久化；面板暴露 `card_preference`。
+- **Permission overlay**：角色卡 `runtime.permissions` 只能保持或收紧工具默认权限，导入/保存会拒绝 `allow` 和未知策略，运行时再做单调收紧校验；`ask_once` 自动 session-remember，`ask_every_time` 禁止持久化。
 
 ### Voice 与素材接口
 
@@ -219,7 +219,7 @@ Demiurge/
 
 ## Security Model
 
-> 注意：2026-07-12 审查确认了若干尚未修复的高优先级边界，包括角色包可声明放宽工具权限、记忆权限的项目/会话隔离、跨项目撤销、角色包路径、公开 URL 私网访问、Windows 系统打开命令、deferred/MCP 工具授权粒度，以及前端会话—工作区竞态。在这些修复完成前，不要把 Auto/Bypass、未受信角色包或未受信 MCP server 视为强隔离环境；详情见 [代码审查报告](docs/CODE-REVIEW-2026-07-12.md)。
+> 注意：2026-07-12 审查确认了若干高优先级边界。角色包自行放宽工具权限的问题已修复；记忆权限的项目/会话隔离、跨项目撤销、角色包路径、公开 URL 私网访问、Windows 系统打开命令、deferred/MCP 工具授权粒度，以及前端会话—工作区竞态仍待逐项修复。详情见 [代码审查报告](docs/CODE-REVIEW-2026-07-12.md)。
 
 - 文件与 shell 工具只能访问当前会话绑定的项目根；未选择项目时回退到应用数据目录下的 `sandbox/`。
 - 路径先做词法校验，再做 canonicalize 校验，防止 `..`、符号链接和 junction 逃逸。

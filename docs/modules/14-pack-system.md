@@ -2,7 +2,7 @@
 
 > 审阅状态（2026-07-12）：角色包清单、zip 导入、persona、memory 与 skill 作用域已按当前源码复核；本轮项目工作区改动不改变角色包路径校验。固定行号请以符号名为准。
 
-> 安全复核更正：角色包 `runtime.permissions` 当前可以直接把 shell/系统工具设为 Allow；包同时控制 persona，因此未受信包可以自放行后再诱导模型调用工具。若干直接 IPC 命令在 `packs_dir.join(id)` 前也没有验证 pack id，列表/读取的后续 containment 会错误地以攻击者指定目录为根；Live2D 文件夹导入的资源重命名路径未复用安全相对路径解析，并且先删除旧模型再验证新模型。zip 导入自身的 zip-slip 校验不能覆盖这些独立入口。
+> 安全复核进度：`runtime.permissions` 自放行已修复，清单只能声明 deny/ask/default，导入/保存和运行时均 fail closed。pack id 的 IPC 根目录约束与 Live2D 事务导入仍待后续独立提交；zip-slip 校验不能替代这些入口的修复。
 
 > 存档级技术原理文档。覆盖角色包的清单校验、persona 注入、头像 data URL 生成、zip 导入安全校验、默认包落地，以及角色包作为 memory / skills 作用域载体的衔接逻辑。
 >

@@ -528,8 +528,8 @@ pub fn manifest_namespace(packs_dir: &Path, id: &str) -> Option<String> {
     }
 }
 
-/// 读取角色卡 runtime.permissions 偏好（tool → 偏好字符串，如 "allow"/"deny"/"ask_once"/"ask_every_time"）。
-/// 供 permission overlay 把角色卡偏好升级为可执行覆盖，而非仅提示词建议。
+/// 读取角色卡 runtime.permissions 限制（tool → "deny"/"ask_once"/"ask_every_time"）。
+/// manifest 校验拒绝会放宽权限的值；permission 层还会做单调收紧检查。
 pub fn permission_preferences(packs_dir: &Path, id: &str) -> BTreeMap<String, String> {
     let Ok(manifest) = read_manifest_no_avatar(&pack_dir(packs_dir, id)) else {
         return BTreeMap::new();
@@ -726,6 +726,35 @@ fn validate_runtime(runtime: &Option<CharacterRuntime>) -> Result<(), String> {
                 return Err(
                     "runtime.memory.namespace 只能包含 ASCII 字母、数字、-、_ 和 .".to_string(),
                 );
+            }
+        }
+    }
+    for (tool, policy) in &runtime.permissions {
+        validate_non_empty_trimmed(tool, "runtime.permissions tool")?;
+        validate_non_empty_trimmed(policy, "runtime.permissions policy")?;
+        if tool.len() > 128
+            || !tool
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'))
+        {
+            return Err(
+                "manifest.runtime.permissions 工具名只能包含 ASCII 字母、数字、_、- 和 .，且最长 128 字节"
+                    .to_string(),
+            );
+        }
+        match policy.to_ascii_lowercase().as_str() {
+            "deny" | "always_deny" | "ask" | "ask_once" | "ask_every_time" | "ask_everytime"
+            | "default" => {}
+            "allow" | "always_allow" => {
+                return Err(
+                    "manifest.runtime.permissions 只能保持或收紧工具默认权限，不能声明 allow"
+                        .to_string(),
+                )
+            }
+            _ => {
+                return Err(format!(
+                    "manifest.runtime.permissions 包含未知策略：{policy}"
+                ))
             }
         }
     }
@@ -1076,7 +1105,7 @@ fn render_runtime_policy(manifest: &PackManifest) -> String {
     }
     if !runtime.permissions.is_empty() {
         lines.push(
-            "Tool permission preferences (enforced as an overlay between user rules and tool defaults; explicit user rules still override):"
+            "Tool permission restrictions (may preserve or tighten tool defaults; explicit user rules still override):"
                 .to_string(),
         );
         for (tool, policy) in &runtime.permissions {
@@ -1621,6 +1650,60 @@ mod tests {
         let mut invalid_path = manifest;
         invalid_path.avatar = Some("avatar.svg".to_string());
         assert!(validate_manifest_paths(&invalid_path).is_err());
+    }
+
+    #[test]
+    fn runtime_permissions_cannot_grant_or_use_unknown_policies() {
+        let base = PackManifest {
+            schema_version: Some("2.0".to_string()),
+            id: "safe_pack".to_string(),
+            name: "Safe".to_string(),
+            description: None,
+            persona: "persona.md".to_string(),
+            avatar: None,
+            avatar_data_url: None,
+            live2d: None,
+            character: None,
+            runtime: Some(CharacterRuntime::default()),
+            lorebook: Vec::new(),
+            credits: Vec::new(),
+            license: None,
+        };
+
+        for policy in ["allow", "always_allow", "unknown"] {
+            let mut manifest = base.clone();
+            manifest
+                .runtime
+                .as_mut()
+                .unwrap()
+                .permissions
+                .insert("shell".to_string(), policy.to_string());
+            assert!(
+                validate_manifest_paths(&manifest).is_err(),
+                "policy {policy} must be rejected"
+            );
+        }
+
+        for policy in ["deny", "ask_once", "ask_every_time", "default"] {
+            let mut manifest = base.clone();
+            manifest
+                .runtime
+                .as_mut()
+                .unwrap()
+                .permissions
+                .insert("shell".to_string(), policy.to_string());
+            validate_manifest_paths(&manifest)
+                .unwrap_or_else(|error| panic!("policy {policy} should be valid: {error}"));
+        }
+
+        let mut invalid_tool = base;
+        invalid_tool
+            .runtime
+            .as_mut()
+            .unwrap()
+            .permissions
+            .insert("../shell".to_string(), "deny".to_string());
+        assert!(validate_manifest_paths(&invalid_tool).is_err());
     }
 
     #[test]

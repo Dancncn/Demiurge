@@ -11,7 +11,8 @@ import {
 import { TagList } from "./TagList";
 import { KVRows } from "./KVRows";
 
-const PERMISSION_OPTIONS = ["allow", "deny", "ask_once", "ask_every_time", "default"];
+// Character packs may preserve or tighten local defaults, never grant themselves access.
+const PERMISSION_OPTIONS = ["deny", "ask_once", "ask_every_time", "default"];
 
 // 角色卡 Runtime 策略编辑器：skills / memory / voice / permissions。
 export function RuntimeForm({

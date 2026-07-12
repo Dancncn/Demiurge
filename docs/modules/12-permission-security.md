@@ -2,7 +2,7 @@
 
 > 审阅状态（2026-07-12）：项目选择和分支切换是用户直接触发的 Tauri 命令，不走模型工具权限门；分支切换在脏工作区时由 UI 二次确认，并在活动回合期间由后端拒绝。文件 containment 以会话项目根为边界。固定行号请以符号名为准。
 
-> 已确认缺口：角色包 manifest 的 runtime permission 可把 shell/系统能力直接设为 Allow，而包自身又控制 persona 内容；当前校验与激活流程不会阻止这种自放行。Project scope 规则仍固定存于 app data 的单一 `permissions.json`，未按项目分桶；Session scope 规则也是全局内存 Map，切换会话不会隔离。`execute_tool` 的记忆授权按 wrapper 名而非目标工具，MCP server 自报 read-only 又可在 Auto 模式被直接允许。修复前，这些 overlay/scope/annotation 不能视为强授权边界。
+> 修复进度：角色包自放行已修复——manifest 拒绝 allow/未知策略，运行时只允许 deny/ask 且不能把默认 Deny 放宽为 Ask。Project/Session scope 隔离、`execute_tool` 目标级授权和 MCP read-only 注解信任仍待后续独立提交。
 
 > 存档级技术原理文档。读者：协作开发者。
 > 主要源文件：

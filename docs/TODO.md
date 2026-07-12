@@ -90,7 +90,7 @@ Demiurge 当前已经具备本地桌面 Agent 的主体能力：会话、工具�
 
 ## P0/P1 / 代码审查修复队列
 
-- [ ] **角色包权限只能收紧**：未受信 manifest 不得把 Ask/Deny 降为 Allow；若要放宽，必须独立展示权限差异并按包指纹取得显式用户授权。
+- [x] **角色包权限只能收紧**：manifest 导入/保存拒绝 `allow`、未知策略和非法工具名；运行时忽略任何绕过校验的放宽值，并保证 overlay 只能保持或收紧工具默认权限。
 - [ ] **会话—工作区原子快照**：用 navigation epoch 或后端原子命令绑定 `session_id + history + workspace + goal`；所有慢响应和 legacy 事件必须验证 session/turn 归属。
 - [ ] **项目/会话权限真正隔离**：Project scope 按 canonical 项目根分桶；Session scope 按 session id 分桶并在切换后不串用。
 - [ ] **撤销记录绑定项目身份**：undo entry 保存 canonical workspace/root 与目标绝对身份，切换项目后只允许撤销同一根内记录。
@@ -122,7 +122,7 @@ Demiurge 当前已经具备本地桌面 Agent 的主体能力：会话、工具�
 - [x] **Lorebook 召回可视化**：`lorebook_index_status` / `lorebook_recall_detail` / `lorebook_rebuild_index` 命令 + `LorebookRecallPanel`（chunk 列表、命中关键词高亮、score、索引状态、手动重建）；`/recall <query>` slash 命令。
 - [x] **向量 RAG / embedding（远程优先脚手架）**：`src-tauri/src/embed/` 的 `EmbeddingProvider` trait + 远程 OpenAI 兼容 provider + `LoreChunk.embedding` 缓存 + RRF 混合召回权重（`hybrid_weight`）。详见 [docs/modules/20-lorebook-vector-rag.md](./modules/20-lorebook-vector-rag.md)。
 - [x] **Memory namespace 落地**：`scope_files` 按 `runtime.memory.namespace` 隔离 user/project 到 `user.{ns}.md` / `memory.{ns}.md`，default 走 legacy；`memory_migrate_namespace` 命令 + 面板迁移入口；`/dream` 与自动抽取写 namespaced 路径。
-- [x] **Permission preference 强约束**：`CharacterRuntime.permissions` 解析为 `CardOverlay` 决策，插入 `decide` 的 user 规则与 tool 默认之间；`ask_every_time` 禁止持久化；`permission_panel_state` 暴露 `card_preference`。
+- [x] **Permission preference 强约束**：`CharacterRuntime.permissions` 只能声明 deny/ask/default；导入/保存与运行时双重阻止权限升级，`ask_every_time` 禁止持久化，`permission_panel_state` 暴露 `card_preference`。
 - [x] **前端体积治理**：Markdown/KaTeX/highlight、Mermaid、PDF、ZIP、Live2D 已按需加载或独立 vendor chunk。
 
 ### 本批次继续打磨（已完成）

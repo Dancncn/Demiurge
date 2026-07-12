@@ -179,7 +179,7 @@ pub fn decide(
 
     // 角色卡 runtime.permissions 偏好覆盖：介于 user 规则与 tool 默认之间。
     // 显式 user/project/session 规则已在上面命中并返回，这里只在没有用户规则时生效。
-    if let Some(decision) = card_overlay(state, tool) {
+    if let Some(decision) = card_overlay(state, tool, default_policy.effect) {
         return decision;
     }
 
@@ -253,7 +253,6 @@ pub fn decide_for_mode(
 /// 角色卡 permission 偏好类型（从 runtime.permissions 的字符串值解析）。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum CardPreference {
-    Allow,
     Deny,
     AskOnce,
     AskEveryTime,
@@ -261,20 +260,28 @@ enum CardPreference {
 
 fn parse_card_preference(value: &str) -> Option<CardPreference> {
     match value.trim().to_ascii_lowercase().as_str() {
-        "allow" | "always_allow" => Some(CardPreference::Allow),
         "deny" | "always_deny" => Some(CardPreference::Deny),
         "ask_once" | "ask" => Some(CardPreference::AskOnce),
         "ask_every_time" | "ask_everytime" => Some(CardPreference::AskEveryTime),
-        // "default" / 空 / 未知值：不覆盖，回落到 tool 默认策略。
+        // `allow` / `always_allow` 也不在运行时放行：角色包只能收紧本地默认权限。
+        // manifest 校验会拒绝这些值；这里再 fail closed，防止绕过校验的调用路径。
         _ => None,
     }
 }
 
-fn card_preference_effect(pref: CardPreference) -> PermissionEffect {
+/// 角色包只能保持或收紧工具默认权限，不能把 Ask/Deny 降为 Allow/Ask。
+fn card_preference_effect(
+    pref: CardPreference,
+    default_effect: PermissionEffect,
+) -> Option<PermissionEffect> {
     match pref {
-        CardPreference::Allow => PermissionEffect::Allow,
-        CardPreference::Deny => PermissionEffect::Deny,
-        CardPreference::AskOnce | CardPreference::AskEveryTime => PermissionEffect::Ask,
+        CardPreference::Deny => Some(PermissionEffect::Deny),
+        CardPreference::AskOnce | CardPreference::AskEveryTime
+            if default_effect != PermissionEffect::Deny =>
+        {
+            Some(PermissionEffect::Ask)
+        }
+        CardPreference::AskOnce | CardPreference::AskEveryTime => None,
     }
 }
 
@@ -285,13 +292,18 @@ fn load_card_prefs(state: &crate::AppState) -> std::collections::BTreeMap<String
 }
 
 /// 把角色卡偏好解析成可执行的 PermissionDecision。None 表示无偏好或为 default。
-fn card_overlay(state: &crate::AppState, tool: &str) -> Option<PermissionDecision> {
+fn card_overlay(
+    state: &crate::AppState,
+    tool: &str,
+    default_effect: PermissionEffect,
+) -> Option<PermissionDecision> {
     let prefs = load_card_prefs(state);
     let raw = prefs.get(tool)?;
     let pref = parse_card_preference(raw)?;
+    let effect = card_preference_effect(pref, default_effect)?;
     let reason = format!("角色卡权限偏好：{raw}");
     Some(PermissionDecision {
-        effect: card_preference_effect(pref),
+        effect,
         scope: PermissionScope::Once,
         reason,
         source: PermissionDecisionSource::CardOverlay,
@@ -622,12 +634,9 @@ mod tests {
 
     #[test]
     fn parses_card_preference_strings() {
-        // allow / always_allow → Allow
-        assert_eq!(parse_card_preference("allow"), Some(CardPreference::Allow));
-        assert_eq!(
-            parse_card_preference("Always_Allow"),
-            Some(CardPreference::Allow)
-        );
+        // 角色包不能通过 allow / always_allow 放宽本地默认权限。
+        assert_eq!(parse_card_preference("allow"), None);
+        assert_eq!(parse_card_preference("Always_Allow"), None);
         // deny / always_deny → Deny
         assert_eq!(parse_card_preference("deny"), Some(CardPreference::Deny));
         assert_eq!(
@@ -655,28 +664,32 @@ mod tests {
         assert_eq!(parse_card_preference("unknown_value"), None);
         // 大小写与首尾空白不敏感
         assert_eq!(
-            parse_card_preference("  ALLOW  "),
-            Some(CardPreference::Allow)
+            parse_card_preference("  DENY  "),
+            Some(CardPreference::Deny)
         );
     }
 
     #[test]
-    fn card_preference_maps_to_effect() {
+    fn card_preference_only_preserves_or_tightens_default_effect() {
         assert_eq!(
-            card_preference_effect(CardPreference::Allow),
-            PermissionEffect::Allow
+            card_preference_effect(CardPreference::Deny, PermissionEffect::Allow),
+            Some(PermissionEffect::Deny)
         );
         assert_eq!(
-            card_preference_effect(CardPreference::Deny),
-            PermissionEffect::Deny
+            card_preference_effect(CardPreference::Deny, PermissionEffect::Ask),
+            Some(PermissionEffect::Deny)
         );
         assert_eq!(
-            card_preference_effect(CardPreference::AskOnce),
-            PermissionEffect::Ask
+            card_preference_effect(CardPreference::AskOnce, PermissionEffect::Allow),
+            Some(PermissionEffect::Ask)
         );
         assert_eq!(
-            card_preference_effect(CardPreference::AskEveryTime),
-            PermissionEffect::Ask
+            card_preference_effect(CardPreference::AskEveryTime, PermissionEffect::Ask),
+            Some(PermissionEffect::Ask)
+        );
+        assert_eq!(
+            card_preference_effect(CardPreference::AskEveryTime, PermissionEffect::Deny),
+            None
         );
     }
 }

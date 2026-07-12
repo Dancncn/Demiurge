@@ -351,7 +351,7 @@ MCP 工具是运行时动态注册的：`agent::runner` 在生成工具 schema �
 
 ## 安全模型
 
-> 当前限制：以下机制描述设计目标，不代表所有边界已闭环。2026-07-12 审查确认角色包可自行放宽工具权限、Project/Session 记忆权限隔离、跨项目 undo、pack/Live2D 路径、HTTP SSRF、Windows open_path、deferred/MCP 授权粒度和前端工作区竞态仍需修复；部署或处理未受信输入前请先阅读 [代码审查报告](./CODE-REVIEW-2026-07-12.md)。
+> 当前限制：以下机制描述设计目标，不代表所有边界已闭环。角色包自行放宽工具权限已通过 manifest 拒绝 + 运行时单调收紧双重防线修复；Project/Session 权限隔离、跨项目 undo、pack/Live2D 路径、HTTP SSRF、Windows open_path、deferred/MCP 授权粒度和前端工作区竞态仍需逐项修复。详情见 [代码审查报告](./CODE-REVIEW-2026-07-12.md)。
 
 - `PermissionMode` 支持 `plan` / `default` / `auto` / `bypass`：`default` 走工具默认策略与用户规则；`auto` 自动允许只读工具；`bypass` 跳过确认但仍审计；`plan` 未批准前只允许只读工具和受限 `write_plan`。
 - Plan Mode 的计划状态在 `AppState.plan_state` 中维护；`write_plan` 只能写入沙盒 `.demiurge/plans/`，前端通过 `approve_plan` 批准后自动回到 `default` 执行模式。
