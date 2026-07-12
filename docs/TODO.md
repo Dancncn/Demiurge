@@ -97,7 +97,7 @@ Demiurge 当前已经具备本地桌面 Agent 的主体能力：会话、工具�
 - [ ] **角色包 IPC 根目录校验**：所有 pack id 在 join 前验证；列表、读取、Live2D 与 lore 命令都必须确认解析结果仍在 `packs_dir`。
 - [ ] **Live2D 事务化安全导入**：不可信资源引用拒绝绝对路径和 `..`，重命名也做 containment；先在临时目录完整校验，再原子替换旧模型。
 - [ ] **公开 URL SSRF 防护**：拒绝 loopback、私网、链路本地、未指定/保留地址和凭据 URL；逐跳解析 DNS 并复核重定向目标。
-- [ ] **Windows 系统打开去除命令解释器**：避免 `cmd /C start` 处理不可信目标；至少拒绝/正确封装 shell 元字符，并为 URL/路径添加注入回归测试。
+- [x] **Windows 系统打开去除命令解释器**：Windows 直接调用 `ShellExecuteW`，目标作为独立 UTF-16 参数传入并拒绝内部 NUL；元字符、引号、空格、URL query 与本地路径已有回归覆盖。
 - [ ] **deferred 工具按目标授权**：`execute_tool` 的记忆规则包含实际 tool name，或在 wrapper 内再次走目标工具权限门。
 - [ ] **MCP 注解只作提示**：外部 server 自报 read-only 不能让 Auto 自动放行；动态工具风险下限保持 External/Privileged。
 - [ ] **分支命令验证 expected workspace**：列表缓存按项目失效，loading 时不可点击；后端切换时比较调用方看到的项目根。

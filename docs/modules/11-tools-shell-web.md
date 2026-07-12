@@ -323,12 +323,13 @@ adapter = Adapter::parse(source 或 settings.web_search_provider 或 WEB_SEARCH_
 
 ### 4.2 open_path（确认门 + 硬性协议白名单）
 
-`open_path`（`open_path.rs:9`）是 deferred 工具（见 §7），标 `Privileged`/`Ask`。它用系统默认处理器打开文件/应用/URL：Windows `cmd /C start "" <target>`、macOS `open`、其他 Unix `xdg-open`。
+`open_path` 是 deferred 工具（见 §7），标 `Privileged`/`Ask`。它用系统默认处理器打开文件/应用/URL：Windows 直接调用 `ShellExecuteW`，macOS 使用 `open`，其他 Unix 使用 `xdg-open`。Windows 目标作为单独的 NUL 结尾 UTF-16 `lpFile` 传入，参数与工作目录指针均为空，因此 URL 或路径中的 shell 元字符不会经过命令解释器。
 
 关键安全设计（文件头注释 `open_path.rs:1` 明确）：**即便用户点了确认，也不放行高危目标**。`validate`（`open_path.rs:34`）：
 - 拒绝 UNC/网络路径（`\\` 或 `//` 开头）——防触发远端可执行。
 - 带 scheme 的 URL 只允许 `ALLOWED_SCHEMES = ["http","https","file","mailto"]`（`open_path.rs:7`）；其余协议（`ms-msdt:`、`search-ms:`、自定义协议等）一律拒绝。
 - `url_scheme`（`open_path.rs:52`）特意区分 Windows 盘符：单字母 + `:`（如 `C:\...`）不算 scheme，避免误拒本地路径。
+- Windows UTF-16 编码层拒绝内部 NUL，避免系统 API 静默截断打开目标；`ShellExecuteW` 失败码不大于 32 时原样转为错误。
 
 这是「确认门之外再加一道硬闸」的纵深防御：确认门防误操作，协议白名单防社工攻击诱导用户确认危险协议。
 
@@ -348,7 +349,7 @@ adapter = Adapter::parse(source 或 settings.web_search_provider 或 WEB_SEARCH_
 
 ## 5. 安全与权限边界（汇总）
 
-> 审查缺口：`http_get` / direct `web_fetch` 目前只校验 http/https scheme，却按“公开 URL”默认放行；没有拒绝 loopback/私网/链路本地，也没有逐跳复核重定向，存在 SSRF。Windows `open_path` 经 `cmd /C start` 传递目标且未拒绝 shell 元字符，存在命令拼接风险。以下表格应与这些未修复边界一起阅读。
+> 审查进度：Windows `open_path` 的命令解释器注入已修复。`http_get` / direct `web_fetch` 仍只校验 http/https scheme，却按“公开 URL”默认放行；没有拒绝 loopback/私网/链路本地，也没有逐跳复核重定向，SSRF 边界将在独立提交中修复。以下表格应与尚未关闭的边界一起阅读。
 
 | 边界 | 实现位置 | 机制 |
 | --- | --- | --- |
@@ -359,6 +360,7 @@ adapter = Adapter::parse(source 或 settings.web_search_provider 或 WEB_SEARCH_
 | shell OS 级隔离 | sandbox-exec / bubblewrap（`shell.rs:658`、`shell.rs:627`）| 限制写路径 + 断网；Windows fail closed |
 | 联网协议 | `normalize_url`（`web_fetch.rs:222`、`http_get.rs:66`）| 只允许 http/https |
 | open_path 协议 | `ALLOWED_SCHEMES`（`open_path.rs:7`）| 只允许 http/https/file/mailto，拒绝 UNC |
+| open_path Windows 启动边界 | `WindowsShellExecuteRequest`（`open_path.rs`）| 直接调用 `ShellExecuteW`，目标独立传递且拒绝内部 NUL，不经过命令解释器 |
 | 子 Agent 工具面 | `SUBAGENT_READONLY_TOOL_NAMES`（`mod.rs:154`）| 只读子 Agent 拿不到 `shell`/`clipboard`/写入类（测试 `mod.rs:1308`）|
 | 确认门 | `PermissionPolicy::ask` + `confirmation_preview`（`mod.rs:1110`）| shell/clipboard/open_path/execute_tool 等执行前展示 preview |
 
