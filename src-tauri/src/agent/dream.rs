@@ -143,6 +143,7 @@ pub async fn run_manual_dream(
         app,
         state,
         PermissionRequest {
+            session_id: &sid,
             tool: "dream",
             args_pretty: "{}",
             description: "整理长期记忆文件",

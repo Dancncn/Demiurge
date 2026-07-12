@@ -1,6 +1,6 @@
 # 前端架构（React + Tauri 绑定）
 
-> 审阅状态（2026-07-12）：新增 `WorkspaceExplorer`、`BranchSwitcher`、会话项目徽标、编辑文件活动卡片和流式词片段动画；工作区/历史异步竞态的审查结论另见 [项目代码审查报告](../CODE-REVIEW-2026-07-12.md)。固定行号请以符号名为准。
+> 审阅状态（2026-07-12）：Workspace/Branch、会话项目徽标、编辑活动、流式动画、原子导航快照、navigation epoch/request 与 session-owned 事件过滤均已按当前源码复核。固定行号请以符号名为准。
 
 > 适用版本：`src/` 当前实现。本文聚焦数据流与事件契约，不逐行解释样式。
 > 引用约定：所有路径相对仓库根；行号形如 `src/App.tsx:159`，随代码演进可能漂移，请以符号名为准。
@@ -57,10 +57,11 @@ export const respondConfirm = (id, allow, scope) =>
 命令覆盖：对话（`send`/`send_with_agents`/`interrupt`）、会话引擎（`session_engine_state`）、设置与连接测试、权限/计划（`set_permission_mode`/`plan_state`/`approve_plan`/`reject_plan`/`permission_*`/`shell_policy_state`）、MCP、人格包、自定义 agent、目标（`goal_*`）、历史与上下文统计、技能/记忆、会话 CRUD、媒体生成、WebDAV、OCR、工作流（`workflow_*`），以及语音命令（STT/TTS 已接通）。
 
 事件订阅分两类：
-1. **零散单事件 listener**：`listenPlanUpdated`、`listenPermissionModeUpdated`、`listenSettingsUpdated`、`listenSessionEngineUpdated`、`listenWorkflowUpdated`、`listenMcpUpdated`、`listenOcrDownloadProgress`、`listenUnifiedAgentEvents`（统一信封 `agent-event`）。
-2. **聚合订阅 `listenAgentEvents(handlers)`**（`api.ts:170`）：一次性 `listen` 九个 legacy 事件（`assistant-start/-delta/-done/-error/-interrupted`、`tool-start/-end`、`tool-confirm-request`、`goal-progress`），返回一个统一反注册函数 `() => uns.forEach(u => u())`。`App.tsx` 当前用的就是这套聚合订阅。
 
-> 注意：`agent-event` 统一信封（`AgentEventEnvelope`）与 `listenUnifiedAgentEvents` 已在 `api.ts` 中定义并由后端发出，但 `App.tsx` 现行消费的是上述 **legacy 命名事件**（`assistant-*`/`tool-*`），并未消费统一信封。换言之 `listenUnifiedAgentEvents` 当前在前端处于"已封装但未接入主时间线"的状态，是为后续迁移预留的入口。
+1. **零散状态 listener**：`listenPlanUpdated`、`listenPermissionModeUpdated`、`listenSettingsUpdated`、`listenSessionEngineUpdated`、`listenWorkflowUpdated`、`listenMcpUpdated`、`listenOcrDownloadProgress`。
+2. **聚合订阅 `listenAgentEvents(handlers)`**：assistant/tool 只监听统一 `agent-event`，把 `AgentEventEnvelope.turn` 交给处理器；`tool-confirm-request` 与 `goal-progress` 由各自子系统单独发出，但 payload 必须携带 `session_id`。聚合函数返回统一反注册函数。
+
+后端为兼容仍双发 legacy assistant/tool 事件，但当前主时间线不再订阅它们。`App` 在触碰时间线、确认框、Goal 或 tool-end workspace 刷新前调用 `turnBelongsToSession` / `eventBelongsToSession`，缺失归属或不等于 `activeIdRef.current` 都 fail closed。
 
 ### 2.3 主组件 `src/App.tsx`
 
@@ -73,21 +74,24 @@ export const respondConfirm = (id, allow, scope) =>
 | `toolItemIds` | `tool_call_id -> DisplayItem.id` 映射，用于把 `tool-end` 对齐到 `tool-start` 创建的卡片 |
 | `lastRetryText` | 最近一次发送的完整 prompt，供错误气泡的"重试"复用 |
 | `assistantErrorDelivered` | 标记后端是否已通过 `assistant-error` 事件交付过错误，避免 `handleSend` 的 catch 再补一条重复错误 |
+| `activeIdRef` / `itemsRef` | 为异步事件提供最新会话/时间线，不依赖 effect 闭包中的旧 render 值 |
+| `navigationEpochRef` | 保存单调 navigation epoch 与同 epoch request 序号；决定异步快照能否提交 |
+| `navigationPendingRef` | 与 React state 同步更新的即时互斥位，封住同一事件循环内的双击与发送竞态 |
 
 ## 三、核心数据流与算法
 
 ### 3.1 启动初始化（并行拉取 + 浏览器降级）
 
-`App` 挂载时一次性并行拉取八个后端状态（`App.tsx:226`）：
+`App` 挂载时用一个 navigation ticket 并行拉取设置、角色包、Agent、原子导航快照、Plan 与 Session Engine：
 
 ```ts
-const [s, ps, agents, goal, list, hist, plan, engine] = await Promise.all([
-  api.getSettings(), api.listPacks(), api.agentPanelState(), api.goalPanelState(),
-  api.listSessions(), api.getHistory(), api.planState(), api.sessionEngineState(),
+const [s, ps, agents, snapshot, plan, engine] = await Promise.all([
+  api.getSettings(), api.listPacks(), api.agentPanelState(), api.navigationSnapshot(),
+  api.planState(), api.sessionEngineState(),
 ]);
 ```
 
-随后用 `buildHistory(hist)` 把后端 `Message[]` 折叠成 `DisplayItem[]`，并根据 `s.language` 同步 i18n。
+`snapshot` 一次包含 `session_id + sessions + history + workspace + goal`。只有初始化 ticket 仍是当前 epoch/request、且 active id 存在于会话列表时，`applyNavigationSnapshot` 才一次提交整组投影；历史再由 `buildHistory(snapshot.history)` 折叠。Strict Mode 或迟到初始化请求会被后来的 ticket 作废。
 
 **浏览器预览降级**：所有 Tauri 交互都判定 `"__TAURI_INTERNALS__" in window`。当不在 Tauri 容器内（如纯浏览器开发/截图），初始化 `catch` 分支会注入 `PREVIEW_SETTINGS`（`App.tsx:38`）让 UI 仍可浏览；`Dashboard`、`SkillsPanel` 等也各自带 mock 数据回退。窗口尺寸同样仅在 Tauri 下应用（`DEFAULT_WINDOW_SIZE = 1811×1213`，`App.tsx:35`/`214`）。
 
@@ -125,6 +129,7 @@ goal-progress → 更新 goalProgress + refreshGoalPanel + 追加一条 name="go
 
 - **流式拼接靠 `curAssistantId` 游标**。第一段 delta 创建气泡并把 id 写入 ref；后续 delta 直接 `it.text + text` 累加（`App.tsx:298`）。任何一个 `assistant-start`/`tool-start` 都会先 `finalizeAssistant()`，从而实现"助手文本 → 工具调用 → 助手文本"交替时每段各自成块。
 - **工具卡片对齐靠 `toolItemIds` Map**。`tool-end` 命中条件为 `it.id === id || it.tool_call_id === e.tool_call_id`（`App.tsx:368`），双保险防止 Map 丢键。
+- **所有 turn 事件先校验归属**。assistant/tool 处理器收到统一信封里的 `turn`；只有 `turn.session_id === activeIdRef.current` 才继续。确认与 Goal payload 自带 session id。旧会话迟到事件既不会写时间线，也不会触发 workspace/goal 刷新。
 - **错误的双通道兜底**：后端的 `assistant-error` 事件是主通道；`handleSend` 的 try/catch 是 `invoke` 本身抛错（如根本没连上）的兜底通道。`assistantErrorDelivered` ref 防止两条通道重复插入错误气泡（`App.tsx:485`）。
 - **错误可读化** `friendlyAssistantError`（`App.tsx:77`）：根据 `event.kind` 与消息文本里的关键字（401/403/unauthorized、timeout、network/dns/econn/fetch 等）映射出 `{title, message, hint, retryable}`，并优先采用后端给的 `hint`。`retryable` 决定错误气泡是否带"重试"按钮，重试用的是 `lastRetryText.current`。
 
@@ -137,15 +142,15 @@ goal-progress → 更新 goalProgress + refreshGoalPanel + 追加一条 name="go
 ```text
 handleSend(text?, attachments=[])
   ├─ 文本 trim + buildAttachmentPrompt(附件) 拼成最终 prompt
-  ├─ 若 text 与附件均空，或 appBusy，则直接 return false
+  ├─ 若 text 与附件均空，或 appBusy/navigationPending，则直接 return false
   ├─ 乐观插入 user 气泡(buildUserDisplayText 含附件清单)
   ├─ setBusy(true)；记录 lastRetryText = prompt
   ├─ selectedAgentNames 非空 → api.sendWithAgents，否则 api.send
   ├─ catch：若 errorDelivered 未置位则补一条错误气泡
-  └─ finally：setBusy(false)；refreshSessions()；refreshGoalPanel()
+  └─ finally：按 turnSessionId 受检同步缺失历史；触发 epoch/request 保护的导航快照刷新
 ```
 
-`appBusy = busy || sessionEngine?.busy === true`（`App.tsx:192`）——本地乐观 busy 与后端引擎 busy 取并集，避免单回合内重复发送。注意 prompt 在文本为空时回退为 `"Please review the attached files."`（`App.tsx:472`）。
+`interactionBusy = appBusy || navigationPending`：本地/后端 turn busy 防重复发送，导航 pending 则防止用户在后端 active session 已改变而新快照尚未提交时发送、操作 Goal/语音/workspace。`turnSessionId` 从同步维护的 `activeIdRef` 捕获。注意 prompt 在文本为空时回退为 `"Please review the attached files."`。
 
 ### 3.5 运行态派生（thinking / runtimeStatus）
 
@@ -262,27 +267,30 @@ handleSend(text?, attachments=[])
 
 `WorkspaceExplorer` 通过目录、预览和 Git changes 命令按需读取当前后端项目；`BranchSwitcher` 用项目路径和请求 generation 绑定列表响应，切换时同时提交分支名与 `expected_workspace_path`，由后端复核 canonical 项目根。`SessionMeta` 在侧栏显示项目名称。后端拥有活动会话和项目根真值，前端的 `activeId`、`items` 与 `workspace` 都只是投影。
 
-分支列表与切换已具有项目路径/generation 边界；但会话、历史、目标和工作区投影仍由多个独立异步请求更新，尚无统一 navigation epoch 或原子 session snapshot。目录、预览、changes 和 tool-end 刷新也没有统一响应失效令牌。因此除分支操作外，“最后一次用户选择获胜”仍不是全局代码不变量；慢请求可能覆盖新状态。后续修复应满足：
+会话导航已经形成完整事务边界：
 
-1. 会话导航期间互斥，并只提交最新 epoch 的响应；
-2. 后端会话快照携带 `session_id`；分支切换的 expected workspace path 校验已经完成；
-3. 项目树/预览请求绑定 `workspace.path` 与 generation；分支请求已经完成该约束；
-4. 时间线改用带 `turn.session_id` 的统一事件信封，丢弃非当前会话事件。
+1. 后端 `NavigationSnapshot` 在同一 SessionStore 锁下捕获 active session id、排序后的 session metas、history、session-owned workspace path 与 goal；Git/workspace 检查使用该捕获路径，不读取稍后可能变化的全局 sandbox。
+2. `new_session` / `select_session` / `delete_session` 直接返回新 active 的快照；选择与删除同步 workspace 失败时恢复旧 active/SessionStore，删除权限规则只在提交成功后清理。
+3. `NavigationEpoch.begin()` 为用户导航递增 epoch，`capture()` 为同一 epoch 的后台刷新递增 request。快照提交必须同时匹配最新 epoch、最新 request、expected session id，并确认 active id 存在于返回列表。
+4. `navigationPending` 用 state 控制 UI、用 ref 同步阻止双击；Sidebar 会话操作、Composer、Goal、Voice 与 Workspace 在 pending 时均不可发起会改变后端对象的操作。
+5. session/history/workspace/goal/tool-end 刷新复用同一快照门；assistant/tool 主时间线验证统一信封的 `turn.session_id`，确认/Goal 事件验证 payload session id。
+
+仍在 P2 队列的是 `WorkspaceExplorer` 内部目录树、单文件 preview 与 changes 子请求自己的 generation/响应式/无障碍问题；它们不能再改写 active session 快照，但仍可能在同一项目视图内短暂显示旧子请求结果。
 
 ## 十、已知限制与扩展点
 
 1. **`WorkflowsPanel.tsx` 未接入 UI**。经全仓检索，除其自身与 `docs/IMPLEMENTATION.md` 外，没有任何源文件 `import` 它；工作流目前只能通过 Composer 的 `/workflows`、`/workflow resume <run_id>` slash 命令交由后端处理。该组件（含 `workflow-updated` 实时订阅、run 详情/重试/恢复 UI）是已完成但未挂载的扩展点。
-2. **统一事件信封未消费**。`agent-event` / `AgentEventEnvelope` / `listenUnifiedAgentEvents` 已在 `api.ts` 定义，但 `App.tsx` 实际消费的是 legacy 命名事件（`assistant-*`/`tool-*`/`goal-progress`）。迁移到统一信封是预留方向。
+2. **legacy 事件仍由后端兼容发出**。当前主时间线已只消费统一信封；删除 legacy 广播需要确认没有其他旧消费者，属于协议清理而非当前会话归属缺口。
 3. **语音文字流与音频流需要区分**。`useStreamingTtsQueue` 已把助手文字增量按句切分，支持队列、静音、打断、语速/情感参数与连接测试；单次后端合成仍返回完整音频，不是逐字节音频流。VoiceCallPanel 提供按键说话、简单 VAD 与本地半双工打断。
 4. **上下文窗口表是前端硬编码**。`MODEL_CONTEXT_WINDOWS` 需随模型迭代手工维护，且与后端 provider 档案的实际上限是两套来源；不一致时以后端为准（前端仅用于自动建议输入预算数值）。
 5. **附件上限/截断**：单次最多 8 个文件、每文件 28000 字符、PDF 前 80 页——超限静默截断并加提示，没有 UI 让用户调整这些上限。
 6. **i18n 覆盖不完整**：聊天区与若干对话框仍有硬编码英文（见第六节提示），是最直接的可扩展点。
 7. **DisplayItem 不可编辑/重发**：除错误气泡的"重试"外，时间线没有消息编辑、分支或单条删除能力。
-8. **会话/工作区快照非事务化**：快速点击会话或慢目录 I/O 可让 `activeId`、历史与项目投影交错；这是优先级最高的正确性缺口。
+8. **工作区子组件仍需独立 generation**：会话级快照已事务化，但目录、preview、changes 的同视图慢请求仍需按 `workspace.path + generation` 丢弃，并完善 Git→非 Git tab 回退。
 9. **历史工具状态失真**：`buildHistory` 把所有调用标为 done，失败/拒绝编辑会被显示成“已编辑”。
 10. **流式长会话性能**：不稳定的 retry handler 使历史 Markdown 重新渲染；每帧 smooth scroll 会强制回到底部；流式 Mermaid 会重复启动不可取消的解析/渲染。
 11. **最终正文未作为权威值**：`assistant-done` 仅在累计正文为空时回填，漏掉中间 delta 时无法自愈。
-12. **前端测试空白**：当前只有 TypeScript/生产构建，没有组件、竞态、性能、可访问性或端到端测试。
+12. **前端测试基线仍小**：已有 navigation epoch/request 的 A/B 延迟乱序、旧刷新与跨 session/turn 过滤测试；尚无组件、流式 fixture、性能、可访问性或端到端覆盖。
 
 ---
 
@@ -300,16 +308,16 @@ sequenceDiagram
   A->>A: 乐观插入 user 气泡, setBusy(true)
   A->>API: send / send_with_agents(prompt)
   API->>BE: invoke
-  BE-->>A: assistant-delta * N (流式)
-  A->>A: 按 curAssistantId 累加助手气泡
-  BE-->>A: tool-start
+  BE-->>A: agent-event(assistant_delta, turn) * N
+  A->>A: 校验 turn.session_id, 按 curAssistantId 累加
+  BE-->>A: agent-event(tool_start, turn)
   A->>A: finalizeAssistant + 新建 running 工具卡
-  BE-->>A: tool-confirm-request (可选)
+  BE-->>A: tool-confirm-request(session_id, 可选)
   A->>U: ConfirmDialog 弹窗
   U->>A: allow/deny + scope
   A->>BE: respond_confirm
-  BE-->>A: tool-end (ok/denied/failed + result)
+  BE-->>A: agent-event(tool_end, turn, result)
   A->>A: 按 toolItemIds 回填工具卡
-  BE-->>A: assistant-done
-  A->>A: 定型气泡, setBusy(false), refreshGoalPanel/Sessions
+  BE-->>A: agent-event(assistant_done, turn)
+  A->>A: 定型气泡, setBusy(false), epoch/request 快照刷新
 ```

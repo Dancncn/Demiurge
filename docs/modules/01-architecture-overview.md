@@ -62,7 +62,7 @@ Session.workspace_path
   -> prompt / memory / skills / file tools / shell cwd / Git commands
 ```
 
-后端在活动回合中禁止把 `sandbox_dir` 切到另一个项目，也禁止切 Git 分支。前端当前仍通过 `list_sessions`、`get_history`、`workspace_state`、Goal 状态等多个独立请求拼装页面快照；这些响应没有共同版本号，快速切换时可能交错。正确性修复应使用导航 epoch，或由后端原子返回带 `session_id` 的完整快照，详见 [代码审查报告](../CODE-REVIEW-2026-07-12.md)。
+后端在活动回合中禁止把 `sandbox_dir` 切到另一个项目，也禁止切 Git 分支。会话页面不再由多个独立请求拼装：`navigation_snapshot` 在同一 SessionStore 锁下捕获 `session_id + sessions + history + session-owned workspace path + goal`，新建/选择/删除直接返回该快照。前端 navigation epoch/request 与 expected session 校验保证迟到响应不能覆盖新导航；选择或删除的 workspace 同步失败会回滚后端会话事务。
 
 ## 四、命令/事件桥
 
@@ -83,7 +83,7 @@ Session.workspace_path
 
 **事件（后端 → 前端 `emit`）**：
 
-- 统一信封 `agent-event`（带 turn context），以及为兼容而保留的 legacy `assistant-*` / `tool-*` 事件——两者**双发**。当前主时间线仍消费无 session/turn 归属的 legacy 通道，这是多会话项目绑定后的正确性缺口。
+- 统一信封 `agent-event`（带 turn context），以及为兼容而保留的 legacy `assistant-*` / `tool-*` 事件——后端仍然**双发**，但主时间线只消费统一信封并要求 `turn.session_id` 等于当前会话。确认与 Goal 进度不经过该 adapter，因此载荷自身携带 `session_id` 并走相同过滤。
 - 状态推送：`session-engine-updated`（busy/cancel）、`goal`、`workflow-updated`、`plan`、`confirm`（敏感操作确认往返）等。
 
 > 详见 [17-前端架构](17-frontend-architecture.md) 与 [02-Agent 主循环与 Session Engine](02-agent-loop-session-engine.md)。

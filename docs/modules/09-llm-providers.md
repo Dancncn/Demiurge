@@ -109,7 +109,7 @@ reqwest bytes_stream
 
 Gemini 适配器尚未接入公共解码器，仍自行按 LF 拆 `data:` 行。因此 EOF 无 LF 的尾事件、多行 data、命名 error 事件与 data 内错误对象没有同等保障，格式错误也会被静默跳过。这是已确认的 P2 协议一致性缺口，不应把“三个适配器已完全统一”作为当前事实。
 
-`on_delta` 回调在每段可见正文/思考增量上触发；cancel 检查位于网络 chunk 边界。供应商解析归一化并不自动解决前端事件归属：主时间线仍消费不带 session/turn 的 legacy 事件，且 `assistant-done` 的完整正文未始终作为权威值覆盖累计增量。
+`on_delta` 回调在每段可见正文/思考增量上触发；cancel 检查位于网络 chunk 边界。供应商解析归一化之后，主时间线消费带 `turn.session_id` 的统一信封并丢弃其他会话事件；仍未闭环的是 `assistant-done` 完整正文没有始终作为权威值覆盖累计增量。
 
 ### 3.2 中断（cancel）语义
 

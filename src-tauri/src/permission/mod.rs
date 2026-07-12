@@ -162,6 +162,7 @@ impl PermissionResponse {
 }
 
 pub struct PermissionRequest<'a> {
+    pub session_id: &'a str,
     pub tool: &'a str,
     pub args_pretty: &'a str,
     pub description: &'a str,
@@ -175,6 +176,7 @@ pub struct PermissionRequest<'a> {
 #[derive(Clone, Debug, Serialize)]
 pub struct PermissionPromptPayload<'a> {
     pub id: &'a str,
+    pub session_id: &'a str,
     pub tool: &'a str,
     pub args: &'a str,
     pub description: &'a str,
@@ -563,6 +565,7 @@ pub async fn confirm(
 
     let payload = PermissionPromptPayload {
         id: &id,
+        session_id: req.session_id,
         tool: req.tool,
         args: req.args_pretty,
         description: req.description,

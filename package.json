@@ -8,6 +8,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
+    "test:navigation": "node --test --experimental-strip-types tests/navigationEpoch.test.ts",
     "preview": "vite preview",
     "tauri": "node scripts/tauri.mjs",
     "fetch:cubism-core": "node scripts/fetch-cubism-core.mjs"

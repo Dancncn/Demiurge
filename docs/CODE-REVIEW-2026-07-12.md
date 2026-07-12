@@ -2,7 +2,7 @@
 
 > 审查日期：2026-07-12
 > 范围：React/TypeScript 前端、Rust/Tauri 后端、工作区与 Git、权限、工具、角色包、持久化、LLM 流式适配，以及仓库内全部 Markdown
-> 状态：审查与文档更新完成；业务代码未在本轮审查中修改
+> 状态：审查底稿已完成；P1 修复正按独立提交落地，本文同步记录每项验证结果
 
 ## 1. 结论摘要
 
@@ -11,7 +11,7 @@
 优先级最高的风险集中在两条所有权链：
 
 1. **权限所有权**：角色包权限升级、Session/Project 规则跨边界复用与 deferred wrapper 共用身份已经修复；MCP 动态工具仍存在风险下限降级。
-2. **项目所有权**：undo、分支操作与后端 turn 已绑定不可变的 workspace/session identity；前端会话快照的事务边界仍待修复。
+2. **项目所有权**：undo、分支操作、后端 turn 与前端导航快照均已绑定不可变的 workspace/session identity。
 
 建议在发布或处理未受信角色包、外部工具服务、网页内容前，完成剩余 P1 队列。角色包权限自放行与权限作用域隔离已经修复；Auto/Bypass、外部工具 read-only 注解和其他尚未关闭的边界仍不能当成强隔离。
 
@@ -171,7 +171,9 @@
 
 **建议**：在 IPC 边界统一验证 id，只允许 packs 根的直接子目录；canonicalize 根和目标并验证 direct child；所有 pack API 复用同一受检解析器。
 
-### P1-09 前端会话、历史和工作区没有事务边界
+### P1-09 前端会话、历史和工作区没有事务边界（已修复）
+
+**修复状态**：新增后端 `NavigationSnapshot { session_id, sessions, history, workspace, goal }`，在同一 SessionStore 锁内捕获会话投影，workspace 按同批捕获的 session-owned path 检查；`new_session`、`select_session`、`delete_session` 直接返回快照，选择/删除的 workspace 同步失败会恢复旧 active/SessionStore，权限规则只在删除事务成功后清理。前端 `NavigationEpoch` 用单调 epoch 作废旧导航，并用同 epoch request 序号保证并发刷新最后发起者胜出；每次提交同时核对 expected/actual session id 与会话列表一致性。`navigationPending` 以同步 ref + state 锁住 Sidebar、新消息、Goal、语音和 workspace 入口。tool-end、workspace、session、goal 与 turn 结束刷新全部走受检快照。主时间线改为消费 `agent-event` 的 `turn.session_id`，确认/Goal 载荷增加 `session_id`，非当前会话事件直接丢弃。新增后端 A 历史/A workspace/A goal 绑定测试，以及前端 A/B 延迟乱序、同 epoch 旧刷新和跨会话事件测试；生产构建通过。
 
 **触发条件**：快速点击多个会话，或 tool-end/工作区刷新与会话切换交错；慢请求后返回。
 
@@ -348,17 +350,16 @@
 
 **建议**：稳定 handler、memo ToolCard/历史子树；只在用户原本接近底部时自动滚；流式帧用 auto；Mermaid 在消息完成后只渲染一次。
 
-### P2-11 最终完整正文没有成为权威值，主时间线仍缺 session/turn 归属
+### P2-11 最终完整正文没有成为权威值
 
-**触发/影响**：IPC 压力、页面恢复或事件迁移漏掉任一 delta；虽然 done 带完整正文，当前只在累计内容为空时回填，界面永久保留残缺文本。legacy 事件也可能写入错误会话视图。
+**触发/影响**：IPC 压力、页面恢复或事件迁移漏掉任一 delta；虽然 done 带完整正文，当前只在累计内容为空时回填，界面永久保留残缺文本。主时间线的 session/turn 归属已随 P1-09 修复，不再属于本项剩余风险。
 
 **证据**：
 
 - `src/App.tsx:606-614`：只要已有任意正文就丢弃 done 完整文本。
-- `src/lib/api.ts:259-277`：统一信封已定义，legacy listener 仍存在。
-- `src/App.tsx:591-714`：主时间线只消费不验证 session/turn 的 legacy handler。
+- `src/App.tsx` 的 `onAssistantDone`：已有累计正文时仍保留累计值，而不是使用非空 done 正文复核/修复。
 
-**建议**：非空 done 文本作为 canonical value，并在不一致时记录诊断；主时间线迁移到统一信封，以 `turn.id/session_id` reducer 丢弃非当前事件。
+**建议**：非空 done 文本作为 canonical value，并在不一致时记录诊断；后续 reducer 还应按 turn id 处理重复与乱序事件。
 
 ### P2-12 Git 项目切到非 Git 项目后可能停在不可用 Changes 页
 
@@ -400,9 +401,9 @@ OpenAI-compatible 与 Anthropic 两类适配器已经把正文、思考、工具
 当前差异主要在归一化前后两个边界：
 
 1. 归一化前：第三种适配器尚未复用公共 SSE 解码器；两个主要适配器又没有验证完整终止，公共解码器无大小上限。
-2. 归一化后：主时间线仍使用无 session/turn 的 legacy 事件；done 完整正文不总是覆盖累计增量；流式 Mermaid 和历史重渲染存在性能问题。
+2. 归一化后：主时间线已按统一信封的 session id 过滤；done 完整正文仍不总是覆盖累计增量，流式 Mermaid 和历史重渲染仍存在性能问题。
 
-所以结论不是“协议差异完全无影响”，而是“前端组件路径统一，但适配器完整性、事件归属和最终文本校验仍会影响用户看到的完整性与错误状态”。详细矩阵见 [流式协议评估](./streaming-protocol-assessment.md)。
+所以结论不是“协议差异完全无影响”，而是“前端组件路径和会话归属已经统一，但适配器完整性与最终文本校验仍会影响用户看到的完整性与错误状态”。详细矩阵见 [流式协议评估](./streaming-protocol-assessment.md)。
 
 ## 7. 做得较好的部分
 
@@ -427,9 +428,9 @@ OpenAI-compatible 与 Anthropic 两类适配器已经把正文、思考、工具
 
 ### 第二批：绑定会话/项目身份
 
-1. turn 固定 session id；前端原子 session snapshot + navigation epoch。
+1. turn 固定 session id；前端原子 session snapshot + navigation epoch。（已完成）
 2. 分支命令带 expected workspace；Explorer/preview/changes 使用 generation。
-3. 时间线迁移统一事件信封；历史工具状态结构化持久化。
+3. 时间线迁移统一事件信封（已完成）；历史工具状态结构化持久化仍待处理。
 
 ### 第三批：流式、取消与持久化可靠性
 

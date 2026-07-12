@@ -10,6 +10,7 @@ import type {
   GoalPanelState,
   GoalProgressEvent,
   Message,
+  NavigationSnapshot,
   PackManifest,
   PermissionMode,
   PermissionScope,
@@ -54,6 +55,12 @@ import { canDrawToday, isAutoPromptEnabled, isDismissedToday } from "./lib/fortu
 import { useI18n } from "./lib/i18n";
 import { useClickOutside } from "./lib/hooks";
 import { useStreamingTtsQueue } from "./lib/useStreamingTtsQueue";
+import {
+  eventBelongsToSession,
+  NavigationEpoch,
+  turnBelongsToSession,
+  type NavigationTicket,
+} from "./lib/navigationEpoch";
 
 const Live2DPanel = lazy(() => import("./components/Live2DPanel"));
 
@@ -317,6 +324,7 @@ export default function App() {
   const [selectedAgentNames, setSelectedAgentNames] = useState<string[]>([]);
   const [sessions, setSessions] = useState<SessionMeta[]>([]);
   const [activeId, setActiveId] = useState("");
+  const [navigationPending, setNavigationPending] = useState(true);
   const [activeView, setActiveView] = useState<AppView>("chat");
   const [settingsInitialTab, setSettingsInitialTab] = useState<SettingsTab>("general");
   const [previewTheme, setPreviewTheme] = useState<AppTheme | null>(null);
@@ -358,6 +366,8 @@ export default function App() {
   const ttsQueueRef = useRef(ttsQueue);
   const itemsRef = useRef<DisplayItem[]>(items);
   const activeIdRef = useRef(activeId);
+  const navigationEpochRef = useRef(new NavigationEpoch());
+  const navigationPendingRef = useRef(true);
 
   useEffect(() => {
     itemsRef.current = items;
@@ -407,6 +417,7 @@ export default function App() {
   const activeSession = useMemo(() => sessions.find((s) => s.id === activeId) ?? null, [activeId, sessions]);
   const agentsDir = agentPanel.agents_dir || ".demiurge/agents";
   const appBusy = busy || sessionEngine?.busy === true;
+  const interactionBusy = appBusy || navigationPending;
   const runtimeStatus = sessionEngine?.cancel_requested
     ? t("status.cancelling")
     : sessionEngine?.active_turn
@@ -414,6 +425,67 @@ export default function App() {
         ? t("status.cancelling")
         : t("status.processing")
       : t("status.ready");
+
+  function setNavigationPendingValue(value: boolean) {
+    navigationPendingRef.current = value;
+    setNavigationPending(value);
+  }
+
+  function beginNavigation(expectedSessionId?: string) {
+    const ticket = navigationEpochRef.current.begin(expectedSessionId);
+    setNavigationPendingValue(true);
+    return ticket;
+  }
+
+  function finishNavigation(ticket: NavigationTicket) {
+    if (navigationEpochRef.current.accepts(ticket, ticket.expectedSessionId ?? activeIdRef.current)) {
+      setNavigationPendingValue(false);
+    }
+  }
+
+  function applyNavigationSnapshot(snapshot: NavigationSnapshot, ticket: NavigationTicket, replaceHistory: boolean) {
+    if (!navigationEpochRef.current.accepts(ticket, snapshot.session_id)) return false;
+    if (!snapshot.sessions.some((session) => session.id === snapshot.session_id)) return false;
+
+    activeIdRef.current = snapshot.session_id;
+    setActiveId(snapshot.session_id);
+    setSessions(snapshot.sessions);
+    setGoalPanel(snapshot.goal);
+    setWorkspace(snapshot.workspace);
+    setWorkspaceRefreshKey((value) => value + 1);
+    if (replaceHistory) {
+      resetTurnRefs();
+      setItems(buildHistory(snapshot.history));
+      setGoalProgress(null);
+      setConfirmReq(null);
+    }
+    return true;
+  }
+
+  async function refreshNavigationSnapshot(replaceHistory = false) {
+    if (navigationPendingRef.current) return false;
+    const expectedSessionId = activeIdRef.current;
+    if (!expectedSessionId) return false;
+    const ticket = navigationEpochRef.current.capture(expectedSessionId);
+    try {
+      const snapshot = await api.navigationSnapshot(expectedSessionId);
+      return applyNavigationSnapshot(snapshot, ticket, replaceHistory);
+    } catch (e) {
+      if (navigationEpochRef.current.accepts(ticket, expectedSessionId)) {
+        console.error("Failed to refresh navigation snapshot", e);
+      }
+      return false;
+    }
+  }
+
+  async function recoverNavigation(ticket: NavigationTicket) {
+    try {
+      const snapshot = await api.navigationSnapshot(ticket.expectedSessionId);
+      return applyNavigationSnapshot(snapshot, ticket, true);
+    } catch {
+      return false;
+    }
+  }
 
   const currentPack = useMemo(
     () => packs.find((x) => x.id === settings?.current_pack) ?? null,
@@ -472,30 +544,24 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    const navigationTicket = beginNavigation();
     (async () => {
       try {
-        const [s, ps, agents, goal, list, hist, plan, engine, workspaceState] = await Promise.all([
+        const [s, ps, agents, snapshot, plan, engine] = await Promise.all([
           api.getSettings(),
           api.listPacks(),
           api.agentPanelState(),
-          api.goalPanelState(),
-          api.listSessions(),
-          api.getHistory(),
+          api.navigationSnapshot(),
           api.planState(),
           api.sessionEngineState(),
-          api.workspaceState(),
         ]);
         setSettings(s);
         if (s.language === "zh" || s.language === "en") setLang(s.language);
         setPacks(ps);
         setAgentPanel(agents);
-        setGoalPanel(goal);
-        setSessions(list.sessions);
-        setActiveId(list.active);
-        setItems(buildHistory(hist));
+        applyNavigationSnapshot(snapshot, navigationTicket, true);
         setPlanState(plan);
         setSessionEngine(engine);
-        setWorkspace(workspaceState);
         setBusy(engine.busy);
       } catch (e) {
         console.error("Failed to initialize Demiurge", e);
@@ -504,41 +570,26 @@ export default function App() {
           setSettings((prev) => prev ?? PREVIEW_SETTINGS);
           setWorkspace({ path: "D:\\Project\\Project-1\\Demiurge", name: "Demiurge", is_git: true, branch: "main", dirty: false });
         }
+      } finally {
+        finishNavigation(navigationTicket);
       }
     })();
   }, []);
 
   async function refreshSessions() {
-    try {
-      const list = await api.listSessions();
-      setSessions(list.sessions);
-      setActiveId(list.active);
-    } catch (e) {
-      console.error(e);
-    }
+    await refreshNavigationSnapshot(false);
   }
 
   async function refreshWorkspaceState() {
-    try {
-      setWorkspace(await api.workspaceState());
-      setWorkspaceRefreshKey((value) => value + 1);
-    } catch (e) {
-      console.error("Failed to refresh workspace", e);
-    }
+    await refreshNavigationSnapshot(false);
   }
 
-  function handleWorkspaceChange(next: WorkspaceState) {
-    setWorkspace(next);
-    setWorkspaceRefreshKey((value) => value + 1);
-    void refreshSessions();
+  function handleWorkspaceChange(_next: WorkspaceState) {
+    void refreshNavigationSnapshot(false);
   }
 
   async function refreshGoalPanel() {
-    try {
-      setGoalPanel(await api.goalPanelState());
-    } catch (e) {
-      console.error(e);
-    }
+    await refreshNavigationSnapshot(false);
   }
 
   useEffect(() => {
@@ -590,20 +641,24 @@ export default function App() {
 
     api
       .listenAgentEvents({
-        onAssistantStart: () => {
+        onAssistantStart: (turn) => {
+          if (!turnBelongsToSession(activeIdRef.current, turn)) return;
           finalizeAssistant();
           ttsQueueRef.current.beginTurn(spokenRepliesEnabledRef.current || voiceCallActiveRef.current);
         },
-        onAssistantDelta: (text) => {
+        onAssistantDelta: (text, turn) => {
+          if (!turnBelongsToSession(activeIdRef.current, turn)) return;
           pendingStream.current.content += text;
           if (spokenRepliesEnabledRef.current || voiceCallActiveRef.current) ttsQueueRef.current.pushText(text);
           scheduleFlush();
         },
-        onAssistantReasoning: (text) => {
+        onAssistantReasoning: (text, turn) => {
+          if (!turnBelongsToSession(activeIdRef.current, turn)) return;
           pendingStream.current.reasoning += text;
           scheduleFlush();
         },
-        onAssistantDone: (text) => {
+        onAssistantDone: (text, turn) => {
+          if (!turnBelongsToSession(activeIdRef.current, turn)) return;
           flushPending();
           if (spokenRepliesEnabledRef.current || voiceCallActiveRef.current) ttsQueueRef.current.flush();
           const id = curAssistantId.current;
@@ -627,7 +682,8 @@ export default function App() {
           setBusy(false);
           void refreshGoalPanel();
         },
-        onAssistantError: (e) => {
+        onAssistantError: (e, turn) => {
+          if (!turnBelongsToSession(activeIdRef.current, turn)) return;
           finalizeAssistant();
           ttsQueueRef.current.stop();
           assistantErrorDelivered.current = true;
@@ -648,13 +704,15 @@ export default function App() {
           setBusy(false);
           void refreshGoalPanel();
         },
-        onAssistantInterrupted: () => {
+        onAssistantInterrupted: (turn) => {
+          if (!turnBelongsToSession(activeIdRef.current, turn)) return;
           finalizeAssistant();
           ttsQueueRef.current.stop();
           setBusy(false);
           void refreshGoalPanel();
         },
-        onToolStart: (e) => {
+        onToolStart: (e, turn) => {
+          if (!turnBelongsToSession(activeIdRef.current, turn)) return;
           finalizeAssistant();
           const nid = genId();
           toolItemIds.current.set(e.tool_call_id, nid);
@@ -675,7 +733,8 @@ export default function App() {
             },
           ]);
         },
-        onToolEnd: (e) => {
+        onToolEnd: (e, turn) => {
+          if (!turnBelongsToSession(activeIdRef.current, turn)) return;
           const id = toolItemIds.current.get(e.tool_call_id);
           if (id) toolItemIds.current.delete(e.tool_call_id);
           setItems((p) =>
@@ -696,8 +755,12 @@ export default function App() {
             void refreshWorkspaceState();
           }
         },
-        onConfirmRequest: (e) => setConfirmReq(e),
+        onConfirmRequest: (e) => {
+          if (!eventBelongsToSession(activeIdRef.current, e.session_id)) return;
+          setConfirmReq(e);
+        },
         onGoalProgress: (e) => {
+          if (!eventBelongsToSession(activeIdRef.current, e.session_id)) return;
           setGoalProgress(e);
           void refreshGoalPanel();
           setItems((p) => [
@@ -772,8 +835,8 @@ export default function App() {
   async function handleSend(textArg?: string, attachments: ProcessedAttachment[] = []) {
     const text = (textArg ?? input).trim();
     const attachmentPrompt = buildAttachmentPrompt(attachments);
-    if ((!text && !attachmentPrompt) || appBusy) return false;
-    const turnSessionId = activeId;
+    if ((!text && !attachmentPrompt) || appBusy || navigationPendingRef.current) return false;
+    const turnSessionId = activeIdRef.current;
     let completed = false;
     setInput("");
     setActiveView("chat");
@@ -834,7 +897,9 @@ export default function App() {
   }
 
   async function handleGoalAction(action: GoalAction) {
-    if ((action === "resume" || action === "continue") && appBusy) return;
+    if (navigationPendingRef.current || ((action === "resume" || action === "continue") && appBusy)) return;
+    const actionSessionId = activeIdRef.current;
+    const ticket = navigationEpochRef.current.capture(actionSessionId);
     setGoalProgress(null);
     if (action === "resume" || action === "continue") {
       setActiveView("chat");
@@ -849,9 +914,12 @@ export default function App() {
             : action === "continue"
               ? await api.goalContinue()
               : await api.goalClear();
-      setGoalPanel(next);
-      await refreshSessions();
+      if (navigationEpochRef.current.accepts(ticket, activeIdRef.current)) {
+        setGoalPanel(next);
+        await refreshSessions();
+      }
     } catch (err) {
+      if (!navigationEpochRef.current.accepts(ticket, activeIdRef.current)) return;
       const nid = genId();
       setItems((p) => [
         ...p,
@@ -859,73 +927,70 @@ export default function App() {
       ]);
     } finally {
       if (action === "resume" || action === "continue") setBusy(false);
-      void refreshGoalPanel();
+      if (navigationEpochRef.current.accepts(ticket, activeIdRef.current)) void refreshGoalPanel();
     }
   }
 
   function resetTurnRefs() {
+    if (pendingStream.current.raf) {
+      cancelAnimationFrame(pendingStream.current.raf);
+      pendingStream.current.raf = 0;
+    }
+    pendingStream.current.content = "";
+    pendingStream.current.reasoning = "";
     curAssistantId.current = null;
     toolItemIds.current.clear();
   }
 
   async function syncHistoryIfMissingAssistant(sessionId: string) {
+    const ticket = navigationEpochRef.current.capture(sessionId);
     await waitForNextPaint();
-    if (sessionId && activeIdRef.current && activeIdRef.current !== sessionId) return;
+    if (!navigationEpochRef.current.accepts(ticket, activeIdRef.current)) return;
     if (hasCompletedAssistantAfterLastUser(itemsRef.current)) return;
 
     try {
-      const hist = await api.getHistory();
-      if (sessionId && activeIdRef.current && activeIdRef.current !== sessionId) return;
-      resetTurnRefs();
-      setItems(buildHistory(hist));
+      const snapshot = await api.navigationSnapshot(sessionId);
+      if (hasCompletedAssistantAfterLastUser(itemsRef.current)) return;
+      applyNavigationSnapshot(snapshot, ticket, true);
     } catch (e) {
-      console.error("Failed to sync chat history after turn", e);
+      if (navigationEpochRef.current.accepts(ticket, sessionId)) {
+        console.error("Failed to sync chat history after turn", e);
+      }
     }
   }
 
   async function handleNewChat() {
-    if (appBusy) return;
+    if (appBusy || navigationPendingRef.current) return;
+    const ticket = beginNavigation();
     try {
-      await api.newSession();
+      const snapshot = await api.newSession();
+      if (applyNavigationSnapshot(snapshot, ticket, true)) {
+        requestAnimationFrame(() => textareaRef.current?.focus());
+      }
     } catch (e) {
       console.error(e);
-    }
-    resetTurnRefs();
-    setItems([]);
-    setGoalPanel(null);
-    setGoalProgress(null);
-    await refreshSessions();
-    await refreshGoalPanel();
-    await refreshWorkspaceState();
-    requestAnimationFrame(() => textareaRef.current?.focus());
-  }
-
-  async function loadActiveHistory() {
-    try {
-      const hist = await api.getHistory();
-      resetTurnRefs();
-      setItems(buildHistory(hist));
-      await refreshGoalPanel();
-    } catch (e) {
-      console.error(e);
+      await recoverNavigation(ticket);
+    } finally {
+      finishNavigation(ticket);
     }
   }
 
   async function handleSelectSession(id: string) {
-    if (appBusy || id === activeId) return;
+    if (appBusy || navigationPendingRef.current || id === activeIdRef.current) return;
+    const ticket = beginNavigation(id);
     try {
-      await api.selectSession(id);
-      setActiveId(id);
-      setGoalProgress(null);
-      await loadActiveHistory();
-      await refreshWorkspaceState();
+      const snapshot = await api.selectSession(id);
+      applyNavigationSnapshot(snapshot, ticket, true);
     } catch (e) {
       console.error(e);
+      await recoverNavigation(ticket);
+    } finally {
+      finishNavigation(ticket);
     }
   }
 
   async function handleRenameSession(id: string, title: string) {
-    if (appBusy) return;
+    if (appBusy || navigationPendingRef.current) return;
     const renamed = await api.renameSession(id, title);
     setSessions((prev) =>
       prev
@@ -936,15 +1001,16 @@ export default function App() {
   }
 
   async function handleDeleteSession(id: string) {
-    if (appBusy) return;
+    if (appBusy || navigationPendingRef.current) return;
+    const ticket = beginNavigation();
     try {
-      await api.deleteSession(id);
-      await refreshSessions();
-      await loadActiveHistory();
-      setGoalProgress(null);
-      await refreshWorkspaceState();
+      const snapshot = await api.deleteSession(id);
+      applyNavigationSnapshot(snapshot, ticket, true);
     } catch (e) {
       console.error(e);
+      await recoverNavigation(ticket);
+    } finally {
+      finishNavigation(ticket);
     }
   }
 
@@ -1048,7 +1114,7 @@ export default function App() {
   const tailStreaming = last?.kind === "assistant" && last.streaming;
   const tailToolRunning = last?.kind === "tool" && last.status === "running";
   const thinking = appBusy && !tailStreaming && !tailToolRunning;
-  const canSend = input.trim().length > 0 && !appBusy;
+  const canSend = input.trim().length > 0 && !interactionBusy;
   const titleMenuButtonClass = (menu: typeof titleMenuOpen) =>
     `app-title-menu-button ${titleMenuOpen === menu ? "is-active" : ""}`;
 
@@ -1096,7 +1162,7 @@ export default function App() {
   }
 
   async function handleVoiceTranscript(text: string) {
-    if (!text.trim() || appBusy) return false;
+    if (!text.trim() || interactionBusy) return false;
     startVoiceCall();
     return handleSend(text);
   }
@@ -1366,6 +1432,7 @@ export default function App() {
           sessions={sessions}
           activeId={activeId}
           busy={appBusy}
+          navigationPending={navigationPending}
           onToggle={() => setSidebarOpen((v) => !v)}
           onViewChange={setActiveView}
           onNewChat={handleNewChat}
@@ -1661,13 +1728,13 @@ export default function App() {
                 </div>
               </header>
 
-              <GoalBar goal={goalPanel} busy={appBusy} progress={goalProgress} onAction={handleGoalAction} />
+              <GoalBar goal={goalPanel} busy={interactionBusy} progress={goalProgress} onAction={handleGoalAction} />
 
               <VoiceCallPanel
                 open={voicePanelOpen}
                 active={voiceCallActive}
                 muted={voiceCallMuted}
-                busy={appBusy}
+                busy={interactionBusy}
                 startedAt={voiceCallStartedAt}
                 settings={settings}
                 ttsStatus={ttsQueue.status}
@@ -1692,7 +1759,7 @@ export default function App() {
                   <Composer
                     input={input}
                     canSend={canSend}
-                    loading={appBusy}
+                    loading={interactionBusy}
                     permissionMode={settings?.permission_mode ?? "default"}
                     onSetPermissionMode={(m) => void handleSetPermissionMode(m)}
                     provider={settings?.provider ?? "deepseek"}
@@ -1720,7 +1787,7 @@ export default function App() {
                 <WorkspaceExplorer
                   open={workspacePanelOpen}
                   workspace={workspace}
-                  busy={appBusy}
+                  busy={interactionBusy}
                   refreshKey={workspaceRefreshKey}
                   onClose={() => setWorkspacePanelOpen(false)}
                   onWorkspaceChange={handleWorkspaceChange}

@@ -208,6 +208,7 @@ pub async fn drive_after_turn(
                 let _ = app.emit(
                     "goal-progress",
                     json!({
+                        "session_id": session_id,
                         "status": status_value(&next_goal.status),
                         "message": format!("Goal continuation #{turns} started."),
                         "turns_executed": next_goal.turns_executed,
@@ -241,6 +242,7 @@ pub async fn drive_after_turn(
                 let _ = app.emit(
                     "goal-progress",
                     json!({
+                        "session_id": session_id,
                         "status": status_value(&goal.status),
                         "message": "Goal token budget reached; preparing budget summary.",
                         "turns_executed": goal.turns_executed,

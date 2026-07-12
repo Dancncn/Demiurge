@@ -13,6 +13,7 @@ type Props = {
   sessions: SessionMeta[];
   activeId: string;
   busy: boolean;
+  navigationPending: boolean;
   onToggle: () => void;
   onViewChange: (view: AppView) => void;
   onNewChat: () => void;
@@ -30,6 +31,7 @@ export function Sidebar({
   sessions,
   activeId,
   busy,
+  navigationPending,
   onToggle,
   onViewChange,
   onNewChat,
@@ -42,6 +44,7 @@ export function Sidebar({
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draftTitle, setDraftTitle] = useState("");
   const [renameError, setRenameError] = useState<string | null>(null);
+  const navigationLocked = busy || navigationPending;
 
   useEffect(() => {
     if (!sessions.some((s) => s.id === editingId)) {
@@ -52,7 +55,7 @@ export function Sidebar({
   }, [editingId, sessions]);
 
   function beginRename(session: SessionMeta) {
-    if (busy) return;
+    if (navigationLocked) return;
     setEditingId(session.id);
     setDraftTitle(session.title);
     setRenameError(null);
@@ -103,7 +106,8 @@ export function Sidebar({
               onViewChange("chat");
               onNewChat();
             }}
-            className={`grid h-8 w-8 place-items-center rounded-md text-[#4f5661] cf-press hover:bg-[#dfe4ea] ${open ? "" : "hidden"}`}
+            disabled={navigationLocked}
+            className={`grid h-8 w-8 place-items-center rounded-md text-[#4f5661] cf-press hover:bg-[#dfe4ea] disabled:cursor-not-allowed disabled:opacity-50 ${open ? "" : "hidden"}`}
             aria-label={t("sidebar.newChat")}
           >
             <ComposeIcon size={19} />
@@ -166,7 +170,7 @@ export function Sidebar({
                     <input
                       autoFocus
                       value={draftTitle}
-                      disabled={busy}
+                      disabled={navigationLocked}
                       onChange={(e) => {
                         setDraftTitle(e.target.value);
                         setRenameError(null);
@@ -191,7 +195,7 @@ export function Sidebar({
                         onSelectSession(s.id);
                       }}
                       onDoubleClick={() => beginRename(s)}
-                      disabled={busy}
+                      disabled={navigationLocked}
                       className="min-w-0 flex-1 px-2.5 py-2 text-left text-[13px] text-[#202124] disabled:cursor-not-allowed disabled:opacity-60"
                       title={`${s.title}\n${t("sidebar.renameHint")}`}
                     >
@@ -206,7 +210,7 @@ export function Sidebar({
                   {!editing && (
                     <button
                       onClick={() => beginRename(s)}
-                      disabled={busy}
+                      disabled={navigationLocked}
                       className="grid h-7 w-7 shrink-0 place-items-center rounded-md text-[#69707a] opacity-0 transition hover:bg-[#cfd5dd] hover:text-[#111827] group-hover:opacity-100 disabled:opacity-0"
                       aria-label={t("sidebar.rename")}
                       title={t("sidebar.rename")}
@@ -216,7 +220,7 @@ export function Sidebar({
                   )}
                   <button
                     onClick={() => onDeleteSession(s.id)}
-                    disabled={busy || editing}
+                    disabled={navigationLocked || editing}
                     className="mr-1 grid h-7 w-7 shrink-0 place-items-center rounded-md text-[#69707a] opacity-0 transition hover:bg-[#cfd5dd] hover:text-[#dc2626] group-hover:opacity-100 disabled:opacity-0"
                     aria-label={t("sidebar.deleteChat")}
                   >

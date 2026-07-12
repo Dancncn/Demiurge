@@ -23,6 +23,7 @@ import type {
   LoreRecallDetail,
   MemoryPanelState,
   McpPanelState,
+  NavigationSnapshot,
   OcrDownloadProgress,
   OcrModelSource,
   OcrModelStatus,
@@ -50,6 +51,7 @@ import type {
   SpeechSynthesisResult,
   ToolEndEvent,
   ToolStartEvent,
+  TurnEventContext,
   GitBranch,
   GitChangedFile,
   WebDavBackupFile,
@@ -208,10 +210,12 @@ export const webdavDeleteBackup = (config: WebDavConfig, fileName: string) =>
 
 // 会话管理
 export const listSessions = () => invoke<SessionList>("list_sessions");
+export const navigationSnapshot = (expectedSessionId?: string) =>
+  invoke<NavigationSnapshot>("navigation_snapshot", { expectedSessionId: expectedSessionId ?? null });
 export const sessionStats = (offset: number) => invoke<StatsPanel>("session_stats", { offset });
-export const newSession = () => invoke<string>("new_session");
-export const selectSession = (id: string) => invoke<void>("select_session", { id });
-export const deleteSession = (id: string) => invoke<string>("delete_session", { id });
+export const newSession = () => invoke<NavigationSnapshot>("new_session");
+export const selectSession = (id: string) => invoke<NavigationSnapshot>("select_session", { id });
+export const deleteSession = (id: string) => invoke<NavigationSnapshot>("delete_session", { id });
 export const renameSession = (id: string, title: string) => invoke<string>("rename_session", { id, title });
 
 // Voice APIs. STT uses the configured recording backend; one-shot TTS can
@@ -272,29 +276,52 @@ export const listenUnifiedAgentEvents = (handler: (e: AgentEventEnvelope) => voi
 
 // ---- 事件订阅 ----
 export interface AgentEventHandlers {
-  onAssistantStart: () => void;
-  onAssistantDelta: (text: string) => void;
-  onAssistantReasoning?: (text: string) => void;
-  onAssistantDone: (text: string) => void;
-  onAssistantError: (e: AssistantErrorEvent) => void;
-  onAssistantInterrupted: () => void;
-  onToolStart: (e: ToolStartEvent) => void;
-  onToolEnd: (e: ToolEndEvent) => void;
+  onAssistantStart: (turn?: TurnEventContext) => void;
+  onAssistantDelta: (text: string, turn?: TurnEventContext) => void;
+  onAssistantReasoning?: (text: string, turn?: TurnEventContext) => void;
+  onAssistantDone: (text: string, turn?: TurnEventContext) => void;
+  onAssistantError: (e: AssistantErrorEvent, turn?: TurnEventContext) => void;
+  onAssistantInterrupted: (turn?: TurnEventContext) => void;
+  onToolStart: (e: ToolStartEvent, turn?: TurnEventContext) => void;
+  onToolEnd: (e: ToolEndEvent, turn?: TurnEventContext) => void;
   onConfirmRequest: (e: ConfirmRequestEvent) => void;
   onGoalProgress: (e: GoalProgressEvent) => void;
 }
 
-/// 注册所有 agent 事件监听，返回一个反注册函数。
+/// Consume the session-owned unified envelope for turn events. Confirmation
+/// and goal progress have their own session id because they are emitted by
+/// subsystems outside the session-engine event adapter.
 export async function listenAgentEvents(h: AgentEventHandlers): Promise<UnlistenFn> {
   const uns: UnlistenFn[] = await Promise.all([
-    listen("assistant-start", () => h.onAssistantStart()),
-    listen<string>("assistant-delta", (e) => h.onAssistantDelta(e.payload)),
-    listen<string>("assistant-reasoning", (e) => h.onAssistantReasoning?.(e.payload)),
-    listen<string>("assistant-done", (e) => h.onAssistantDone(e.payload)),
-    listen<AssistantErrorEvent>("assistant-error", (e) => h.onAssistantError(e.payload)),
-    listen("assistant-interrupted", () => h.onAssistantInterrupted()),
-    listen<ToolStartEvent>("tool-start", (e) => h.onToolStart(e.payload)),
-    listen<ToolEndEvent>("tool-end", (e) => h.onToolEnd(e.payload)),
+    listenUnifiedAgentEvents((event) => {
+      const turn = event.turn;
+      switch (event.kind) {
+        case "assistant_start":
+          h.onAssistantStart(turn);
+          break;
+        case "assistant_delta":
+          h.onAssistantDelta(String(event.payload ?? ""), turn);
+          break;
+        case "assistant_reasoning":
+          h.onAssistantReasoning?.(String(event.payload ?? ""), turn);
+          break;
+        case "assistant_done":
+          h.onAssistantDone(String(event.payload ?? ""), turn);
+          break;
+        case "assistant_error":
+          h.onAssistantError(event.payload as AssistantErrorEvent, turn);
+          break;
+        case "assistant_interrupted":
+          h.onAssistantInterrupted(turn);
+          break;
+        case "tool_start":
+          h.onToolStart(event.payload as ToolStartEvent, turn);
+          break;
+        case "tool_end":
+          h.onToolEnd(event.payload as ToolEndEvent, turn);
+          break;
+      }
+    }),
     listen<ConfirmRequestEvent>("tool-confirm-request", (e) => h.onConfirmRequest(e.payload)),
     listen<GoalProgressEvent>("goal-progress", (e) => h.onGoalProgress(e.payload)),
   ]);

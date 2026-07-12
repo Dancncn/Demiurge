@@ -219,12 +219,13 @@ Demiurge/
 
 ## Security Model
 
-> 注意：2026-07-12 审查确认了若干高优先级边界。角色包权限升级与路径越界、权限规则跨会话/项目扩散、跨项目撤销、Windows 系统打开命令注入、direct 网页读取访问私网、deferred wrapper 共用授权、分支缓存跨项目复用和运行中回合写错会话已修复；MCP 动态工具风险下限与其余前端会话—工作区竞态仍待逐项修复。详情见 [代码审查报告](docs/CODE-REVIEW-2026-07-12.md)。
+> 注意：2026-07-12 审查确认了若干高优先级边界。角色包权限升级与路径越界、权限规则跨会话/项目扩散、跨项目撤销、Windows 系统打开命令注入、direct 网页读取访问私网、deferred wrapper 共用授权、会话导航快照、分支缓存跨项目复用和运行中回合写错会话已修复；MCP 动态工具风险下限仍待修复。详情见 [代码审查报告](docs/CODE-REVIEW-2026-07-12.md)。
 
 - 文件与 shell 工具只能访问当前会话绑定的项目根；未选择项目时回退到应用数据目录下的 `sandbox/`。
 - 路径先做词法校验，再做 canonicalize 校验，防止 `..`、符号链接和 junction 逃逸。
 - 回复生成期间禁止切换到另一个项目或切换 Git 分支，避免运行中的工具根目录发生漂移。
 - 回合从 `begin_turn` 起固定拥有一个 session id；初始化、prompt、消息、工具内会话状态和目标续跑都复用该身份，运行/取消中的所属会话不可删除。
+- 后端把 `session_id + sessions + history + workspace + goal` 作为一个导航快照返回；前端只提交最新 navigation epoch/request，并在导航期间锁定 Sidebar、Composer、Goal、语音与工作区操作。主时间线消费带 `turn.session_id` 的统一事件，确认与 Goal 事件也携带 session id。
 - 权限上下文在回合开始、任何异步初始化之前捕获；裁决、审计和确认后的规则记忆始终复用该 session/workspace identity，不会因界面切换改写归属。
 - Session 权限按 session id 分桶并随会话删除；Project 权限按 canonical workspace identity 存入版本化 `project_permissions.json`，不会跨项目复用。
 - Project/User 权限文件在进程内串行并通过同目录临时文件原子替换；工作区身份或规则存储无法验证时拒绝自动授权。旧版无项目身份的 `permissions.json` 不会自动应用，升级后需在当前项目重新确认 Project 规则。

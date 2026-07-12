@@ -140,7 +140,7 @@ run()
 | 自定义 Agent | `agent_panel_state`(:792)、`agent_template_json`(:797)、`agent_validate_json`(:802)、`agent_read_file`(:807)、`agent_save_file`(:815)、`agent_delete_file`(:825) | 转调 `agent::custom` |
 | Goal 驱动 | `goal_panel_state`(:833)、`goal_pause`(:838)、`goal_resume`(:848)、`goal_continue`(:869)、`goal_clear`(:890) | resume/continue 用 `busy.swap` 防并发 |
 | 记忆 | `memory_panel_state`(:923)、`memory_add_entry`(:929)、`memory_update_entry`(:949)、`memory_delete_entry`(:969)、`memory_dedupe_apply`(:978) | 统一经 `memory_context()` 取 5 元组路径 |
-| 会话管理 | `list_sessions`(:988)、`session_stats`(:995)、`get_history`(:1003)、`new_session`(:1335)、`select_session`(:1350)、`delete_session`(:1362)、`rename_session`(:1384) | 改动后 `persist_sessions` |
+| 会话管理 | `list_sessions`、`navigation_snapshot`、`session_stats`、`get_history`、`new_session`、`select_session`、`delete_session`、`rename_session` | snapshot 原子绑定 session/list/history/workspace/goal；新建/选择/删除直接返回快照，选择/删除失败回滚后端会话事务 |
 | 上下文面板 | `context_panel_state`(:1012) | 见 3.6 |
 | 技能 | `skill_panel_state`(:1210)、`open_skills_dir`(:1224) | 可带 `query` 做匹配打分 |
 | 沙箱 | `open_sandbox`(:1403) | 调 `tools::execute_open` 用系统文件管理器打开 |

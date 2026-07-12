@@ -579,6 +579,7 @@ pub async fn run_turn_with_options(
                         app,
                         state,
                         PermissionRequest {
+                            session_id: &sid,
                             tool: &permission_name,
                             args_pretty: &pretty,
                             description,

@@ -91,7 +91,7 @@ Demiurge 当前已经具备本地桌面 Agent 的主体能力：会话、工具�
 ## P0/P1 / 代码审查修复队列
 
 - [x] **角色包权限只能收紧**：manifest 导入/保存拒绝 `allow`、未知策略和非法工具名；运行时忽略任何绕过校验的放宽值，并保证 overlay 只能保持或收紧工具默认权限。
-- [ ] **会话—工作区原子快照**：用 navigation epoch 或后端原子命令绑定 `session_id + history + workspace + goal`；所有慢响应和 legacy 事件必须验证 session/turn 归属。
+- [x] **会话—工作区原子快照**：后端一次返回 `session_id + sessions + history + workspace + goal`；新建/选择/删除直接返回快照，前端用 navigation epoch/request、expected session 与导航互斥丢弃迟到响应，主时间线/确认/Goal 事件均验证 session/turn 归属。
 - [x] **回合写入绑定起始会话**：`begin_turn` 的 session id 贯穿 runner、prompt、slash、Goal、子 Agent 与会话相关工具；运行/取消中的所属会话不可删除，延迟初始化切换测试证明不会写入新 active 会话。
 - [x] **项目/会话权限真正隔离**：Project scope 按 canonical 项目根分桶，Session scope 按 session id 分桶并随会话删除；turn-owned 权限上下文绑定裁决、审计与确认记忆，存储/身份错误 fail closed，旧无作用域 Project 文件不自动应用。
 - [x] **撤销记录绑定项目身份**：undo entry 保存 canonical workspace root；预览和执行撤销前重新规范化当前项目根并要求身份一致，跨项目记录不会被读取或写回。
@@ -109,10 +109,10 @@ Demiurge 当前已经具备本地桌面 Agent 的主体能力：会话、工具�
 - [ ] **历史工具状态结构化**：持久化 ok/denied/failed、错误、耗时和受影响路径；未知状态不显示为绿色成功。
 - [ ] **第三种供应商 SSE 对齐**：复用公共解码器，处理无换行流尾、多行 data、命名/内嵌错误，并拒绝静默 JSON 丢弃。
 - [ ] **完整流终止校验与解码上限**：缺少协议终止事件的 clean EOF 不能归一为 stop；为单行、单事件和累计缓冲设置字节上限。
-- [ ] **canonical done 与统一事件信封**：最终完整正文修复漏 delta；主时间线按 session/turn reducer 消费统一事件。
+- [ ] **canonical done 与统一时间线 reducer**：主时间线已消费统一信封并按 session 过滤；仍需让最终完整正文修复漏 delta，并按 turn id 处理重复/乱序事件。
 - [ ] **流式渲染性能**：历史 Markdown/ToolCard 保持稳定 memo，自动滚动尊重用户位置，Mermaid 只在流完成后渲染一次。
 - [ ] **工作区组件竞态与响应式/无障碍**：目录、changes、preview 使用 generation；Git→非 Git 回到 Files；项目面板在窄窗口改为 drawer，并补键盘/ARIA。
-- [ ] **前端测试基线**：增加组件、延迟竞态、跨会话事件、流式 fixture、性能、980/1280/1811px 布局和可访问性回归。
+- [ ] **前端测试基线**：navigation epoch/request 的延迟乱序与跨会话事件已有 Node 测试；仍需组件、流式 fixture、性能、980/1280/1811px 布局和可访问性回归。
 
 ## 已有雏形但需要优化
 

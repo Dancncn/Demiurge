@@ -908,6 +908,14 @@ export interface SessionList {
   sessions: SessionMeta[];
 }
 
+export interface NavigationSnapshot {
+  session_id: string;
+  sessions: SessionMeta[];
+  history: Message[];
+  workspace: WorkspaceState;
+  goal: GoalPanelState | null;
+}
+
 export interface DayCell {
   date: string;
   count: number;
@@ -1093,6 +1101,7 @@ export interface ToolSourceQuality {
 }
 export interface ConfirmRequestEvent {
   id: string;
+  session_id: string;
   tool: string;
   args: string; // 已 pretty 的 JSON 字符串
   description?: string;
@@ -1107,6 +1116,7 @@ export interface ConfirmRequestEvent {
 }
 
 export interface GoalProgressEvent {
+  session_id: string;
   status: string;
   message: string;
   turns_executed: number;

@@ -509,7 +509,7 @@ fn concise_git_status(x: char, y: char) -> String {
     }
 }
 
-fn inspect_workspace(root: &Path) -> WorkspaceState {
+pub(crate) fn inspect_workspace(root: &Path) -> WorkspaceState {
     let path = canonicalize_directory(root).unwrap_or_else(|_| root.to_path_buf());
     let name = path
         .file_name()

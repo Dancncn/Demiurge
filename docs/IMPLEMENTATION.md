@@ -223,7 +223,7 @@ Git 调用使用固定参数数组与 `current_dir`，不经过 shell。分支�
 5. `budget` 和 `context` 按预算裁剪历史。
 6. provider adapter 发起流式请求。
 7. 如果模型返回 tool calls，后端执行工具并把 tool result 写回历史，再进入下一轮模型请求。
-8. assistant/tool 事件统一通过 `TurnEventEmitter` 发出；前端仍接收 legacy `assistant-*` / `tool-*` 事件，同时可消费带 turn context 的 `agent-event`。
+8. assistant/tool 事件统一通过 `TurnEventEmitter` 发出；后端为兼容继续双发 legacy 事件和带 turn context 的 `agent-event`，主时间线只消费统一信封并拒绝非当前 session 的事件。确认与 Goal 进度载荷另带 `session_id`，走同一前端归属检查。
 9. 如果模型给出最终回答，触发 `assistant-done`，随后尝试记忆提取。
 10. 如果 turn-owned session 有 active goal，则 `goal::drive_after_turn(session_id)` 继续调度下一轮，直到目标完成、暂停、阻塞、预算限制、max turns 或中断；切换侧栏 active session 不会改变续跑目标。
 11. 回合退出时 `session_engine::finish_turn` 将 active turn 移入 last turn，并通过 `session-engine-updated` 推送后端 busy/cancel 状态；`interrupt` 通过 `request_interrupt` 把当前 turn 标记为 `cancelling`。
@@ -355,13 +355,15 @@ MCP 工具是运行时动态注册的：`agent::runner` 在生成工具 schema �
 
 ## 安全模型
 
-> 当前限制：以下机制描述设计目标，不代表所有边界已闭环。角色包权限升级与 IPC 信任根、Project/Session 权限串用、跨项目 undo、Windows open_path 命令注入、direct HTTP SSRF、Live2D 内部引用/事务导入、deferred 目标授权、分支跨项目竞态与 turn 写入归属已修复；MCP 动态工具风险下限和其余前端工作区竞态仍需逐项修复。详情见 [代码审查报告](./CODE-REVIEW-2026-07-12.md)。
+> 当前限制：以下机制描述设计目标，不代表所有边界已闭环。角色包权限升级与 IPC 信任根、Project/Session 权限串用、跨项目 undo、Windows open_path 命令注入、direct HTTP SSRF、Live2D 内部引用/事务导入、deferred 目标授权、会话导航事务、分支跨项目竞态与 turn 写入归属已修复；MCP 动态工具风险下限仍需修复，目录/预览等组件级竞态留在 P2 队列。详情见 [代码审查报告](./CODE-REVIEW-2026-07-12.md)。
 
 - `PermissionMode` 支持 `plan` / `default` / `auto` / `bypass`：`default` 走工具默认策略与用户规则；`auto` 自动允许只读工具；`bypass` 跳过确认但仍审计；`plan` 未批准前只允许只读工具和受限 `write_plan`。
 - Plan Mode 的计划状态在 `AppState.plan_state` 中维护；`write_plan` 只能写入沙盒 `.demiurge/plans/`，前端通过 `approve_plan` 批准后自动回到 `default` 执行模式。
 - 文件与 shell 工具只能访问当前会话项目根；未选择项目时使用默认沙盒。
 - 路径先做词法校验，再对最近存在祖先做 canonicalize，防止符号链接和 junction 逃逸。
 - 回复生成期间禁止切换到其他项目或 Git 分支，避免工具执行根目录在回合中途改变。
+- `navigation_snapshot` 在同一 SessionStore 锁下捕获 active `session_id`、会话列表、历史、session-owned workspace path 与 Goal；workspace 状态按该捕获路径检查，不再从稍后可变的全局 sandbox 推导。新建/选择/删除直接返回快照，选择/删除同步失败会回滚会话状态。
+- 前端 `NavigationEpoch` 同时维护 navigation epoch 与同 epoch request 序号：新用户导航作废全部旧请求，后台刷新只允许最后发起者提交；快照还必须返回期望 session id。`navigationPending` 同步锁定会话导航和可能作用于项目的交互。
 - Session 规则按 session id 存在内存独立桶中并随会话删除；Project 规则以 canonical workspace identity 为键持久化，User 规则才是全局规则。
 - runner 在异步初始化前捕获 turn-owned 权限上下文，整个回合的规则查找、审计和确认记忆不再依赖可变 active session；设置面板更新/清除也校验界面携带的具体身份。
 - `project_permissions.json` 与 `user_permissions.json` 受同一存储锁保护并以同目录临时文件原子替换；边界或存储错误按 `Deny(Once)` 处理。旧 `permissions.json` 不自动应用，避免把无项目身份的历史授权扩散到任意项目。

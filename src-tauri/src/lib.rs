@@ -152,6 +152,15 @@ struct SessionList {
 }
 
 #[derive(Serialize)]
+struct NavigationSnapshot {
+    session_id: String,
+    sessions: Vec<SessionMeta>,
+    history: Vec<Message>,
+    workspace: workspace::WorkspaceState,
+    goal: Option<agent::goal::GoalPanelState>,
+}
+
+#[derive(Serialize)]
 struct ContextPanelState {
     message_count: usize,
     user_messages: usize,
@@ -249,6 +258,102 @@ fn session_list(store: &SessionStore) -> SessionList {
     SessionList {
         active: store.active.clone(),
         sessions: metas,
+    }
+}
+
+fn navigation_snapshot_for_state(
+    state: &AppState,
+    expected_session_id: Option<&str>,
+) -> Result<NavigationSnapshot, String> {
+    let (session_id, sessions, history, workspace_path, goal) = {
+        let store = state.sessions.lock().unwrap();
+        if let Some(expected) = expected_session_id {
+            if store.active != expected {
+                return Err(format!(
+                    "活动会话已改变：期望 `{expected}`，实际 `{}`",
+                    store.active
+                ));
+            }
+        }
+        let session = store
+            .get(&store.active)
+            .ok_or_else(|| "当前活动会话不存在".to_string())?;
+        let list = session_list(&store);
+        (
+            session.id.clone(),
+            list.sessions,
+            session.messages.clone(),
+            session.workspace_path.clone(),
+            session.goal.clone(),
+        )
+    };
+
+    // Inspect the workspace captured from the same session record as history
+    // and goal. Never derive this field from the mutable global sandbox after
+    // releasing the session lock.
+    let workspace_root = if workspace_path.trim().is_empty() {
+        state.sandbox_dir.lock().unwrap().clone()
+    } else {
+        PathBuf::from(workspace_path)
+    };
+    Ok(NavigationSnapshot {
+        session_id,
+        sessions,
+        history,
+        workspace: workspace::inspect_workspace(&workspace_root),
+        goal: goal.as_ref().map(agent::goal::panel_state_from_goal),
+    })
+}
+
+#[cfg(test)]
+mod navigation_snapshot_tests {
+    use super::*;
+
+    #[test]
+    fn snapshot_binds_history_workspace_and_goal_to_one_session() {
+        let root = std::env::temp_dir().join(format!(
+            "demiurge_navigation_snapshot_{}",
+            store::new_session_id()
+        ));
+        let workspace_a = root.join("workspace-a");
+        let workspace_b = root.join("workspace-b");
+        fs::create_dir_all(&workspace_a).unwrap();
+        fs::create_dir_all(&workspace_b).unwrap();
+
+        let state = AppState::new(reqwest::Client::new());
+        *state.data_dir.lock().unwrap() = root.clone();
+        // Deliberately point the mutable global sandbox at B. The snapshot for
+        // A must still inspect A's session-owned workspace path.
+        *state.sandbox_dir.lock().unwrap() = workspace_b.clone();
+
+        let mut session_a = Session::new();
+        session_a.id = "session-a".to_string();
+        session_a.workspace_path = workspace_a.to_string_lossy().to_string();
+        session_a.messages.push(Message::user("history-a"));
+        let mut session_b = Session::new();
+        session_b.id = "session-b".to_string();
+        session_b.workspace_path = workspace_b.to_string_lossy().to_string();
+        session_b.messages.push(Message::user("history-b"));
+        {
+            let mut sessions = state.sessions.lock().unwrap();
+            sessions.active = session_a.id.clone();
+            sessions.sessions = vec![session_a, session_b];
+        }
+        agent::goal::set_goal_for_session(&state, "session-a", "goal-a".to_string(), None);
+
+        let snapshot = navigation_snapshot_for_state(&state, Some("session-a")).unwrap();
+        assert_eq!(snapshot.session_id, "session-a");
+        assert_eq!(snapshot.history.len(), 1);
+        assert_eq!(snapshot.history[0].content.as_deref(), Some("history-a"));
+        assert_eq!(snapshot.workspace.name, "workspace-a");
+        assert_eq!(
+            snapshot.goal.as_ref().map(|goal| goal.objective.as_str()),
+            Some("goal-a")
+        );
+
+        state.sessions.lock().unwrap().active = "session-b".to_string();
+        assert!(navigation_snapshot_for_state(&state, Some("session-a")).is_err());
+        let _ = fs::remove_dir_all(root);
     }
 }
 
@@ -1249,6 +1354,14 @@ fn get_history(state: State<'_, AppState>) -> Vec<Message> {
 }
 
 #[tauri::command]
+fn navigation_snapshot(
+    state: State<'_, AppState>,
+    expected_session_id: Option<String>,
+) -> Result<NavigationSnapshot, String> {
+    navigation_snapshot_for_state(state.inner(), expected_session_id.as_deref())
+}
+
+#[tauri::command]
 fn context_panel_state(state: State<'_, AppState>) -> ContextPanelState {
     let settings = state.settings.lock().unwrap().clone();
     let (messages, summary) = {
@@ -1570,9 +1683,9 @@ mod context_panel_tests {
     }
 }
 
-/// 新建会话并设为活动，返回新会话 id。
+/// 新建会话并设为活动，返回与新会话绑定的原子导航快照。
 #[tauri::command]
-fn new_session(state: State<'_, AppState>) -> String {
+fn new_session(state: State<'_, AppState>) -> Result<NavigationSnapshot, String> {
     let workspace_path = state
         .sandbox_dir
         .lock()
@@ -1589,12 +1702,12 @@ fn new_session(state: State<'_, AppState>) -> String {
         id
     };
     state.persist_sessions();
-    id
+    navigation_snapshot_for_state(state.inner(), Some(&id))
 }
 
 /// 切换活动会话。
 #[tauri::command]
-fn select_session(state: State<'_, AppState>, id: String) -> Result<(), String> {
+fn select_session(state: State<'_, AppState>, id: String) -> Result<NavigationSnapshot, String> {
     let configured = {
         let store = state.sessions.lock().unwrap();
         store
@@ -1602,20 +1715,35 @@ fn select_session(state: State<'_, AppState>, id: String) -> Result<(), String> 
             .map(|session| session.workspace_path.clone())
             .ok_or_else(|| "会话不存在".to_string())?
     };
+    // Serialize the active-session/workspace transaction with turn startup.
+    let runtime = state.session_engine.lock().unwrap();
     workspace::ensure_session_workspace_switch_allowed(state.inner(), &configured)?;
-    {
+    let previous_active = {
         let mut store = state.sessions.lock().unwrap();
-        store.active = id;
+        let previous = store.active.clone();
+        store.active = id.clone();
+        previous
+    };
+    if let Err(error) = workspace::sync_active_session_workspace(state.inner()) {
+        state.sessions.lock().unwrap().active = previous_active;
+        let rollback = workspace::sync_active_session_workspace(state.inner());
+        return Err(match rollback {
+            Ok(()) => error,
+            Err(rollback_error) => {
+                format!("{error}；恢复原会话工作区失败：{rollback_error}")
+            }
+        });
     }
-    workspace::sync_active_session_workspace(state.inner())?;
     state.persist_sessions();
-    Ok(())
+    drop(runtime);
+    navigation_snapshot_for_state(state.inner(), Some(&id))
 }
 
-/// 删除会话；若删的是活动会话，切到最近一个（或新建空会话）。返回新的活动会话 id。
+/// 删除会话；若删的是活动会话，切到最近一个（或新建空会话），并返回新活动会话快照。
 #[tauri::command]
-fn delete_session(state: State<'_, AppState>, id: String) -> Result<String, String> {
-    delete_session_inner(state.inner(), id)
+fn delete_session(state: State<'_, AppState>, id: String) -> Result<NavigationSnapshot, String> {
+    let active = delete_session_inner(state.inner(), id)?;
+    navigation_snapshot_for_state(state.inner(), Some(&active))
 }
 
 fn delete_session_inner(state: &AppState, id: String) -> Result<String, String> {
@@ -1631,7 +1759,7 @@ fn delete_session_inner(state: &AppState, id: String) -> Result<String, String> 
     if agent::session_engine::blocks_session_deletion(&runtime, &id) {
         return Err("正在生成回复，暂时不能删除本轮所属会话".to_string());
     }
-    let active = {
+    let (active, previous_store) = {
         let mut store = state.sessions.lock().unwrap();
         if !store.sessions.iter().any(|session| session.id == id) {
             return Err("会话不存在".to_string());
@@ -1639,6 +1767,7 @@ fn delete_session_inner(state: &AppState, id: String) -> Result<String, String> 
         if store.active == id && state.busy.load(Ordering::Acquire) {
             return Err("正在生成回复，暂时不能删除当前会话".to_string());
         }
+        let previous = store.clone();
         store.sessions.retain(|s| s.id != id);
         if store.active == id {
             // 切到最近更新的会话
@@ -1657,12 +1786,21 @@ fn delete_session_inner(state: &AppState, id: String) -> Result<String, String> 
         } else {
             store.ensure_one();
         }
-        store.active.clone()
+        (store.active.clone(), previous)
     };
-    drop(runtime);
+    if let Err(error) = workspace::sync_active_session_workspace(state) {
+        *state.sessions.lock().unwrap() = previous_store;
+        let rollback = workspace::sync_active_session_workspace(state);
+        return Err(match rollback {
+            Ok(()) => error,
+            Err(rollback_error) => {
+                format!("{error}；恢复删除前会话工作区失败：{rollback_error}")
+            }
+        });
+    }
     permission::clear_session_rules(state, &id);
-    workspace::sync_active_session_workspace(state)?;
     state.persist_sessions();
+    drop(runtime);
     Ok(active)
 }
 
@@ -2388,6 +2526,7 @@ pub fn run() {
             memory_dedupe_apply,
             memory_migrate_namespace,
             list_sessions,
+            navigation_snapshot,
             session_stats,
             get_history,
             context_panel_state,

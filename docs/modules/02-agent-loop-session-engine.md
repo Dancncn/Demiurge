@@ -275,7 +275,7 @@ fn emit_legacy_and_unified<T>(&self, legacy_event: &str, kind: &'static str, pay
 | 工具开始 | `tool-start` | `tool_start` |
 | 工具结束 | `tool-end` | `tool_end` |
 
-**为什么双发？** 这是一次「兼容式演进」：旧前端监听离散的 `assistant-*` / `tool-*` 事件（payload 即裸数据）；新前端可改听单一的 `agent-event`，它把所有事件包进 `AgentEventEnvelope`（`session_engine.rs:70`-`79`），额外携带 `turn`（id/session_id/status，由 `current_turn_context` 从 `active_turn` 读取，`session_engine.rs:343`-`355`）和 `timestamp`。这样下游能把每个事件精确归属到某个回合，而无需改动既有 legacy 监听。`emit` 失败用 `let _ =` 吞掉——事件广播是尽力而为，不阻塞主循环。
+**为什么双发？** 这是兼容式演进：离散的 `assistant-*` / `tool-*` 保留给旧消费者；当前主时间线通过 `listenUnifiedAgentEvents` 只消费 `agent-event`。统一信封额外携带 `turn`（id/session_id/status，由 `current_turn_context` 从 `active_turn` 读取）和 `timestamp`，`App` 会在修改时间线或触发 workspace 刷新前要求 `turn.session_id` 等于当前会话。确认与 Goal 进度由其他子系统发出，不进入 `TurnEventEmitter`，其 payload 直接携带 session id。`emit` 失败用 `let _ =` 吞掉——事件广播是尽力而为，不阻塞主循环。
 
 > 与回合状态广播区分：`session-engine-updated`（`emit_update`，`session_engine.rs:335`-`337`）推送的是 `SessionEnginePanelState`（busy / cancel / active_turn / last_turn），由 `begin_turn`/`finish_turn`/`request_interrupt` 触发，属于"回合级"状态；而 `agent-event` 是"事件级"流。两者互补。
 
