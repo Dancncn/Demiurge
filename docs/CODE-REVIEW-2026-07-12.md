@@ -11,7 +11,7 @@
 优先级最高的风险集中在两条所有权链：
 
 1. **权限所有权**：角色包可自行把高危工具设为 Allow；Session/Project 规则没有按会话或项目分桶；deferred/MCP 工具又存在授权粒度降级。
-2. **项目所有权**：前端把活动会话、历史和工作区由多个无版本请求拼装；undo、分支缓存和后端 turn 也没有始终绑定不可变的 session/workspace identity。
+2. **项目所有权**：undo 已绑定不可变的 canonical workspace identity；前端快照、分支缓存和后端 turn 的会话/工作区归属仍待修复。
 
 建议在发布或处理未受信角色包、外部工具服务、网页内容前，完成剩余 P1 队列。角色包权限自放行已经修复；Auto/Bypass、外部工具 read-only 注解和其他尚未关闭的边界仍不能当成强隔离。
 
@@ -71,7 +71,9 @@
 
 **建议**：Session 规则按 `(session_id, tool)` 分桶；Project 规则按 canonical workspace identity 分桶；审计记录同时包含 session、workspace 和实际能力。
 
-### P1-03 undo 栈未绑定工作区，可静默修改错误项目
+### P1-03 undo 栈未绑定工作区，可静默修改错误项目（已修复）
+
+**修复状态**：每条 undo entry 现在保存编辑发生时的 canonical workspace root；预览和执行都会先重新规范化当前工作区并要求身份完全一致，再解析相对路径和检查文件内容漂移。新增同相对路径、同 after 内容的跨项目拒绝测试，以及同一规范化工作区可撤销测试。
 
 **触发条件**：在项目 A 编辑相对路径 `config.txt`，切到项目 B；B 的同名文件内容恰好等于 A 编辑后的内容，然后执行 undo。
 

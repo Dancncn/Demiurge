@@ -1,6 +1,6 @@
 # 工具注册表与文件/编辑工具
 
-> 审阅状态（2026-07-12）：本文所称“沙盒”现在是当前会话绑定的项目根；未选择项目时才是应用数据目录默认沙盒。路径 containment 与权限门仍适用，固定行号请以符号名为准。
+> 审阅状态（2026-07-12）：本文所称“沙盒”现在是当前会话绑定的项目根；未选择项目时才是应用数据目录默认沙盒。undo entry 已绑定 canonical workspace root，路径 containment 与权限门仍适用，固定行号请以符号名为准。
 
 > 存档级技术原理文档。读者为协作开发者。
 > 覆盖源文件：`src-tauri/src/tools/mod.rs`、`args.rs`、`read_file.rs`、`write_file.rs`、`edit_file.rs`、`glob.rs`、`grep.rs`、`list_dir.rs`、`git_status.rs`、`write_plan.rs`。
@@ -290,14 +290,14 @@ if had_trailing_newline { next.push('\n'); }
 
 ### 5.5 undo_edit：进程内撤销栈
 
-撤销能力建立在 `AppState.edit_undo_stack: Mutex<Vec<EditUndoEntry>>`（`lib.rs:49`）之上，`EditUndoEntry`（`edit_file.rs:12`）= `{ id, path, before, after, created_at, replacements }`。
+撤销能力建立在 `AppState.edit_undo_stack: Mutex<Vec<EditUndoEntry>>`（`lib.rs`）之上，`EditUndoEntry`（`edit_file.rs`）= `{ id, workspace_root, path, before, after, created_at, replacements }`。
 
 - 每次成功写入都 `push_undo_entry`（`edit_file.rs:425`）：id 形如 `edit_{millis}_{序号}`，栈超过 `MAX_UNDO_ENTRIES=20` 时从头部 `drain` 丢弃最旧记录（`edit_file.rs:445`）。
-- `undo`（`edit_file.rs:128`）：取栈顶 `latest_undo_entry` → 读当前磁盘内容 → `ensure_undo_safe` → 写回 `entry.before` → 弹栈。
+- `undo`：取栈顶 `latest_undo_entry` → 由 `ensure_undo_workspace` 验证当前 canonical root 等于记录根 → 在该根内解析路径 → `ensure_undo_safe` 检查内容漂移 → 写回 `entry.before` → 弹栈。
 - **漂移检测** `ensure_undo_safe`（`edit_file.rs:462`）：若当前文件内容 ≠ 编辑后内容 `entry.after`，说明文件被后续外部修改，**拒绝撤销**并报「无法安全撤销」。测试 `undo_refuses_when_file_drifted`（`edit_file.rs:638`）覆盖此场景。
 - 弹栈时再次确认栈顶 id 一致（`edit_file.rs:139`），否则把记录推回——防止并发下误删别人的记录。
 
-**关键限制**：undo 栈是**进程内内存态**，应用重启即清空；且只能从栈顶逐条撤销（无法跳着撤）。`undo_edit` 注册表描述称「撤销本进程内最近一次成功的 edit_file 修改」（`mod.rs:392`）。`write_file` 不进栈，故 `write_file` 的覆盖**不可被 undo_edit 撤销**。
+**关键限制**：undo 栈是**进程内内存态**，应用重启即清空；且只能从栈顶逐条撤销（无法跳着撤）。如果栈顶记录属于另一个项目，当前项目会拒绝撤销，用户需要切回记录所属项目。`write_file` 不进栈，故 `write_file` 的覆盖**不可被 undo_edit 撤销**。
 
 ### 5.6 行级 diff 预览（`build_preview`，`edit_file.rs:522`）
 
@@ -423,7 +423,7 @@ runner.rs ──tool_calls──► tools::execute ─┬─► read/write/edit/
 ## 10. 已知限制与扩展点
 
 - `undo_edit` 没有路径参数，活动文件标题无法从调用参数得知，只能在结果或未来结构化元数据中恢复。
-- undo 栈属于全局 `AppState`，entry 只保存相对路径与 before/after；切到另一个项目后若同名文件内容恰好等于 after，当前安全检查仍可能把旧项目的 before 写入新项目。entry 必须绑定 canonical workspace identity。
+- undo 栈仍属于全局 `AppState`，但 entry 已保存 canonical workspace root；切换项目后，预览与执行都会在读取或写入文件前拒绝根身份不一致的记录。
 - 历史工具执行状态未结构化持久化，被拒绝/失败的编辑在重开会话后可能被错误展示为成功；详见 [代码审查报告](../CODE-REVIEW-2026-07-12.md)。
 
 1. **`concurrency` 当前是元数据，不是调度器**。runner 用 `for tc in &turn.tool_calls` **顺序执行**所有工具（`runner.rs:440`），`ToolConcurrency::ParallelSafe` 仅作为透传给前端的标签（`runner.rs:466` → `session_engine.rs:97`），后端并未据此并行执行同一回合内的多个工具。provider 侧的 `parallel_tool_calls`（`llm/openai.rs:113`）控制的是模型一次能否返回多个 tool_call，与后端是否并行执行无关。若未来要并行，需要在 runner 引入按 `concurrency` 分组的调度。

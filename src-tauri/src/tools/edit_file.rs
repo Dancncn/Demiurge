@@ -1,5 +1,6 @@
 //! edit_file：在沙盒内对已有 UTF-8 文本文件做精确替换（confirm 类）。
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
@@ -12,6 +13,8 @@ const MAX_PATCH_HUNKS: usize = 20;
 #[derive(Clone, Debug)]
 pub struct EditUndoEntry {
     pub id: String,
+    /// Canonical project root active when this edit was written.
+    pub workspace_root: PathBuf,
     pub path: String,
     pub before: String,
     pub after: String,
@@ -114,7 +117,8 @@ pub fn patch_run(state: &crate::AppState, args: Value) -> Result<String, String>
 
 pub fn undo_preview(state: &crate::AppState, _args: Value) -> Result<String, String> {
     let entry = latest_undo_entry(state)?;
-    let current = read_target(state, &entry.path)?;
+    let workspace_root = ensure_undo_workspace(state, &entry)?;
+    let current = read_target_at(&workspace_root, &entry.path)?;
     ensure_undo_safe(&current, &entry)?;
 
     let mut preview = format!(
@@ -127,9 +131,9 @@ pub fn undo_preview(state: &crate::AppState, _args: Value) -> Result<String, Str
 
 pub fn undo(state: &crate::AppState, _args: Value) -> Result<String, String> {
     let entry = latest_undo_entry(state)?;
-    let sandbox = state.sandbox_dir.lock().unwrap().clone();
-    let path = super::resolve_in_sandbox(&sandbox, &entry.path)?;
-    let current = read_target(state, &entry.path)?;
+    let workspace_root = ensure_undo_workspace(state, &entry)?;
+    let path = super::resolve_in_sandbox(&workspace_root, &entry.path)?;
+    let current = read_target_at(&workspace_root, &entry.path)?;
     ensure_undo_safe(&current, &entry)?;
 
     std::fs::write(&path, &entry.before).map_err(|e| format!("撤销写入失败：{e}"))?;
@@ -283,7 +287,11 @@ fn hunks_count(args: &Value) -> Result<usize, String> {
 
 fn read_target(state: &crate::AppState, rel: &str) -> Result<String, String> {
     let sandbox = state.sandbox_dir.lock().unwrap().clone();
-    let path = super::resolve_in_sandbox(&sandbox, rel)?;
+    read_target_at(&sandbox, rel)
+}
+
+fn read_target_at(workspace_root: &Path, rel: &str) -> Result<String, String> {
+    let path = super::resolve_in_sandbox(workspace_root, rel)?;
     let meta = std::fs::metadata(&path).map_err(|e| format!("无法访问文件：{e}"))?;
     if !meta.is_file() {
         return Err("目标不是文件".to_string());
@@ -410,10 +418,12 @@ fn apply_edit(original: &str, req: &EditRequest) -> Result<(String, usize), Stri
 
 fn write_planned_edit(state: &crate::AppState, edit: &PlannedEdit) -> Result<String, String> {
     let sandbox = state.sandbox_dir.lock().unwrap().clone();
+    let workspace_root = canonical_workspace_root(&sandbox)?;
     let path = super::resolve_in_sandbox(&sandbox, &edit.rel)?;
     std::fs::write(&path, &edit.after).map_err(|e| format!("写入失败：{e}"))?;
     let undo_id = push_undo_entry(
         state,
+        workspace_root,
         edit.rel.clone(),
         edit.before.clone(),
         edit.after.clone(),
@@ -424,6 +434,7 @@ fn write_planned_edit(state: &crate::AppState, edit: &PlannedEdit) -> Result<Str
 
 fn push_undo_entry(
     state: &crate::AppState,
+    workspace_root: PathBuf,
     path: String,
     before: String,
     after: String,
@@ -434,6 +445,7 @@ fn push_undo_entry(
     let entry_id = format!("edit_{created_at}_{}", stack.len() + 1);
     let entry = EditUndoEntry {
         id: entry_id.clone(),
+        workspace_root,
         path,
         before,
         after,
@@ -457,6 +469,25 @@ fn latest_undo_entry(state: &crate::AppState) -> Result<EditUndoEntry, String> {
         .last()
         .cloned()
         .ok_or_else(|| "undo 栈为空，无法撤销最近编辑".to_string())
+}
+
+fn canonical_workspace_root(workspace_root: &Path) -> Result<PathBuf, String> {
+    std::fs::canonicalize(workspace_root)
+        .map_err(|e| format!("无法解析当前项目工作区“{}”：{e}", workspace_root.display()))
+}
+
+fn ensure_undo_workspace(
+    state: &crate::AppState,
+    entry: &EditUndoEntry,
+) -> Result<PathBuf, String> {
+    let current = state.sandbox_dir.lock().unwrap().clone();
+    let current = canonical_workspace_root(&current)?;
+    if current != entry.workspace_root {
+        return Err(
+            "无法安全撤销：当前项目工作区与 undo 记录不一致，请切换回创建该记录的项目".to_string(),
+        );
+    }
+    Ok(current)
 }
 
 fn ensure_undo_safe(current: &str, entry: &EditUndoEntry) -> Result<(), String> {
@@ -630,6 +661,63 @@ mod tests {
 
         undo(&state, json!({})).unwrap();
         assert_eq!(std::fs::read_to_string(&file).unwrap(), "hello\nworld\n");
+        assert!(state.edit_undo_stack.lock().unwrap().is_empty());
+
+        let _ = std::fs::remove_dir_all(&sandbox);
+    }
+
+    #[test]
+    fn undo_refuses_different_workspace_with_same_relative_path_and_after_content() {
+        let workspace_a = temp_sandbox("workspace_a");
+        let workspace_b = temp_sandbox("workspace_b");
+        let file_a = workspace_a.join("note.txt");
+        let file_b = workspace_b.join("note.txt");
+        std::fs::write(&file_a, "before\n").unwrap();
+        std::fs::write(&file_b, "after\n").unwrap();
+        let state = test_state(workspace_a.clone());
+
+        run(
+            &state,
+            json!({ "path": "note.txt", "old_string": "before", "new_string": "after" }),
+        )
+        .unwrap();
+        assert_eq!(std::fs::read_to_string(&file_a).unwrap(), "after\n");
+        assert_eq!(std::fs::read_to_string(&file_b).unwrap(), "after\n");
+
+        *state.sandbox_dir.lock().unwrap() = workspace_b.clone();
+
+        let preview_err = undo_preview(&state, json!({})).unwrap_err();
+        assert!(preview_err.contains("当前项目工作区与 undo 记录不一致"));
+        let undo_err = undo(&state, json!({})).unwrap_err();
+        assert!(undo_err.contains("当前项目工作区与 undo 记录不一致"));
+
+        assert_eq!(std::fs::read_to_string(&file_a).unwrap(), "after\n");
+        assert_eq!(std::fs::read_to_string(&file_b).unwrap(), "after\n");
+        assert_eq!(state.edit_undo_stack.lock().unwrap().len(), 1);
+
+        let _ = std::fs::remove_dir_all(&workspace_a);
+        let _ = std::fs::remove_dir_all(&workspace_b);
+    }
+
+    #[test]
+    fn undo_accepts_same_canonical_workspace_identity() {
+        let sandbox = temp_sandbox("same_workspace");
+        let file = sandbox.join("note.txt");
+        std::fs::write(&file, "before\n").unwrap();
+        let state = test_state(sandbox.clone());
+
+        run(
+            &state,
+            json!({ "path": "note.txt", "old_string": "before", "new_string": "after" }),
+        )
+        .unwrap();
+
+        // Reconstructing the same root with a redundant component must not look like a switch.
+        *state.sandbox_dir.lock().unwrap() = sandbox.join(".");
+        assert!(undo_preview(&state, json!({})).is_ok());
+        undo(&state, json!({})).unwrap();
+
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "before\n");
         assert!(state.edit_undo_stack.lock().unwrap().is_empty());
 
         let _ = std::fs::remove_dir_all(&sandbox);
