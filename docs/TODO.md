@@ -100,7 +100,7 @@ Demiurge 当前已经具备本地桌面 Agent 的主体能力：会话、工具�
 - [x] **Windows 系统打开去除命令解释器**：Windows 直接调用 `ShellExecuteW`，目标作为独立 UTF-16 参数传入并拒绝内部 NUL；元字符、引号、空格、URL query 与本地路径已有回归覆盖。
 - [ ] **deferred 工具按目标授权**：`execute_tool` 的记忆规则包含实际 tool name，或在 wrapper 内再次走目标工具权限门。
 - [ ] **MCP 注解只作提示**：外部 server 自报 read-only 不能让 Auto 自动放行；动态工具风险下限保持 External/Privileged。
-- [ ] **分支命令验证 expected workspace**：列表缓存按项目失效，loading 时不可点击；后端切换时比较调用方看到的项目根。
+- [x] **分支命令验证 expected workspace**：列表缓存按项目与 generation 失效，loading 时不展示旧项；枚举和切换均由后端比较 canonical expected/current workspace，并在切换期间锁定工作区。
 
 ## P2/P3 / 正确性、协议、体验与门禁修复队列
 

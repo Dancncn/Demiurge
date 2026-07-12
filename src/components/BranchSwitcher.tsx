@@ -22,7 +22,24 @@ export function BranchSwitcher({ workspace, busy, onWorkspaceChange, onRefreshWo
   const [switching, setSwitching] = useState<string | null>(null);
   const [pendingBranch, setPendingBranch] = useState<GitBranch | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const workspacePathRef = useRef(workspace.path);
+  const branchRequestRef = useRef(0);
+  const switchRequestRef = useRef(0);
   const isDesktop = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+
+  workspacePathRef.current = workspace.path;
+
+  useEffect(() => {
+    branchRequestRef.current += 1;
+    switchRequestRef.current += 1;
+    setOpen(false);
+    setBranches([]);
+    setQuery("");
+    setLoading(false);
+    setSwitching(null);
+    setPendingBranch(null);
+    setError(null);
+  }, [workspace.path]);
 
   useEffect(() => {
     if (!open) return;
@@ -35,38 +52,56 @@ export function BranchSwitcher({ workspace, busy, onWorkspaceChange, onRefreshWo
   }, [open]);
 
   async function loadBranches() {
+    const expectedWorkspacePath = workspace.path;
+    const requestId = ++branchRequestRef.current;
+    setBranches([]);
     setLoading(true);
     setError(null);
     try {
-      setBranches(
+      const nextBranches =
         isDesktop
-          ? await api.gitBranches()
+          ? await api.gitBranches(expectedWorkspacePath)
           : workspace.branch
             ? [{ name: workspace.branch, current: true, remote: false, upstream: null }]
-            : [],
-      );
+            : [];
+      if (
+        workspacePathRef.current !== expectedWorkspacePath ||
+        branchRequestRef.current !== requestId
+      ) {
+        return;
+      }
+      setBranches(nextBranches);
     } catch (e) {
-      setError(String(e));
+      if (
+        workspacePathRef.current === expectedWorkspacePath &&
+        branchRequestRef.current === requestId
+      ) {
+        setError(String(e));
+      }
     } finally {
-      setLoading(false);
+      if (
+        workspacePathRef.current === expectedWorkspacePath &&
+        branchRequestRef.current === requestId
+      ) {
+        setLoading(false);
+      }
     }
   }
 
   function toggleOpen() {
     if (busy) return;
-    setOpen((current) => {
-      const next = !current;
-      if (next) {
-        setQuery("");
-        setPendingBranch(null);
-        void loadBranches();
-      }
-      return next;
-    });
+    if (open) {
+      setOpen(false);
+      return;
+    }
+    setQuery("");
+    setPendingBranch(null);
+    setOpen(true);
+    void loadBranches();
   }
 
   async function switchBranch(branch: GitBranch) {
-    if (busy || switching) return;
+    if (busy || loading || switching) return;
     if (branch.current || branch.name === workspace.branch) {
       setOpen(false);
       return;
@@ -76,18 +111,36 @@ export function BranchSwitcher({ workspace, busy, onWorkspaceChange, onRefreshWo
       return;
     }
 
+    const expectedWorkspacePath = workspace.path;
+    const requestId = ++switchRequestRef.current;
     setSwitching(branch.name);
     setError(null);
     try {
-      const next = await api.switchGitBranch(branch.name);
+      const next = await api.switchGitBranch(branch.name, expectedWorkspacePath);
+      if (
+        workspacePathRef.current !== expectedWorkspacePath ||
+        switchRequestRef.current !== requestId
+      ) {
+        return;
+      }
       onWorkspaceChange(next);
       onRefreshWorkspace();
       setOpen(false);
       setPendingBranch(null);
     } catch (e) {
-      setError(String(e));
+      if (
+        workspacePathRef.current === expectedWorkspacePath &&
+        switchRequestRef.current === requestId
+      ) {
+        setError(String(e));
+      }
     } finally {
-      setSwitching(null);
+      if (
+        workspacePathRef.current === expectedWorkspacePath &&
+        switchRequestRef.current === requestId
+      ) {
+        setSwitching(null);
+      }
     }
   }
 
@@ -106,7 +159,7 @@ export function BranchSwitcher({ workspace, busy, onWorkspaceChange, onRefreshWo
         key={`${branch.remote ? "remote" : "local"}:${branch.name}`}
         type="button"
         onClick={() => void switchBranch(branch)}
-        disabled={Boolean(switching)}
+        disabled={loading || Boolean(switching)}
         className={`cf-menu-item flex w-full min-w-0 items-center gap-2 disabled:cursor-wait disabled:opacity-60 ${
           branch.current || branch.name === workspace.branch ? "is-active" : ""
         }`}
@@ -197,7 +250,7 @@ export function BranchSwitcher({ workspace, busy, onWorkspaceChange, onRefreshWo
             {!loading && localBranches.length === 0 && remoteBranches.length === 0 && (
               <div className="px-2.5 py-5 text-center text-xs text-[#8a9099]">{t("branch.empty")}</div>
             )}
-            {localBranches.length > 0 && (
+            {!loading && localBranches.length > 0 && (
               <>
                 <div className="px-2.5 pb-1 pt-1 text-[10px] font-semibold uppercase tracking-wide text-[#9aa1ab]">
                   {t("branch.local")}
@@ -205,7 +258,7 @@ export function BranchSwitcher({ workspace, busy, onWorkspaceChange, onRefreshWo
                 {localBranches.map(renderBranch)}
               </>
             )}
-            {remoteBranches.length > 0 && (
+            {!loading && remoteBranches.length > 0 && (
               <>
                 <div className="mt-1 border-t border-[#eceff3] px-2.5 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-wide text-[#9aa1ab]">
                   {t("branch.remote")}

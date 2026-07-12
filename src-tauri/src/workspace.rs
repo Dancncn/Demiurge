@@ -145,8 +145,12 @@ pub fn read_workspace_file(
 }
 
 #[tauri::command]
-pub fn git_branches(state: State<'_, AppState>) -> Result<Vec<GitBranch>, String> {
-    let root = state.sandbox_dir.lock().unwrap().clone();
+pub fn git_branches(
+    state: State<'_, AppState>,
+    expected_workspace_path: String,
+) -> Result<Vec<GitBranch>, String> {
+    let current = state.sandbox_dir.lock().unwrap();
+    let root = ensure_expected_workspace(&current, &expected_workspace_path)?;
     list_git_branches_at(&root)
 }
 
@@ -155,6 +159,7 @@ pub fn switch_git_branch(
     app: AppHandle,
     state: State<'_, AppState>,
     branch: String,
+    expected_workspace_path: String,
 ) -> Result<WorkspaceState, String> {
     if state.busy.load(Ordering::Acquire) {
         return Err("正在生成回复，暂时不能切换 Git 分支，请先停止当前对话".to_string());
@@ -165,7 +170,10 @@ pub fn switch_git_branch(
         return Err("Git 分支名不能为空".to_string());
     }
 
-    let root = state.sandbox_dir.lock().unwrap().clone();
+    // Keep the workspace lock for the whole operation so another session/project switch
+    // cannot invalidate the precondition between validation and `git switch`.
+    let current = state.sandbox_dir.lock().unwrap();
+    let root = ensure_expected_workspace(&current, &expected_workspace_path)?;
     let branches = list_git_branches_at(&root)?;
     let selected = branches
         .iter()
@@ -198,6 +206,7 @@ pub fn switch_git_branch(
 
     ensure_git_success(output, "切换 Git 分支失败")?;
     let snapshot = inspect_workspace(&root);
+    drop(current);
     let _ = app.emit("workspace-updated", snapshot.clone());
     Ok(snapshot)
 }
@@ -659,6 +668,21 @@ fn same_workspace(left: &Path, right: &Path) -> bool {
     }
 }
 
+fn ensure_expected_workspace(current: &Path, expected: &str) -> Result<PathBuf, String> {
+    let expected = expected.trim();
+    if expected.is_empty() {
+        return Err("缺少分支操作对应的项目路径，请重新打开分支列表".to_string());
+    }
+
+    let current = canonicalize_directory(current)?;
+    let expected = canonicalize_directory(Path::new(expected))
+        .map_err(|_| "项目已切换，请重新打开分支列表后再操作".to_string())?;
+    if current != expected {
+        return Err("项目已切换，请重新打开分支列表后再操作".to_string());
+    }
+    Ok(current)
+}
+
 fn is_ignored_directory(name: &OsStr) -> bool {
     let name = name.to_string_lossy();
     IGNORED_DIRECTORIES
@@ -745,6 +769,22 @@ mod tests {
         }
         #[cfg(not(windows))]
         assert!(checked_relative_path("/etc/passwd").is_err());
+    }
+
+    #[test]
+    fn git_workspace_precondition_accepts_current_and_rejects_stale_paths() {
+        let current = temp_directory("git_precondition_current");
+        let stale = temp_directory("git_precondition_stale");
+
+        let resolved = ensure_expected_workspace(&current, &path_for_json(&current)).unwrap();
+        assert!(same_workspace(&resolved, &current));
+
+        let error = ensure_expected_workspace(&current, &path_for_json(&stale)).unwrap_err();
+        assert!(error.contains("项目已切换"));
+        assert!(ensure_expected_workspace(&current, "").is_err());
+
+        fs::remove_dir_all(current).unwrap();
+        fs::remove_dir_all(stale).unwrap();
     }
 
     #[test]

@@ -208,7 +208,7 @@ API Key、WebDAV 密码和 MCP secret env/token 存在系统凭据管理器中�
 
 项目浏览命令只接受相对路径，拒绝绝对路径、`..`、空字节和被忽略目录；访问现有文件前再次 canonicalize 并验证仍位于项目根内。目录按层懒加载，预览最多读取 256 KiB，二进制或非 UTF-8 内容不作为文本返回。
 
-Git 调用使用固定参数数组与 `current_dir`，不经过 shell。分支只能从枚举结果中选择；生成回复期间禁止改变项目或分支。脏工作区的确认是前端防误触提示，真正冲突仍由 `git switch` 失败并原样返回错误，不会自动丢弃改动。
+Git 调用使用固定参数数组与 `current_dir`，不经过 shell。分支列表按 `workspace.path + generation` 失效；枚举与切换都提交 `expected_workspace_path`，后端 canonicalize 后要求它等于当前项目根，并在整个切换期间持有工作区锁。分支只能从当前项目的枚举结果中选择；生成回复期间禁止改变项目或分支。脏工作区的确认是前端防误触提示，真正冲突仍由 `git switch` 失败并原样返回错误，不会自动丢弃改动。
 
 ## Agent 循环
 
@@ -351,7 +351,7 @@ MCP 工具是运行时动态注册的：`agent::runner` 在生成工具 schema �
 
 ## 安全模型
 
-> 当前限制：以下机制描述设计目标，不代表所有边界已闭环。角色包自行放宽工具权限、跨项目 undo 与 Windows open_path 命令注入已修复；Project/Session 权限隔离、pack/Live2D 路径、HTTP SSRF、deferred/MCP 授权粒度和前端工作区竞态仍需逐项修复。详情见 [代码审查报告](./CODE-REVIEW-2026-07-12.md)。
+> 当前限制：以下机制描述设计目标，不代表所有边界已闭环。角色包自行放宽工具权限、跨项目 undo、Windows open_path 命令注入与分支跨项目竞态已修复；Project/Session 权限隔离、pack/Live2D 路径、HTTP SSRF、deferred/MCP 授权粒度和其余前端工作区竞态仍需逐项修复。详情见 [代码审查报告](./CODE-REVIEW-2026-07-12.md)。
 
 - `PermissionMode` 支持 `plan` / `default` / `auto` / `bypass`：`default` 走工具默认策略与用户规则；`auto` 自动允许只读工具；`bypass` 跳过确认但仍审计；`plan` 未批准前只允许只读工具和受限 `write_plan`。
 - Plan Mode 的计划状态在 `AppState.plan_state` 中维护；`write_plan` 只能写入沙盒 `.demiurge/plans/`，前端通过 `approve_plan` 批准后自动回到 `default` 执行模式。

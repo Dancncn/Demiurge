@@ -1,6 +1,6 @@
 # 权限模型与安全边界
 
-> 审阅状态（2026-07-12）：项目选择和分支切换是用户直接触发的 Tauri 命令，不走模型工具权限门；分支切换在脏工作区时由 UI 二次确认，并在活动回合期间由后端拒绝。文件 containment 以会话项目根为边界。固定行号请以符号名为准。
+> 审阅状态（2026-07-12）：项目选择和分支切换是用户直接触发的 Tauri 命令，不走模型工具权限门；分支枚举/切换会验证 canonical expected workspace，脏工作区由 UI 二次确认，活动回合期间由后端拒绝。文件 containment 以会话项目根为边界。固定行号请以符号名为准。
 
 > 修复进度：角色包自放行已修复——manifest 拒绝 allow/未知策略，运行时只允许 deny/ask 且不能把默认 Deny 放宽为 Ask。Project/Session scope 隔离、`execute_tool` 目标级授权和 MCP read-only 注解信任仍待后续独立提交。
 

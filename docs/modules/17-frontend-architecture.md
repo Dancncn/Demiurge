@@ -260,13 +260,13 @@ handleSend(text?, attachments=[])
 
 ### 9.1 会话工作区与异步归属
 
-`WorkspaceExplorer` 通过目录、预览和 Git changes 命令按需读取当前后端项目；`BranchSwitcher` 获取分支后只把分支名提交给后端；`SessionMeta` 在侧栏显示项目名称。后端拥有活动会话和项目根真值，前端的 `activeId`、`items` 与 `workspace` 都只是投影。
+`WorkspaceExplorer` 通过目录、预览和 Git changes 命令按需读取当前后端项目；`BranchSwitcher` 用项目路径和请求 generation 绑定列表响应，切换时同时提交分支名与 `expected_workspace_path`，由后端复核 canonical 项目根。`SessionMeta` 在侧栏显示项目名称。后端拥有活动会话和项目根真值，前端的 `activeId`、`items` 与 `workspace` 都只是投影。
 
-当前投影由多个独立异步请求更新，尚无 request epoch、expected workspace path 或原子 session snapshot。目录、预览、changes、分支列表和 tool-end 刷新也没有响应失效令牌。因此“最后一次用户选择获胜”目前不是代码强制不变量；慢请求可能覆盖新状态。修复时应同时满足：
+分支列表与切换已具有项目路径/generation 边界；但会话、历史、目标和工作区投影仍由多个独立异步请求更新，尚无统一 navigation epoch 或原子 session snapshot。目录、预览、changes 和 tool-end 刷新也没有统一响应失效令牌。因此除分支操作外，“最后一次用户选择获胜”仍不是全局代码不变量；慢请求可能覆盖新状态。后续修复应满足：
 
 1. 会话导航期间互斥，并只提交最新 epoch 的响应；
-2. 后端快照携带 `session_id`，分支切换验证 expected workspace path；
-3. 项目树/预览/分支请求绑定 `workspace.path` 与 generation；
+2. 后端会话快照携带 `session_id`；分支切换的 expected workspace path 校验已经完成；
+3. 项目树/预览请求绑定 `workspace.path` 与 generation；分支请求已经完成该约束；
 4. 时间线改用带 `turn.session_id` 的统一事件信封，丢弃非当前会话事件。
 
 ## 十、已知限制与扩展点

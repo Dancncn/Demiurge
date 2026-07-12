@@ -11,7 +11,7 @@
 优先级最高的风险集中在两条所有权链：
 
 1. **权限所有权**：角色包可自行把高危工具设为 Allow；Session/Project 规则没有按会话或项目分桶；deferred/MCP 工具又存在授权粒度降级。
-2. **项目所有权**：undo 已绑定不可变的 canonical workspace identity；前端快照、分支缓存和后端 turn 的会话/工作区归属仍待修复。
+2. **项目所有权**：undo 与分支操作已绑定不可变的 canonical workspace identity；前端会话快照和后端 turn 的归属仍待修复。
 
 建议在发布或处理未受信角色包、外部工具服务、网页内容前，完成剩余 P1 队列。角色包权限自放行已经修复；Auto/Bypass、外部工具 read-only 注解和其他尚未关闭的边界仍不能当成强隔离。
 
@@ -176,7 +176,9 @@
 
 **建议**：引入单调 navigation epoch 和 `navigationPending`；最好由后端原子返回 `{session_id, sessions, history, workspace, goal}`，提交前核对 id；所有晚到刷新丢弃。
 
-### P1-10 分支列表缓存没有绑定项目
+### P1-10 分支列表缓存没有绑定项目（已修复）
+
+**修复状态**：`BranchSwitcher` 在项目变化时关闭菜单、清空旧列表并递增请求 generation；加载期间不渲染或点击旧项，晚到响应必须同时匹配项目路径和请求 id。分支枚举与切换 IPC 都携带 `expected_workspace_path`，后端 canonicalize 后要求它等于当前工作区；切换期间持有工作区锁，消除校验与 `git switch` 之间的切换窗口。新增后端 stale/current 路径回归测试。
 
 **触发条件**：项目 A 加载过分支后关闭菜单，切到项目 B，再打开；B 列表返回前点击仍显示的 A 分支。
 
