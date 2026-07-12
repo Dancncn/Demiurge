@@ -106,7 +106,9 @@
 
 **建议**：改用 `ShellExecuteW`、安全系统 opener 或对应桌面插件，不经过命令解释器；加入全部元字符、引号、空格、URL query 和本地路径回归测试。
 
-### P1-05 默认 Allow 的网页读取工具可访问本机、私网和链路本地
+### P1-05 默认 Allow 的网页读取工具可访问本机、私网和链路本地（已修复）
+
+**修复状态**：`http_get` 与 direct `web_fetch` 统一走 `safe_http`。仅接受无 credentials 的 HTTP(S) URL；首跳和最多 10 次重定向的每一跳都独立解析 DNS，并要求全部解析结果为公网 IPv4/IPv6。客户端通过 `resolve_to_addrs` 固定已验证地址、禁用环境代理和自动重定向，响应返回后再复核实际 peer；DNS、连接、逐读和单跳总请求均有限时。新增 loopback/private/link-local/CGNAT/reserved/multicast、IPv4-mapped IPv6、另类 IPv4 记法、混合 DNS、DNS pin、禁用自动重定向，以及完整“首跳响应 → 私网 Location → 第二跳连接前拒绝”测试。`source=exa`/`livecrawl` 仍是外部服务抓取，不声称经过本机 IP pin。
 
 **触发条件**：请求 loopback、RFC1918、IPv6 本地、链路本地/元数据地址，或公开 URL 重定向到这些地址。
 

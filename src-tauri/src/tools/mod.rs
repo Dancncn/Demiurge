@@ -20,6 +20,7 @@ mod list_dir;
 mod open_path;
 mod package_scripts;
 mod read_file;
+mod safe_http;
 mod screen;
 mod shell;
 mod system_info;

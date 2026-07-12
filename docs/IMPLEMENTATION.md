@@ -138,7 +138,8 @@ Demiurge/
 | `mcp/mod.rs` | stdio MCP Manager、server lifecycle、tool/resource discovery、resource read、动态 tool definition 与调用分发 | `ensure_initialized()` / `call_tool()` / `read_resource()` |
 | `tools/mod.rs` | 工具注册表、schema 输出、权限 metadata、统一执行入口 | `registry()` / `execute()` |
 | `tools/list_dir.rs` | 沙盒目录直接子项枚举，按 dir/file/other 排序，默认隐藏 dotfile 并支持数量截断 | `run()` |
-| `tools/http_get.rs` | 轻量公开 http/https GET，返回状态、content-type、最终 URL 和截断正文 | `run()` |
+| `tools/http_get.rs` | 轻量公开 HTTP(S) GET；经 `safe_http` 后返回状态、content-type、最终 URL 和截断正文 | `run()` |
+| `tools/safe_http.rs` | direct URL 的 SSRF 边界：逐跳 DNS/IP 校验、地址固定、禁代理/自动重定向、peer 复核与超时 | `get_public()` |
 | `tools/clipboard.rs` | 读取系统剪贴板文本并截断输出；按特权工具处理，执行前确认 | `run()` |
 | `tools/package_scripts.rs` | 读取沙盒 `package.json` scripts，检测包管理器并生成建议 shell 命令；不直接执行脚本 | `run()` |
 | `tools/web_common.rs` | Web Search / Fetch 共享 JSON/SSE 解析、HTML/text 清洗、source markdown 输出、source-quality 计数和 Exa MCP 调用外壳 | `parse_json_payloads()` / `append_source_lines()` / `call_exa_mcp()` |
@@ -353,7 +354,7 @@ MCP 工具是运行时动态注册的：`agent::runner` 在生成工具 schema �
 
 ## 安全模型
 
-> 当前限制：以下机制描述设计目标，不代表所有边界已闭环。角色包自行放宽工具权限、Project/Session 权限串用、跨项目 undo、Windows open_path 命令注入、分支跨项目竞态与 turn 写入归属已修复；pack/Live2D 路径、HTTP SSRF、deferred/MCP 授权粒度和其余前端工作区竞态仍需逐项修复。详情见 [代码审查报告](./CODE-REVIEW-2026-07-12.md)。
+> 当前限制：以下机制描述设计目标，不代表所有边界已闭环。角色包自行放宽工具权限、Project/Session 权限串用、跨项目 undo、Windows open_path 命令注入、direct HTTP SSRF、分支跨项目竞态与 turn 写入归属已修复；pack/Live2D 路径、deferred/MCP 授权粒度和其余前端工作区竞态仍需逐项修复。详情见 [代码审查报告](./CODE-REVIEW-2026-07-12.md)。
 
 - `PermissionMode` 支持 `plan` / `default` / `auto` / `bypass`：`default` 走工具默认策略与用户规则；`auto` 自动允许只读工具；`bypass` 跳过确认但仍审计；`plan` 未批准前只允许只读工具和受限 `write_plan`。
 - Plan Mode 的计划状态在 `AppState.plan_state` 中维护；`write_plan` 只能写入沙盒 `.demiurge/plans/`，前端通过 `approve_plan` 批准后自动回到 `default` 执行模式。
@@ -373,6 +374,7 @@ MCP 工具是运行时动态注册的：`agent::runner` 在生成工具 schema �
 - shell `sandboxed` isolation 在 strict 策略基础上要求 OS sandbox wrapper：macOS 使用 `sandbox-exec` profile 限制写入路径并拒绝网络，Linux/WSL 使用 `bubblewrap` 绑定沙盒/临时目录并 `--unshare-net`；Windows 原生明确不支持 filesystem/network sandbox，保留进程树 containment 并 fail closed。
 - `clipboard` 按 privileged/ask 处理，避免未确认读取系统剪贴板中的密钥、聊天或临时敏感数据。
 - `package_scripts` 只读取沙盒 `package.json` 的 scripts 字段并返回建议 shell 命令；脚本执行仍必须走 `shell` 的确认门和隔离策略。
+- `http_get` 与 direct `web_fetch` 只访问公开 HTTP(S) 地址：每个 redirect hop 都重新解析并检查全部 DNS 答案，拒绝非公网 IP，通过 reqwest DNS override 固定地址，禁用代理与自动重定向，并复核实际 peer。DNS/连接/逐读/请求都有超时。
 - MCP 第一阶段仅支持本地 stdio server；server command/env 来自设置页，secret-like env 写入 keyring，`settings.json` 和备份只保留空值。
 - MCP 动态工具默认按 annotation 映射风险，执行前接入现有权限确认与审计；`mcp_read_resource` 按外部资源读取处理。
 - 子 Agent 只暴露 `SUBAGENT_READONLY_TOOL_NAMES` 中的只读/外部读取工具，不暴露 `shell`、`clipboard` 和写入类工具。
@@ -433,9 +435,9 @@ workflow 定义放在沙盒 `.demiurge/workflows/*.json`。运行时支持：
 - `brave`
 - `exa`
 
-`web_fetch` 用于单 URL 抓取，支持 `source=direct|exa`、`context_max_characters` 和 Exa `livecrawl=fallback|always|never`。`web_search` 的 Exa adapter 使用同一组 `livecrawl` 策略，并支持 `search_type=auto|fast|deep`。
+`web_fetch` 用于单 URL 抓取，支持 `source=direct|exa`、`context_max_characters` 和 Exa `livecrawl=fallback|always|never`。direct 路径与 `http_get` 共用 `safe_http` 的本机 SSRF 防护；`source=exa` 或显式 `livecrawl` 会把 URL 交给外部抓取服务，不经过本机 DNS/IP pin。`web_search` 的 Exa adapter 使用同一组 `livecrawl` 策略，并支持 `search_type=auto|fast|deep`。
 
-`tools/web_common.rs` 承载两个工具共用的边界逻辑：JSON/SSE payload 解析、HTML/text 清洗、URL/title/domain 规范化、统一 `WebSource`、Sources/Links markdown 行生成、source-quality 链接计数，以及 Exa MCP endpoint/key/env fallback/request envelope。`web_search` 和 `web_fetch` 只保留各自 provider 参数组装、结果抽取和 direct fetch 逻辑，避免来源提示、截断和 Exa 边缘行为在两个 adapter 中漂移。
+`tools/web_common.rs` 承载两个工具共用的内容逻辑：JSON/SSE payload 解析、HTML/text 清洗、URL/title/domain 规范化、统一 `WebSource`、Sources/Links markdown 行生成、source-quality 链接计数，以及 Exa MCP endpoint/key/env fallback/request envelope。direct 网络安全边界独立收口在 `tools/safe_http.rs`，避免内容清洗与连接授权混为一层。
 
 外部 adapter 环境变量与 keyring：
 

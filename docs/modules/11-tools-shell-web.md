@@ -4,7 +4,7 @@
 
 > 存档级技术原理文档。读者为协作开发者。
 > 覆盖源文件：
-> `src-tauri/src/tools/shell.rs`、`web_search.rs`、`web_fetch.rs`、`web_common.rs`、`http_get.rs`、`package_scripts.rs`、`open_path.rs`、`clipboard.rs`、`system_info.rs`、`tool_search.rs`、`execute_tool.rs`。
+> `src-tauri/src/tools/shell.rs`、`web_search.rs`、`web_fetch.rs`、`web_common.rs`、`safe_http.rs`、`http_get.rs`、`package_scripts.rs`、`open_path.rs`、`clipboard.rs`、`system_info.rs`、`tool_search.rs`、`execute_tool.rs`。
 > 注册表与分发位于 `src-tauri/src/tools/mod.rs`，入参校验位于 `src-tauri/src/tools/args.rs`。
 
 ---
@@ -20,7 +20,7 @@
 | 分类 | 工具 | 共同特征 |
 | --- | --- | --- |
 | 执行类 | `shell` | 启动本机子进程；`Privileged` + `Ask` 确认门；分三档隔离 |
-| 联网类 | `web_search`、`web_fetch`、`http_get` | 走 `state.http`（reqwest）发请求；`External` 风险；多为 `Allow`（无需逐次确认） |
+| 联网类 | `web_search`、`web_fetch`、`http_get` | `External` 风险且多为 `Allow`；direct URL 经独立安全客户端，provider API 仍走共享客户端 |
 | 系统边界类 | `package_scripts`、`open_path`、`clipboard`、`system_info` | 触及本机系统但边界各异（只读/确认门/平台命令） |
 | 元工具 | `tool_search`、`execute_tool` | 不直接干活，负责 deferred 工具的「发现 + 代理执行」 |
 
@@ -207,7 +207,7 @@ spawn 子进程：stdin=null, stdout/stderr=piped
 
 ## 3. 联网工具：web_search / web_fetch / http_get + web_common
 
-三个联网工具都不走确认门（`web_search`/`web_fetch`/`http_get` 均为 `Allow`），但都标 `External` 风险，且共用 `web_common.rs` 的解析/清洗/截断/来源输出逻辑。设计目标是**让来源提醒、截断标记和 Exa 边缘行为不在两个 adapter 间漂移**（IMPLEMENTATION.md:370 的明确陈述）。
+三个联网工具都不走确认门（`web_search`/`web_fetch`/`http_get` 均为 `Allow`），但都标 `External` 风险。`web_common.rs` 负责解析/清洗/截断/来源输出；`safe_http.rs` 单独负责 direct URL 的连接授权，避免把内容处理与 SSRF 边界混在一起。
 
 ### 3.1 web_common.rs：共享基础设施
 
@@ -287,14 +287,16 @@ adapter = Adapter::parse(source 或 settings.web_search_provider 或 WEB_SEARCH_
 
 `web_fetch::run`（`web_fetch.rs:34`）：`source` 取 `direct`/`exa`（默认 direct），`livecrawl` 取 `fallback`/`always`/`never`。**路由规则**（`web_fetch.rs:45`）：`source=="exa"` 或显式指定了 `livecrawl` → 走 `fetch_exa`；否则 `fetch_direct`。即「设了 livecrawl 就自动走 Exa」。
 
-- `fetch_direct`（`web_fetch.rs:53`）：reqwest GET，User-Agent `"Demiurge WebFetch"`。按 content-type / `looks_like_html` 分三路：HTML → `extract_title` + `html_to_text`；JSON → pretty-print；其他 → `clean_plain_text_preserve_lines`。记录 `final_url`（跟随重定向后的真实 URL）。
+- `fetch_direct`：通过 `safe_http::get_public` GET，User-Agent `"Demiurge WebFetch"`。按 content-type / `looks_like_html` 分三路：HTML → `extract_title` + `html_to_text`；JSON → pretty-print；其他 → `clean_plain_text_preserve_lines`。记录逐跳安全跟随后返回的 `final_url`。
 - `fetch_exa`（`web_fetch.rs:112`）：`call_exa_mcp("get_contents", {ids:[url], livecrawl, contextMaxCharacters})`，`extract_exa_document`（`web_fetch.rs:143`）递归（深度≤8）收集 title 和 markdown/content/text/summary/raw_content 字段拼正文。source 标记为 `"exa-livecrawl"`。
+
+两条路径的信任边界不同：direct 在本机解析并连接目标，必须经过 `safe_http`；`source=exa` 或显式 `livecrawl` 把 URL 交给外部抓取服务，本机不会连接目标地址，因此也不声称经过本机 DNS/IP pin。
 
 正文经 `cap_chars_with_flag` 截断到 `context_max`（默认 20000，最大 80000），`truncated` 标志写进 `FetchDocument`。`format_document`（`web_fetch.rs:205`）输出 Title/URL/Source adapter/Truncated/Content/Sources 块 + 来源提醒，最终用 `context_max + 600` 再 cap 一次（给头部元信息留余量）。
 
 ### 3.5 http_get：轻量 GET
 
-`http_get::run`（`http_get.rs:20`）是 `web_fetch direct` 的极简版，定位为「不需要来源引用、不需要深抽取」的场景（registry 描述 `mod.rs:419` 明确建议「需要深度网页抽取或来源引用时优先用 web_fetch」）。它额外暴露 `accept`（自定义 Accept 头）。`normalize_body`（`http_get.rs:85`）按 content-type 做 JSON pretty / HTML→text / 纯文本三路处理，输出含 `Status` 和 `Content-Type` 元信息。default cap 12000、最大 50000。
+`http_get::run` 是 `web_fetch direct` 的极简版，定位为「不需要来源引用、不需要深抽取」的场景。它额外暴露 `accept`（自定义 Accept 头），并与 direct `web_fetch` 共用 `safe_http::get_public`。`normalize_body` 按 content-type 做 JSON pretty / HTML→text / 纯文本三路处理，输出含 `Status` 和 `Content-Type` 元信息。default cap 12000、最大 50000。
 
 ### 3.6 URL 规范化与协议白名单
 
@@ -303,9 +305,22 @@ adapter = Adapter::parse(source 或 settings.web_search_provider 或 WEB_SEARCH_
 - 已带 `http://`/`https://` → 保留。
 - 含 `://` 但不是 http(s)（如 `file://`、`ftp://`）→ **拒绝**（「只支持公开 http/https URL」）。
 - 无 scheme → 补 `https://`。
-- 最后用 `reqwest::Url::parse` 校验，scheme 仍必须是 http/https。
+- 最后用 `reqwest::Url::parse` 校验，scheme 仍必须是 http/https，并拒绝 URL username/password、缺失 host 或无有效端口。
 
-测试 `normalizes_urls_and_rejects_non_http`（`web_fetch.rs:253`、`http_get.rs:107`）验证 `file:///tmp/a` 被拒。这是联网工具的协议边界：**不会去读本地文件或非 http 协议**，避免被用作本地文件读取的旁路。
+测试 `normalizes_urls_and_rejects_non_http` 验证 `file:///tmp/a` 与 credentials URL 被拒。这是联网工具的协议形状边界；目标地址是否公开则由下一节的 `safe_http` 强制。
+
+### 3.7 safe_http：逐跳公开地址约束
+
+`safe_http::get_public` 对首跳和最多 10 次重定向逐一执行相同流程：
+
+1. 只接受无 credentials 的 HTTP(S) URL。
+2. DNS 最多等待 10 秒；域名的**全部**解析答案都必须是公网地址，混合“公网 + 私网”也整体拒绝。字面 IP、IPv4-mapped IPv6 与 `127.1`、十进制整数、十六进制/八进制等另类 IPv4 表示会归一后检查。
+3. 每一跳新建 reqwest client，通过 `resolve_to_addrs` 固定本次已验证 IP，阻断校验后再次解析造成的 DNS rebinding；客户端禁用自动重定向。
+4. `.no_proxy()` 禁用环境/系统代理，避免代理端再次解析并把公开主机路由到内网；这也是安全边界，代价是依赖企业代理的 direct 工具会连接失败。
+5. 响应返回后若平台提供 peer address，再要求实际 IP 仍为公网且属于本跳批准集合。
+6. 每跳使用 15 秒连接、30 秒逐读和 120 秒总请求超时；每个 `Location` 都重新解析、分类和固定，绝不继承上一跳地址判断。
+
+拒绝集合包括 IPv4/IPv6 loopback、RFC1918/ULA、链路本地、CGNAT、未指定、组播、文档网段、基准测试、保留/未来用途和其他非全局单播空间。本机开发服务不属于此默认 Allow 工具的能力面；如未来需要，应设计独立、显式授权且不与公开 URL 规则共享的工具。
 
 ---
 
@@ -349,7 +364,7 @@ adapter = Adapter::parse(source 或 settings.web_search_provider 或 WEB_SEARCH_
 
 ## 5. 安全与权限边界（汇总）
 
-> 审查进度：Windows `open_path` 的命令解释器注入已修复。`http_get` / direct `web_fetch` 仍只校验 http/https scheme，却按“公开 URL”默认放行；没有拒绝 loopback/私网/链路本地，也没有逐跳复核重定向，SSRF 边界将在独立提交中修复。以下表格应与尚未关闭的边界一起阅读。
+> 审查进度：Windows `open_path` 的命令解释器注入，以及 `http_get` / direct `web_fetch` 的 SSRF/重定向边界均已修复。网页正文仍在完整下载后才按字符截断，属于独立的响应大小风险，不应与本次地址授权闭环混淆。
 
 | 边界 | 实现位置 | 机制 |
 | --- | --- | --- |
@@ -358,7 +373,8 @@ adapter = Adapter::parse(source 或 settings.web_search_provider 或 WEB_SEARCH_
 | shell 进程逃逸 | 进程组 + `terminate_process_tree`（`shell.rs:706`、`shell.rs:726`）| 超时杀整棵进程树 |
 | shell 凭据泄露 | `safe_env`（`shell.rs:548`）| 默认只传白名单环境变量；strict/sandboxed 强制 `env_clear` |
 | shell OS 级隔离 | sandbox-exec / bubblewrap（`shell.rs:658`、`shell.rs:627`）| 限制写路径 + 断网；Windows fail closed |
-| 联网协议 | `normalize_url`（`web_fetch.rs:222`、`http_get.rs:66`）| 只允许 http/https |
+| 联网协议与凭据 | `normalize_url` + `safe_http::validate_url_shape` | 只允许无 credentials 的 HTTP(S) URL |
+| direct SSRF | `safe_http::resolve_target` / `get_public` | 全 DNS 答案必须公开；IP pin、禁代理、手动逐跳重定向、peer 复核与超时 |
 | open_path 协议 | `ALLOWED_SCHEMES`（`open_path.rs:7`）| 只允许 http/https/file/mailto，拒绝 UNC |
 | open_path Windows 启动边界 | `WindowsShellExecuteRequest`（`open_path.rs`）| 直接调用 `ShellExecuteW`，目标独立传递且拒绝内部 NUL，不经过命令解释器 |
 | 子 Agent 工具面 | `SUBAGENT_READONLY_TOOL_NAMES`（`mod.rs:154`）| 只读子 Agent 拿不到 `shell`/`clipboard`/写入类（测试 `mod.rs:1308`）|
@@ -398,7 +414,7 @@ execute_tool(tool_name, args)  ── 校验是 deferred，再 match 路由到�
 
 ## 7. 与其他模块的交互边界
 
-- **AppState**：所有联网工具用 `state.http`（共享 reqwest client）；`shell`/`package_scripts` 用 `state.sandbox_dir`；联网工具的 key 经 `state.settings`（`web_search_provider`、`tavily_api_key`、`brave_search_api_key`、`exa_api_key`，定义于 `src-tauri/src/store/mod.rs:262`）。密钥水合/keyring 落盘由 `src-tauri/src/credentials.rs` 处理（settings 优先、env 兜底）。
+- **AppState**：provider API、搜索 adapter 和 Exa 外部抓取仍用 `state.http`（共享 reqwest client）；direct `http_get` / `web_fetch` 为了逐跳 DNS pin 与禁代理而按 hop 建立受限 client。`shell`/`package_scripts` 用 `state.sandbox_dir`；联网工具的 key 经 `state.settings`，密钥水合/keyring 落盘由 `credentials.rs` 处理。
 - **runner（`src-tauri/src/agent/runner.rs`）**：执行后调 `source_link_count`（`runner.rs:105`）对 `web_search`/`web_fetch` 结果计来源链接数，生成 `source_quality_hint`（strong≥3 / limited≥1 / none=0），提示模型是否需要换查询或换 provider。
 - **mcp（`src-tauri/src/mcp.rs`）**：`execute()`（`mod.rs:874`）先判 `is_mcp_tool_name` 走 MCP 分发；`mcp_read_resource` 走标准 MCP client。而 Exa 的调用**不走** MCP client，是 `web_common::call_exa_mcp` 自己拼的 JSON-RPC HTTP 请求。
 - **connection_tests（`src-tauri/src/connection_tests.rs`）**：复用 settings/env 的 provider 与 key 解析逻辑做连接测试（`connection_tests.rs:279`）。
@@ -415,4 +431,6 @@ execute_tool(tool_name, args)  ── 校验是 deferred，再 match 路由到�
 5. **Bing/DuckDuckGo 解析依赖页面/接口结构**：`extract_bing_results` 用正则匹配 `b_algo`/`b_caption` 等 class（`web_search.rs:287`），上游改版会导致解析退化（结果为空时 Auto 会 fallback 到 DuckDuckGo）。
 6. **Tavily endpoint 可覆盖**：默认走官方 API；生产部署也可通过 `TAVILY_SEARCH_URL` 指向受信端点。
 7. **截断按字符数（chars）而非字节**：所有 cap 函数（`shell::truncate`、`cap_chars_with_marker`）用 `chars().count()`/`chars().take()`，对多字节 UTF-8 友好，但与 token 数无直接对应。
-8. **扩展点**：新增联网 provider 只需在 `Adapter`（`web_search.rs:36`）加分支 + 一个 `extract_*` 函数，复用 `web_common` 的去重/过滤/输出；新增 deferred 工具只需进 `DEFERRED_TOOL_NAMES` + `registry()` + `execute_tool::run` 的 match。
+8. **响应读取仍未做字节硬上限**：`http_get` / direct `web_fetch` 在 `resp.text().await` 完整读取、解压后才按字符截断。地址边界已关闭，但超大/膨胀/chunked 正文仍可能占用过量内存，应由统一流式有界读取器单独修复。
+9. **direct 工具不使用代理**：这是防代理重解析绕过 IP pin 的安全不变量；只允许经企业代理出网的环境应使用受信 provider adapter，或未来增加拥有独立授权模型的代理模式，不能静默恢复环境代理。
+10. **扩展点**：新增联网 provider 只需在 `Adapter`（`web_search.rs:36`）加分支 + 一个 `extract_*` 函数，复用 `web_common` 的去重/过滤/输出；新增 deferred 工具只需进 `DEFERRED_TOOL_NAMES` + `registry()` + `execute_tool::run` 的 match。

@@ -2,6 +2,7 @@
 use serde::Deserialize;
 use serde_json::{json, Value};
 
+use super::safe_http;
 use super::web_common::{
     append_source_lines, call_exa_mcp, cap_chars_with_flag as cap_chars_with_flag_common,
     cap_chars_with_marker, clean_plain_text, clean_plain_text_preserve_lines, extract_title,
@@ -45,27 +46,19 @@ pub async fn run(state: &crate::AppState, args: Value) -> Result<String, String>
     let doc = if source == "exa" || livecrawl.is_some() {
         fetch_exa(state, &url, livecrawl, context_max).await?
     } else {
-        fetch_direct(state, &url, context_max).await?
+        fetch_direct(&url, context_max).await?
     };
     Ok(format_document(&doc, context_max))
 }
 
-async fn fetch_direct(
-    state: &crate::AppState,
-    url: &str,
-    context_max: usize,
-) -> Result<FetchDocument, String> {
-    let resp = state
-        .http
-        .get(url)
-        .header("User-Agent", "Demiurge WebFetch")
-        .header(
-            "Accept",
-            "text/html,application/xhtml+xml,application/json,text/plain,*/*;q=0.8",
-        )
-        .send()
-        .await
-        .map_err(|e| format!("WebFetch 请求失败：{e}"))?;
+async fn fetch_direct(url: &str, context_max: usize) -> Result<FetchDocument, String> {
+    let resp = safe_http::get_public(
+        url,
+        "Demiurge WebFetch",
+        "text/html,application/xhtml+xml,application/json,text/plain,*/*;q=0.8",
+    )
+    .await
+    .map_err(|e| format!("WebFetch 请求失败：{e}"))?;
     let status = resp.status();
     let final_url = resp.url().to_string();
     if !status.is_success() {
@@ -233,7 +226,10 @@ fn normalize_url(url: &str) -> Result<String, String> {
     };
     let parsed = reqwest::Url::parse(&url).map_err(|e| format!("URL 无效：{e}"))?;
     match parsed.scheme() {
-        "http" | "https" => Ok(parsed.to_string()),
+        "http" | "https" => {
+            safe_http::validate_url_shape(&parsed)?;
+            Ok(parsed.to_string())
+        }
         _ => Err("WebFetch 只支持 http/https URL；需要登录或本地文件的地址不会抓取".to_string()),
     }
 }
@@ -257,6 +253,7 @@ mod tests {
             "https://example.com/path"
         );
         assert!(normalize_url("file:///tmp/a").is_err());
+        assert!(normalize_url("https://user:secret@example.com/a").is_err());
     }
 
     #[test]

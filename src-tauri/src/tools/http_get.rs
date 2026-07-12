@@ -2,6 +2,7 @@
 use serde::Deserialize;
 use serde_json::Value;
 
+use super::safe_http;
 use super::web_common::{
     cap_chars_with_flag as cap_chars_with_flag_common, clean_plain_text_preserve_lines,
     html_to_text, looks_like_html, title_from_url,
@@ -17,7 +18,7 @@ struct Args {
     accept: Option<String>,
 }
 
-pub async fn run(state: &crate::AppState, args: Value) -> Result<String, String> {
+pub async fn run(_state: &crate::AppState, args: Value) -> Result<String, String> {
     let args: Args = serde_json::from_value(args).map_err(|e| format!("参数错误：{e}"))?;
     let url = normalize_url(&args.url)?;
     let context_max = args
@@ -31,12 +32,7 @@ pub async fn run(state: &crate::AppState, args: Value) -> Result<String, String>
         .filter(|v| !v.is_empty())
         .unwrap_or("application/json,text/plain,text/html,*/*;q=0.8");
 
-    let resp = state
-        .http
-        .get(&url)
-        .header("User-Agent", "Demiurge HttpGet")
-        .header("Accept", accept)
-        .send()
+    let resp = safe_http::get_public(&url, "Demiurge HttpGet", accept)
         .await
         .map_err(|e| format!("HTTP GET 请求失败：{e}"))?;
 
@@ -77,7 +73,10 @@ fn normalize_url(url: &str) -> Result<String, String> {
     };
     let parsed = reqwest::Url::parse(&url).map_err(|e| format!("URL 无效：{e}"))?;
     match parsed.scheme() {
-        "http" | "https" => Ok(parsed.to_string()),
+        "http" | "https" => {
+            safe_http::validate_url_shape(&parsed)?;
+            Ok(parsed.to_string())
+        }
         _ => Err("http_get 只支持公开 http/https URL".to_string()),
     }
 }
@@ -111,6 +110,7 @@ mod tests {
             "https://example.com/a"
         );
         assert!(normalize_url("file:///tmp/a").is_err());
+        assert!(normalize_url("https://user:secret@example.com/a").is_err());
     }
 
     #[test]
