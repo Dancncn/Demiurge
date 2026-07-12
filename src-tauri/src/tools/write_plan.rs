@@ -17,7 +17,7 @@ pub fn run(state: &crate::AppState, args: Value) -> Result<String, String> {
     let plans_dir = sandbox.join(".demiurge").join("plans");
     fs::create_dir_all(&plans_dir).map_err(|e| format!("创建计划目录失败：{e}"))?;
 
-    let active = state.sessions.lock().unwrap().active.clone();
+    let active = crate::agent::session_engine::execution_session_id(state);
     let safe_session: String = active
         .chars()
         .map(|c| {

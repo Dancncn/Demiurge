@@ -121,7 +121,7 @@ sequenceDiagram
 
 关键设计点：
 
-- **入口互斥**：`begin_turn`/`finish_turn` 在 `send`/`send_with_agents` 外层包裹，防止用户中途切换会话导致写入串台。
+- **入口互斥与所有权**：`begin_turn`/`finish_turn` 包裹发送和 Goal 控制；`TurnHandle.session_id` 从入口贯穿 runner、prompt、slash、续跑与会话相关工具，运行/取消中的 owner 不可删除，切换侧栏会话不会改变回合写入目标。
 - **协作式中断**：`interrupt` 置 cancel 标记并把状态推进到 `Cancelling`，runner 在安全点检查后退出，同时唤醒所有待确认项按拒绝处理。
 - **system prompt 每轮重建**：会话历史不持久化 system 消息；persona、skills、项目指令、环境、goal、summary、记忆每轮动态拼装。
 - **续跑闭环**：若当前会话有 active goal，普通回合结束后自动调度下一轮，直到完成/暂停/阻塞/超预算/超回合/被中断。

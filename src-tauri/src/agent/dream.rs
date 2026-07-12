@@ -22,12 +22,16 @@ const PREVIEW_CHARS: usize = 8_000;
 pub async fn run_manual_dream(
     app: &AppHandle,
     state: &crate::AppState,
+    session_id: &str,
     command_text: String,
 ) -> Result<(), String> {
     state.cancel.store(false, Ordering::Relaxed);
 
     let settings = state.settings.lock().unwrap().clone();
-    let sid = state.sessions.lock().unwrap().active.clone();
+    if state.sessions.lock().unwrap().get(session_id).is_none() {
+        return Err("The target session no longer exists.".to_string());
+    }
+    let sid = session_id.to_string();
     let events = session_engine::TurnEventEmitter::new(app, state);
     push_message(state, &sid, Message::user(command_text));
     state.persist_sessions();

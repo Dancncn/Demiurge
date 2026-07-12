@@ -1,6 +1,6 @@
 # 应用外壳、命令面与构建
 
-> 审阅状态（2026-07-12）：命令面新增工作区目录/预览、Git 分支/更改与分支切换；分支枚举和切换已要求 canonical expected workspace 与当前项目一致。生产构建通过但仍有 Live2D vendor 大分包警告。固定行号请以符号名为准。
+> 审阅状态（2026-07-12）：命令面新增工作区目录/预览、Git 分支/更改与分支切换；分支操作验证 canonical expected workspace，turn 命令链固定使用 `begin_turn` 捕获的 session id，运行/取消中的 owner 不可删除。生产构建通过但仍有 Live2D vendor 大分包警告。固定行号请以符号名为准。
 
 > 存档级技术原理文档。读者为协作开发者。
 > 覆盖源文件：
@@ -174,7 +174,7 @@ send(text)
 
 关键设计：
 
-- **turn 生命周期与分发解耦**。无论走哪条分支，`begin_turn`(`lib.rs:296`) / `finish_turn`(`lib.rs:453`) 都包住整个过程，由 `session_engine` 统一登记运行态。`TurnEntrypoint` 当前只有 `Send` 与 `SendWithAgents` 两种（`session_engine.rs:29-32`）；`TurnStatus` 有 `Running/Cancelling/Completed/Interrupted/Failed`（`session_engine.rs:19-25`）。
+- **turn 生命周期与分发解耦**。`begin_turn` / `finish_turn` 包住发送与 Goal 控制过程，由 `session_engine` 统一登记运行态。`TurnHandle` 同时保存 turn id 与不可变 session id，runner、slash、Goal、prompt 和会话相关工具显式或通过 `execution_session_id` 复用它；会话删除在同一 Session Engine 锁下拒绝移除 Running/Cancelling owner。
 - **两类斜杠命令**：一类是「**即时应答**型」（`/effort`、`/skills`、`/workflows`），直接 `events.assistant_done(body)` 写一条助手消息就结束，**不进 LLM**；另一类是「**改写本轮**型」（`/goal Query`、`/workflow resume`、`/ultracode`），构造一个 `system_overlay`（临时系统提示叠加）后走 `agent::run_turn_with_options`，让本轮 LLM 在叠加约束下运行。
 - **`should_drive_goal` 闸门**。只有「会推进目标」的分支把它置 `true`；纯查询型（如 `/effort`、`/skills`）保持 `false`，避免在用户只是查状态时触发 `goal::drive_after_turn` 的自动续跑。
 - `send_with_agents`（`lib.rs:457`）是 `send` 的简化版：不做斜杠分发，直接带 `agent_names` 走 `run_turn_with_options`，用于前端显式指定参与 agent 的场景。

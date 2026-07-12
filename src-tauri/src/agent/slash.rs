@@ -18,19 +18,23 @@ use crate::AppState;
 pub async fn dispatch(
     app: &AppHandle,
     st: &AppState,
+    session_id: &str,
     text: String,
     events: &TurnEventEmitter<'_>,
 ) -> Option<(Result<(), String>, bool)> {
     let trimmed = text.trim();
     if trimmed == "/dream" || trimmed.starts_with("/dream ") {
-        Some((agent::dream::run_manual_dream(app, st, text).await, true))
+        Some((
+            agent::dream::run_manual_dream(app, st, session_id, text).await,
+            true,
+        ))
     } else if trimmed == "/compact" || trimmed.starts_with("/compact ") {
         Some((
-            agent::collapse::run_manual_compact(app, st, text).await,
+            agent::collapse::run_manual_compact(app, st, session_id, text).await,
             true,
         ))
     } else if trimmed == "/goal" || trimmed.starts_with("/goal ") {
-        match agent::goal::handle_slash(st, trimmed) {
+        match agent::goal::handle_slash(st, session_id, trimmed) {
             Ok(agent::goal::GoalSlashOutcome::Respond(body)) => {
                 events.assistant_done(body);
                 Some((Ok(()), false))
@@ -43,6 +47,7 @@ pub async fn dispatch(
                 agent::run_turn_with_options(
                     app,
                     st,
+                    session_id,
                     text,
                     TurnOptions {
                         system_overlay: Some(system_overlay),
@@ -136,6 +141,7 @@ pub async fn dispatch(
             agent::run_turn_with_options(
                 app,
                 st,
+                session_id,
                 text,
                 TurnOptions {
                     system_overlay: Some(overlay),
@@ -160,6 +166,7 @@ pub async fn dispatch(
             agent::run_turn_with_options(
                 app,
                 st,
+                session_id,
                 text,
                 TurnOptions {
                     system_overlay: Some(overlay),

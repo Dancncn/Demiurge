@@ -120,7 +120,7 @@ Demiurge/
 | `agent/session_engine.rs` | turn runtime state、入口互斥、中断标记、统一 agent event envelope 和会话写入封装 | `begin_turn()` / `finish_turn()` / `TurnEventEmitter` / `SessionTurnStore` |
 | `agent/runner.rs` | Agent loop，处理模型流、tool calls、tool results、最终回答 | `run_turn()` / `run_turn_with_options()` |
 | `agent/conversation.rs` | 内部消息结构和 tool call/result 表示 | `Message` / `ToolCall` |
-| `agent/prompt.rs` | system prompt 分区组装，注入 persona、skills、instructions、scoped memories、summary、environment、tools 和 safety sections | `build_for_input()` / `build_with_report()` |
+| `agent/prompt.rs` | system prompt 分区组装，注入 persona、skills、instructions、scoped memories、summary、environment、tools 和 safety sections | `build_for_session_input()` / `build_with_report()` |
 | `agent/budget.rs` | 启发式 token 预算、provider usage 汇总、profile-aware history budget | `history_budget_for_profile()` / `TokenBudgetState` |
 | `agent/context.rs` | 历史裁剪，保留最近上下文并返回可摘要旧消息 | `trim_collect_removed_by_tokens()` |
 | `agent/summary.rs` | rolling summary 更新 | `update_session_summary()` |
@@ -212,16 +212,16 @@ Git 调用使用固定参数数组与 `current_dir`，不经过 shell。分支�
 
 ## Agent 循环
 
-1. `send` 捕获当前 active session id，并通过 `session_engine::begin_turn` 建立 turn runtime state、入口互斥、input preview、agent/workflow metadata 和中断标记，避免用户中途切换会话导致写入串台。
+1. `send` 捕获当前 active session id，并通过 `session_engine::begin_turn` 建立 turn runtime state、入口互斥、input preview、agent/workflow metadata 和中断标记；`TurnHandle.session_id` 随后成为整轮不可变所有者。turn 登记与会话删除使用相同锁序，运行或取消中的所属会话不可删除。
 2. slash command 先分流，例如 `/skills`、`/skill`、`/goal`、`/effort`、`/compact`、`/dream`、`/ultracode`、`/workflows`、`/workflow resume <run_id>`。
-3. 普通回合调用 `run_turn_with_options`；runner 使用 `SessionTurnStore` 统一读取、追加、替换 session messages 与 rolling summary，并在每次变更后持久化；`send_with_agents` 会把前端选中的自定义 Agent 合并成 prompt overlay、工具限制和预算限制。
-4. `prompt::build_for_input` 组装 engine、persona、skills、project instructions、environment、goal、summary 和 scoped memories；如果 `settings.permission_mode == plan`，runner 额外注入 Plan Mode overlay，要求只读探索并用 `write_plan` 生成实施计划。
+3. 普通回合调用带显式 `session_id` 的 `run_turn_with_options`；runner 在任何 MCP/外部初始化 await 前验证目标，并用该 id 构造 `SessionTurnStore`，统一读取、追加、替换 messages 与 rolling summary。slash、Goal 续跑、子 Agent、context/goal/write_plan 工具也使用同一 turn-owned id。
+4. `prompt::build_for_session_input` 按 turn-owned session 组装 engine、persona、skills、project instructions、environment、goal、summary 和 scoped memories；如果 `settings.permission_mode == plan`，runner 额外注入 Plan Mode overlay，要求只读探索并用 `write_plan` 生成实施计划。
 5. `budget` 和 `context` 按预算裁剪历史。
 6. provider adapter 发起流式请求。
 7. 如果模型返回 tool calls，后端执行工具并把 tool result 写回历史，再进入下一轮模型请求。
 8. assistant/tool 事件统一通过 `TurnEventEmitter` 发出；前端仍接收 legacy `assistant-*` / `tool-*` 事件，同时可消费带 turn context 的 `agent-event`。
 9. 如果模型给出最终回答，触发 `assistant-done`，随后尝试记忆提取。
-10. 如果当前 session 有 active goal，则 `goal::drive_after_turn` 继续调度下一轮，直到目标完成、暂停、阻塞、预算限制、max turns 或中断。
+10. 如果 turn-owned session 有 active goal，则 `goal::drive_after_turn(session_id)` 继续调度下一轮，直到目标完成、暂停、阻塞、预算限制、max turns 或中断；切换侧栏 active session 不会改变续跑目标。
 11. 回合退出时 `session_engine::finish_turn` 将 active turn 移入 last turn，并通过 `session-engine-updated` 推送后端 busy/cancel 状态；`interrupt` 通过 `request_interrupt` 把当前 turn 标记为 `cancelling`。
 
 ## Settings 连接测试
@@ -351,7 +351,7 @@ MCP 工具是运行时动态注册的：`agent::runner` 在生成工具 schema �
 
 ## 安全模型
 
-> 当前限制：以下机制描述设计目标，不代表所有边界已闭环。角色包自行放宽工具权限、跨项目 undo、Windows open_path 命令注入与分支跨项目竞态已修复；Project/Session 权限隔离、pack/Live2D 路径、HTTP SSRF、deferred/MCP 授权粒度和其余前端工作区竞态仍需逐项修复。详情见 [代码审查报告](./CODE-REVIEW-2026-07-12.md)。
+> 当前限制：以下机制描述设计目标，不代表所有边界已闭环。角色包自行放宽工具权限、跨项目 undo、Windows open_path 命令注入、分支跨项目竞态与 turn 写入归属已修复；Project/Session 权限隔离、pack/Live2D 路径、HTTP SSRF、deferred/MCP 授权粒度和其余前端工作区竞态仍需逐项修复。详情见 [代码审查报告](./CODE-REVIEW-2026-07-12.md)。
 
 - `PermissionMode` 支持 `plan` / `default` / `auto` / `bypass`：`default` 走工具默认策略与用户规则；`auto` 自动允许只读工具；`bypass` 跳过确认但仍审计；`plan` 未批准前只允许只读工具和受限 `write_plan`。
 - Plan Mode 的计划状态在 `AppState.plan_state` 中维护；`write_plan` 只能写入沙盒 `.demiurge/plans/`，前端通过 `approve_plan` 批准后自动回到 `default` 执行模式。

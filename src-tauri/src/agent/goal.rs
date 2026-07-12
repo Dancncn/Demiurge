@@ -70,16 +70,22 @@ pub enum GoalSlashOutcome {
     },
 }
 
-pub fn handle_slash(state: &crate::AppState, text: &str) -> Result<GoalSlashOutcome, String> {
+pub fn handle_slash(
+    state: &crate::AppState,
+    session_id: &str,
+    text: &str,
+) -> Result<GoalSlashOutcome, String> {
     let args = text.trim().trim_start_matches("/goal").trim();
     if args.is_empty() || args.eq_ignore_ascii_case("status") {
-        return Ok(GoalSlashOutcome::Respond(status_text(state)));
+        return Ok(GoalSlashOutcome::Respond(status_text_for_session(
+            state, session_id,
+        )));
     }
 
     let lower = args.to_ascii_lowercase();
     match lower.as_str() {
         "clear" => {
-            let cleared = clear_goal(state);
+            let cleared = clear_goal_for_session(state, session_id);
             state.persist_sessions();
             Ok(GoalSlashOutcome::Respond(if cleared {
                 "Goal cleared.".to_string()
@@ -88,7 +94,7 @@ pub fn handle_slash(state: &crate::AppState, text: &str) -> Result<GoalSlashOutc
             }))
         }
         "pause" => {
-            let paused = pause_goal(state).is_some();
+            let paused = pause_goal_for_session(state, session_id).is_some();
             state.persist_sessions();
             Ok(GoalSlashOutcome::Respond(if paused {
                 "Goal paused.".to_string()
@@ -97,7 +103,7 @@ pub fn handle_slash(state: &crate::AppState, text: &str) -> Result<GoalSlashOutc
             }))
         }
         "resume" => {
-            if active_goal(state)
+            if goal_for_session(state, session_id)
                 .map(|goal| goal.status == GoalStatus::MaxTurns)
                 .unwrap_or(false)
             {
@@ -105,12 +111,12 @@ pub fn handle_slash(state: &crate::AppState, text: &str) -> Result<GoalSlashOutc
                     "Goal reached max continuation turns ({MAX_GOAL_TURNS}). Run `/goal continue` to reset the counter."
                 )));
             }
-            let resumed = resume_goal(state).is_some();
+            let resumed = resume_goal_for_session(state, session_id).is_some();
             state.persist_sessions();
             if resumed {
                 Ok(GoalSlashOutcome::Query {
                     stored_user_text: "[Goal resumed]".to_string(),
-                    system_overlay: active_goal(state)
+                    system_overlay: goal_for_session(state, session_id)
                         .map(|goal| build_continuation_prompt(&goal))
                         .unwrap_or_default(),
                 })
@@ -121,12 +127,12 @@ pub fn handle_slash(state: &crate::AppState, text: &str) -> Result<GoalSlashOutc
             }
         }
         "continue" => {
-            let continued = continue_from_max_turns(state).is_some();
+            let continued = continue_from_max_turns_for_session(state, session_id).is_some();
             state.persist_sessions();
             if continued {
                 Ok(GoalSlashOutcome::Query {
                     stored_user_text: "[Goal continued]".to_string(),
-                    system_overlay: active_goal(state)
+                    system_overlay: goal_for_session(state, session_id)
                         .map(|goal| build_continuation_prompt(&goal))
                         .unwrap_or_default(),
                 })
@@ -137,7 +143,7 @@ pub fn handle_slash(state: &crate::AppState, text: &str) -> Result<GoalSlashOutc
             }
         }
         "complete" => {
-            let completed = complete_goal(state).is_some();
+            let completed = complete_goal_for_session(state, session_id).is_some();
             state.persist_sessions();
             Ok(GoalSlashOutcome::Respond(if completed {
                 "Goal marked complete.".to_string()
@@ -155,9 +161,9 @@ pub fn handle_slash(state: &crate::AppState, text: &str) -> Result<GoalSlashOutc
             if objective.trim().is_empty() {
                 return Err("Goal objective cannot be empty.".to_string());
             }
-            let previous = active_goal(state).map(|goal| goal.objective);
-            set_goal(state, objective.clone(), token_budget);
-            increment_turns(state);
+            let previous = goal_for_session(state, session_id).map(|goal| goal.objective);
+            set_goal_for_session(state, session_id, objective.clone(), token_budget);
+            increment_turns_for_session(state, session_id);
             state.persist_sessions();
             Ok(GoalSlashOutcome::Query {
                 stored_user_text: objective.clone(),
@@ -170,20 +176,21 @@ pub fn handle_slash(state: &crate::AppState, text: &str) -> Result<GoalSlashOutc
 pub async fn drive_after_turn(
     app: &tauri::AppHandle,
     state: &crate::AppState,
+    session_id: &str,
 ) -> Result<(), String> {
     loop {
         if state.cancel.load(std::sync::atomic::Ordering::Relaxed) {
             return Ok(());
         }
 
-        let Some(goal) = active_goal(state) else {
+        let Some(goal) = goal_for_session(state, session_id) else {
             return Ok(());
         };
 
         match goal.status {
             GoalStatus::Active => {
                 if goal.turns_executed >= MAX_GOAL_TURNS {
-                    mark_max_turns(state);
+                    mark_max_turns_for_session(state, session_id);
                     state.persist_sessions();
                     let events = session_engine::TurnEventEmitter::new(app, state);
                     events.assistant_done(format!(
@@ -192,9 +199,9 @@ pub async fn drive_after_turn(
                     return Ok(());
                 }
 
-                let turns = increment_turns(state);
+                let turns = increment_turns_for_session(state, session_id);
                 state.persist_sessions();
-                let Some(next_goal) = active_goal(state) else {
+                let Some(next_goal) = goal_for_session(state, session_id) else {
                     return Ok(());
                 };
                 let overlay = build_continuation_prompt(&next_goal);
@@ -212,6 +219,7 @@ pub async fn drive_after_turn(
                 super::run_turn_with_options(
                     app,
                     state,
+                    session_id,
                     stored_user_text.clone(),
                     super::TurnOptions {
                         system_overlay: Some(overlay),
@@ -227,7 +235,7 @@ pub async fn drive_after_turn(
                 if goal.budget_limit_notified {
                     return Ok(());
                 }
-                mark_budget_notified(state);
+                mark_budget_notified_for_session(state, session_id);
                 state.persist_sessions();
                 let overlay = build_budget_limit_prompt(&goal);
                 let _ = app.emit(
@@ -243,6 +251,7 @@ pub async fn drive_after_turn(
                 super::run_turn_with_options(
                     app,
                     state,
+                    session_id,
                     "[Goal budget limit]".to_string(),
                     super::TurnOptions {
                         system_overlay: Some(overlay),
@@ -261,9 +270,16 @@ pub async fn drive_after_turn(
 }
 
 pub fn active_goal(state: &crate::AppState) -> Option<GoalState> {
-    let store = state.sessions.lock().unwrap();
-    store
-        .get(&store.active)
+    let session_id = state.sessions.lock().unwrap().active.clone();
+    goal_for_session(state, &session_id)
+}
+
+pub fn goal_for_session(state: &crate::AppState, session_id: &str) -> Option<GoalState> {
+    state
+        .sessions
+        .lock()
+        .unwrap()
+        .get(session_id)
         .and_then(|session| session.goal.clone())
 }
 
@@ -296,8 +312,9 @@ pub fn panel_state_from_goal(goal: &GoalState) -> GoalPanelState {
     }
 }
 
-pub fn set_goal(
+pub fn set_goal_for_session(
     state: &crate::AppState,
+    session_id: &str,
     objective: String,
     token_budget: Option<usize>,
 ) -> GoalState {
@@ -318,8 +335,7 @@ pub fn set_goal(
         budget_limit_notified: false,
     };
     let mut store = state.sessions.lock().unwrap();
-    let active = store.active.clone();
-    if let Some(session) = store.get_mut(&active) {
+    if let Some(session) = store.get_mut(session_id) {
         session.goal = Some(goal.clone());
         session.updated_at = now;
     }
@@ -327,9 +343,13 @@ pub fn set_goal(
 }
 
 pub fn clear_goal(state: &crate::AppState) -> bool {
+    let session_id = state.sessions.lock().unwrap().active.clone();
+    clear_goal_for_session(state, &session_id)
+}
+
+pub fn clear_goal_for_session(state: &crate::AppState, session_id: &str) -> bool {
     let mut store = state.sessions.lock().unwrap();
-    let active = store.active.clone();
-    let Some(session) = store.get_mut(&active) else {
+    let Some(session) = store.get_mut(session_id) else {
         return false;
     };
     let had = session.goal.is_some();
@@ -339,7 +359,12 @@ pub fn clear_goal(state: &crate::AppState) -> bool {
 }
 
 pub fn pause_goal(state: &crate::AppState) -> Option<GoalState> {
-    mutate_active_goal(state, |goal| {
+    let session_id = state.sessions.lock().unwrap().active.clone();
+    pause_goal_for_session(state, &session_id)
+}
+
+pub fn pause_goal_for_session(state: &crate::AppState, session_id: &str) -> Option<GoalState> {
+    mutate_goal(state, session_id, |goal| {
         if goal.status != GoalStatus::Active {
             return None;
         }
@@ -355,8 +380,8 @@ pub fn pause_goal(state: &crate::AppState) -> Option<GoalState> {
     .flatten()
 }
 
-pub fn resume_goal(state: &crate::AppState) -> Option<GoalState> {
-    mutate_active_goal(state, |goal| {
+pub fn resume_goal_for_session(state: &crate::AppState, session_id: &str) -> Option<GoalState> {
+    mutate_goal(state, session_id, |goal| {
         if goal.status != GoalStatus::Paused {
             return None;
         }
@@ -372,8 +397,11 @@ pub fn resume_goal(state: &crate::AppState) -> Option<GoalState> {
     .flatten()
 }
 
-pub fn continue_from_max_turns(state: &crate::AppState) -> Option<GoalState> {
-    mutate_active_goal(state, |goal| {
+pub fn continue_from_max_turns_for_session(
+    state: &crate::AppState,
+    session_id: &str,
+) -> Option<GoalState> {
+    mutate_goal(state, session_id, |goal| {
         if goal.status != GoalStatus::MaxTurns {
             return None;
         }
@@ -390,8 +418,8 @@ pub fn continue_from_max_turns(state: &crate::AppState) -> Option<GoalState> {
     .flatten()
 }
 
-pub fn complete_goal(state: &crate::AppState) -> Option<GoalState> {
-    mutate_active_goal(state, |goal| {
+pub fn complete_goal_for_session(state: &crate::AppState, session_id: &str) -> Option<GoalState> {
+    mutate_goal(state, session_id, |goal| {
         let now = store::now_millis();
         if goal.status == GoalStatus::Active && goal.paused_at.is_none() {
             goal.accumulated_active_ms = goal
@@ -405,11 +433,12 @@ pub fn complete_goal(state: &crate::AppState) -> Option<GoalState> {
     .flatten()
 }
 
-pub fn record_blocked_attempt(
+pub fn record_blocked_attempt_for_session(
     state: &crate::AppState,
+    session_id: &str,
     reason: &str,
 ) -> Option<(GoalStatus, usize)> {
-    mutate_active_goal(state, |goal| {
+    mutate_goal(state, session_id, |goal| {
         if goal.status != GoalStatus::Active {
             return None;
         }
@@ -433,8 +462,8 @@ pub fn record_blocked_attempt(
     .flatten()
 }
 
-pub fn increment_turns(state: &crate::AppState) -> usize {
-    mutate_active_goal(state, |goal| {
+pub fn increment_turns_for_session(state: &crate::AppState, session_id: &str) -> usize {
+    mutate_goal(state, session_id, |goal| {
         goal.turns_executed += 1;
         goal.updated_at = store::now_millis();
         goal.turns_executed
@@ -487,8 +516,8 @@ fn add_tokens(state: &crate::AppState, session_id: &str, tokens: usize) {
     }
 }
 
-pub fn status_text(state: &crate::AppState) -> String {
-    let Some(goal) = active_goal(state) else {
+pub fn status_text_for_session(state: &crate::AppState, session_id: &str) -> String {
+    let Some(goal) = goal_for_session(state, session_id) else {
         return "No active goal. Set one with `/goal <objective>`.".to_string();
     };
     let tokens = match goal.token_budget {
@@ -510,8 +539,8 @@ pub fn status_text(state: &crate::AppState) -> String {
     lines.join("\n")
 }
 
-pub fn build_goal_context_block(state: &crate::AppState) -> String {
-    let Some(goal) = active_goal(state) else {
+pub fn build_goal_context_block_for_session(state: &crate::AppState, session_id: &str) -> String {
+    let Some(goal) = goal_for_session(state, session_id) else {
         return String::new();
     };
     let budget = goal
@@ -628,8 +657,8 @@ Follow the same Completion Audit and Blocked Audit rules described in goal-steer
     )
 }
 
-pub fn completion_report(state: &crate::AppState) -> String {
-    let Some(goal) = active_goal(state) else {
+pub fn completion_report_for_session(state: &crate::AppState, session_id: &str) -> String {
+    let Some(goal) = goal_for_session(state, session_id) else {
         return String::new();
     };
     let budget = match goal.token_budget {
@@ -645,8 +674,8 @@ pub fn completion_report(state: &crate::AppState) -> String {
     .join("\n")
 }
 
-fn mark_max_turns(state: &crate::AppState) -> Option<GoalState> {
-    mutate_active_goal(state, |goal| {
+fn mark_max_turns_for_session(state: &crate::AppState, session_id: &str) -> Option<GoalState> {
+    mutate_goal(state, session_id, |goal| {
         if goal.status != GoalStatus::Active {
             return None;
         }
@@ -657,8 +686,11 @@ fn mark_max_turns(state: &crate::AppState) -> Option<GoalState> {
     .flatten()
 }
 
-fn mark_budget_notified(state: &crate::AppState) -> Option<GoalState> {
-    mutate_active_goal(state, |goal| {
+fn mark_budget_notified_for_session(
+    state: &crate::AppState,
+    session_id: &str,
+) -> Option<GoalState> {
+    mutate_goal(state, session_id, |goal| {
         goal.budget_limit_notified = true;
         goal.updated_at = store::now_millis();
         Some(goal.clone())
@@ -666,13 +698,13 @@ fn mark_budget_notified(state: &crate::AppState) -> Option<GoalState> {
     .flatten()
 }
 
-fn mutate_active_goal<R>(
+fn mutate_goal<R>(
     state: &crate::AppState,
+    session_id: &str,
     f: impl FnOnce(&mut GoalState) -> R,
 ) -> Option<R> {
     let mut store = state.sessions.lock().unwrap();
-    let active = store.active.clone();
-    let session = store.get_mut(&active)?;
+    let session = store.get_mut(session_id)?;
     let goal = session.goal.as_mut()?;
     let result = f(goal);
     session.updated_at = store::now_millis();

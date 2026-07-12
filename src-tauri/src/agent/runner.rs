@@ -165,17 +165,22 @@ pub struct TurnOptions {
 pub async fn run_turn(
     app: &AppHandle,
     state: &crate::AppState,
+    session_id: &str,
     user_text: String,
 ) -> Result<(), String> {
-    run_turn_with_options(app, state, user_text, TurnOptions::default()).await
+    run_turn_with_options(app, state, session_id, user_text, TurnOptions::default()).await
 }
 
 pub async fn run_turn_with_options(
     app: &AppHandle,
     state: &crate::AppState,
+    session_id: &str,
     user_text: String,
     options: TurnOptions,
 ) -> Result<(), String> {
+    if state.sessions.lock().unwrap().get(session_id).is_none() {
+        return Err("The target session no longer exists.".to_string());
+    }
     state.cancel.store(false, Ordering::Relaxed);
     let events = session_engine::TurnEventEmitter::new(app, state);
 
@@ -201,8 +206,9 @@ pub async fn run_turn_with_options(
             .map(|total| budget::TokenBudgetState::new(Some(total)))
     });
     custom::record_runtime_start(state, &selected_agents.definitions);
-    // 捕获本轮的目标会话 id：即便用户中途切换会话，写入也始终落到这一段对话
-    let sid = state.sessions.lock().unwrap().active.clone();
+    // The caller captures this immutable target before any initialization
+    // await. Never derive the destination from the mutable active session.
+    let sid = session_id.to_string();
     let session_store = session_engine::SessionTurnStore::new(state, sid.clone());
 
     // 取当前角色包人格，后续每次请求会结合最新会话摘要拼装 system prompt
@@ -260,8 +266,9 @@ pub async fn run_turn_with_options(
         // 组装本轮请求消息：system + token-aware 裁剪后的历史。若裁剪掉旧消息，先滚动更新会话摘要。
         let (mut msgs, mut session_summary) = session_store.snapshot();
 
-        let mut system = prompt::build_for_input(
+        let mut system = prompt::build_for_session_input(
             state,
+            &sid,
             &settings,
             &persona_text,
             session_summary.as_deref(),
@@ -293,8 +300,9 @@ pub async fn run_turn_with_options(
                 session_summary = next_summary;
                 session_store.replace_messages_and_summary(msgs.clone(), session_summary.clone());
 
-                system = prompt::build_for_input(
+                system = prompt::build_for_session_input(
                     state,
+                    &sid,
                     &settings,
                     &persona_text,
                     session_summary.as_deref(),

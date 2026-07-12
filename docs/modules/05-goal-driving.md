@@ -66,7 +66,7 @@ Goal 持续驱动让用户用一句 `/goal <目标>` 设定一个跨越多个回
 1. 字符数超过 `MAX_OBJECTIVE_CHARS` 直接报错，建议把细节写进文件再用短目标引用。
 2. `parse_objective_and_budget`（`goal.rs:725`）从原始文本中拆出 token 预算并剥离预算片段，得到纯目标文本。
 3. 空目标报错。
-4. `set_goal`（`goal.rs:299`）把目标写进当前 active session 的 `goal` 字段，状态重置为 `Active`，所有计数器归零。
+4. `set_goal_for_session` 把目标写进 `TurnHandle.session_id` 对应会话的 `goal` 字段，状态重置为 `Active`，所有计数器归零。
 5. `increment_turns`（`goal.rs:436`）把 `turns_executed` 置 1（设置目标本身算作第一个回合）。
 6. 返回 `GoalSlashOutcome::Query`，`lib.rs` 据此立即发起一次带目标 overlay 的真实回合，回合结束后再触发 `drive_after_turn` 续跑。
 
@@ -110,7 +110,7 @@ Goal 持续驱动让用户用一句 `/goal <目标>` 设定一个跨越多个回
 - `complete_goal`（`goal.rs:393`）：任意状态可完成，结账活跃时间后置 `Complete`。
 - `mark_max_turns`（`goal.rs:648`）、`mark_budget_notified`（`goal.rs:660`）为内部辅助。
 
-所有写操作都经 `mutate_active_goal`（`goal.rs:669`）在 `state.sessions` 锁内完成，并刷新 `session.updated_at`，保证一致性。
+回合内所有写操作都经 `mutate_goal(state, session_id, ...)` 在 `state.sessions` 锁内完成，并刷新目标会话的 `updated_at`。侧栏 active session 只用于回合外面板查询，不再决定续跑归属。
 
 > 关于 `/goal resume` 与 `MaxTurns`：`handle_slash` 的 `resume` 分支（`goal.rs:99-122`）会先判断目标是否处于 `MaxTurns`，若是则提示改用 `/goal continue` 重置计数器，而不会错误地走 `resume_goal`（后者只接受 `Paused`）。
 
@@ -123,7 +123,7 @@ Goal 持续驱动让用户用一句 `/goal <目标>` 设定一个跨越多个回
 3. 按 `status` 分派：
    - **`Active`**：
      - 若 `turns_executed >= MAX_GOAL_TURNS`(150)：`mark_max_turns`，发出一条 `assistant_done` 文案提示用 `/goal continue` 重置，返回。
-     - 否则 `increment_turns` 得到本轮号 `turns`，用 `build_continuation_prompt` 生成续跑 overlay，发 `goal-progress` 事件（含 status / message / turns / tokens / budget），然后以**内部用户文本 `[Goal continuation #N]`** 调用 `run_turn_with_options`。循环继续（即同一命令内可连续推进多个续跑回合，直到状态不再是 `Active` 或命中护栏）。
+     - 否则 `increment_turns_for_session` 得到本轮号 `turns`，用 `build_continuation_prompt` 生成续跑 overlay，发 `goal-progress` 事件，然后以**内部用户文本 `[Goal continuation #N]`**和同一个 session id 调用 `run_turn_with_options`。循环继续，直到该会话目标不再是 `Active` 或命中护栏。
    - **`BudgetLimited`**：
      - 若 `budget_limit_notified` 已为真→直接返回（不再骚扰）。
      - 否则 `mark_budget_notified`，发 `goal-progress`，用 `build_budget_limit_prompt` 注入**一次性预算总结提示**（要求模型停止实质工作、给出已完成/待办/阻塞总结），调用一次 `run_turn_with_options` 后 `return Ok(())`（不再循环）。
@@ -194,7 +194,7 @@ run_turn_with_options(普通回合)  ──成功且未取消──▶ drive_aft
 | 边界 | 方向 | 说明 |
 |---|---|---|
 | `lib.rs::send` / `send_with_agents` | 调用 goal | slash 分发到 `handle_slash`；回合成功且未取消时调用 `drive_after_turn`（`lib.rs:441/488`）。`/dream`、`/compact`、`/ultracode`、`/workflows`、普通消息成功后都会触发续跑检查（置 `should_drive_goal=true`）。 |
-| `lib.rs::goal_pause/goal_resume/goal_continue/goal_clear` | 命令→goal | 面板按钮对应的 Tauri 命令；`goal_resume`/`goal_continue` 经 `run_goal_control_turn`（`lib.rs:897`）发起一次内部回合再续跑。这两个命令用 `state.busy` 互斥防并发。 |
+| `lib.rs::goal_pause/goal_resume/goal_continue/goal_clear` | 命令→goal | 面板按钮对应的 Tauri 命令；`goal_resume`/`goal_continue` 先登记 Session Engine turn，再把 `TurnHandle.session_id` 传给内部回合和续跑，因此同样受入口互斥、事件归属与所属会话删除保护。 |
 | `runner.rs` | 回合→goal | 回合内做 token 记账（`add_provider_usage`/`add_estimated_tokens`）。 |
 | `prompt.rs:88` | prompt→goal | 每次请求注入 `<active-goal>` 上下文块。 |
 | `tools/mod.rs` | 工具注册/分发 | `goal` 工具定义于 `tools/mod.rs:555-581`，分发于 `tools/mod.rs:901`。 |

@@ -124,6 +124,7 @@ pub struct TurnStart {
 #[derive(Clone, Debug)]
 pub struct TurnHandle {
     pub id: String,
+    pub session_id: String,
 }
 
 pub struct SessionTurnStore<'a> {
@@ -278,10 +279,26 @@ pub fn begin_turn(
     }
 
     state.cancel.store(false, Ordering::Relaxed);
+    // Serialize turn registration with session deletion. A sender may have
+    // captured the session id immediately before another command deletes that
+    // session; validating while holding the engine lock prevents registering a
+    // turn whose storage target no longer exists.
+    let mut runtime = state.session_engine.lock().unwrap();
+    if state
+        .sessions
+        .lock()
+        .unwrap()
+        .get(&start.session_id)
+        .is_none()
+    {
+        state.busy.store(false, Ordering::SeqCst);
+        return Err("The target session no longer exists.".to_string());
+    }
+
     let now = store::now_millis();
     let turn = TurnRunState {
         id: new_turn_id(),
-        session_id: start.session_id,
+        session_id: start.session_id.clone(),
         entrypoint: start.entrypoint,
         status: TurnStatus::Running,
         input_preview: preview(&start.input),
@@ -294,14 +311,34 @@ pub fn begin_turn(
     };
     let handle = TurnHandle {
         id: turn.id.clone(),
+        session_id: start.session_id,
     };
 
-    {
-        let mut runtime = state.session_engine.lock().unwrap();
-        runtime.active_turn = Some(turn);
-    }
+    runtime.active_turn = Some(turn);
+    drop(runtime);
     emit_update(app, state);
     Ok(handle)
+}
+
+/// Returns whether deleting `session_id` would remove the storage target of a
+/// currently running turn. Callers that need an atomic check-and-delete must
+/// keep the same `SessionEngineState` lock held until session removal finishes.
+pub fn blocks_session_deletion(runtime: &SessionEngineState, session_id: &str) -> bool {
+    runtime.active_turn.as_ref().is_some_and(|turn| {
+        turn.session_id == session_id
+            && matches!(turn.status, TurnStatus::Running | TurnStatus::Cancelling)
+    })
+}
+
+/// Resolves the session that owns work executed inside the current turn.
+/// Tool implementations that cannot receive a session id directly must use
+/// this helper instead of the mutable sidebar selection.
+pub fn execution_session_id(state: &crate::AppState) -> String {
+    let runtime = state.session_engine.lock().unwrap();
+    if let Some(turn) = runtime.active_turn.as_ref() {
+        return turn.session_id.clone();
+    }
+    state.sessions.lock().unwrap().active.clone()
 }
 
 pub fn finish_turn(
@@ -377,6 +414,7 @@ fn preview(input: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{mpsc, Arc};
 
     #[test]
     fn preview_collapses_whitespace_and_truncates() {
@@ -458,5 +496,103 @@ mod tests {
         assert!(persisted, "sessions.json 应由后台写盘线程持久化");
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn delayed_turn_stays_bound_to_its_start_session_and_cannot_be_deleted() {
+        let root = std::env::temp_dir().join(format!(
+            "demiurge_turn_session_binding_{}",
+            store::new_session_id()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let state = Arc::new(crate::AppState::new(reqwest::Client::new()));
+        *state.data_dir.lock().unwrap() = root.clone();
+        *state.sandbox_dir.lock().unwrap() = root.clone();
+
+        let mut session_a = store::Session::new();
+        session_a.id = "session-a".to_string();
+        session_a.workspace_path = root.to_string_lossy().to_string();
+        let mut session_b = store::Session::new();
+        session_b.id = "session-b".to_string();
+        session_b.workspace_path = session_a.workspace_path.clone();
+        {
+            let mut sessions = state.sessions.lock().unwrap();
+            sessions.active = session_a.id.clone();
+            sessions.sessions = vec![session_a, session_b];
+        }
+
+        let now = store::now_millis();
+        state.busy.store(true, Ordering::SeqCst);
+        state.session_engine.lock().unwrap().active_turn = Some(TurnRunState {
+            id: "turn-a".to_string(),
+            session_id: "session-a".to_string(),
+            entrypoint: TurnEntrypoint::Send,
+            status: TurnStatus::Running,
+            input_preview: "delayed".to_string(),
+            workflow_run_id: None,
+            agent_names: Vec::new(),
+            started_at: now,
+            updated_at: now,
+            completed_at: None,
+            error: None,
+        });
+
+        // Hold the worker before its first write, mirroring an awaited provider
+        // initialization. The UI changes active session while it is suspended.
+        let (ready_tx, ready_rx) = mpsc::channel();
+        let (resume_tx, resume_rx) = mpsc::channel();
+        let worker_state = Arc::clone(&state);
+        let worker = std::thread::spawn(move || {
+            ready_tx.send(()).unwrap();
+            resume_rx.recv().unwrap();
+            let turn_store = SessionTurnStore::new(&worker_state, "session-a".to_string());
+            turn_store.append_user_message("message for A".to_string());
+            turn_store.append_message(Message::tool_result(
+                "call-a",
+                "read_file",
+                "tool output for A",
+            ));
+            turn_store.append_message(Message::assistant_text("reply for A"));
+        });
+
+        ready_rx.recv().unwrap();
+        state.sessions.lock().unwrap().active = "session-b".to_string();
+        assert_eq!(execution_session_id(&state), "session-a");
+
+        let running_error = crate::delete_session_inner(&state, "session-a".to_string())
+            .expect_err("a running turn must keep ownership of its start session");
+        assert!(running_error.contains("本轮所属会话"));
+        state
+            .session_engine
+            .lock()
+            .unwrap()
+            .active_turn
+            .as_mut()
+            .unwrap()
+            .status = TurnStatus::Cancelling;
+        assert!(crate::delete_session_inner(&state, "session-a".to_string()).is_err());
+
+        resume_tx.send(()).unwrap();
+        worker.join().unwrap();
+
+        let sessions = state.sessions.lock().unwrap();
+        let a = sessions.get("session-a").unwrap();
+        let b = sessions.get("session-b").unwrap();
+        assert_eq!(
+            a.messages
+                .iter()
+                .map(|message| message.role.as_str())
+                .collect::<Vec<_>>(),
+            vec!["user", "tool", "assistant"]
+        );
+        assert!(a.messages[1]
+            .content
+            .as_deref()
+            .is_some_and(|content| content.contains("tool output for A")));
+        assert_eq!(a.messages[2].content.as_deref(), Some("reply for A"));
+        assert!(b.messages.is_empty());
+        drop(sessions);
+        drop(state);
+        let _ = std::fs::remove_dir_all(root);
     }
 }

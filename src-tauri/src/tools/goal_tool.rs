@@ -9,6 +9,7 @@ struct GoalArgs {
 }
 
 pub fn run(state: &crate::AppState, args: Value) -> Result<String, String> {
+    let session_id = crate::agent::session_engine::execution_session_id(state);
     let args: GoalArgs = serde_json::from_value(args).unwrap_or(GoalArgs {
         action: None,
         status: None,
@@ -25,7 +26,7 @@ pub fn run(state: &crate::AppState, args: Value) -> Result<String, String> {
         .unwrap_or("get");
 
     if action == "get" {
-        return Ok(snapshot(state)
+        return Ok(snapshot(state, &session_id)
             .unwrap_or_else(|| {
                 json!({
                     "success": true,
@@ -45,15 +46,15 @@ pub fn run(state: &crate::AppState, args: Value) -> Result<String, String> {
         .ok_or_else(|| "status is required for update.".to_string())?;
     match status {
         "complete" => {
-            if crate::agent::goal::active_goal(state).is_none() {
+            if crate::agent::goal::goal_for_session(state, &session_id).is_none() {
                 return Err("No active goal to update.".to_string());
             }
-            let report = crate::agent::goal::completion_report(state);
-            crate::agent::goal::complete_goal(state);
+            let report = crate::agent::goal::completion_report_for_session(state, &session_id);
+            crate::agent::goal::complete_goal_for_session(state, &session_id);
             state.persist_sessions();
             Ok(json!({
                 "success": true,
-                "goal": snapshot(state),
+                "goal": snapshot(state, &session_id),
                 "report": report,
                 "reason": args.reason.unwrap_or_default(),
             })
@@ -64,7 +65,7 @@ pub fn run(state: &crate::AppState, args: Value) -> Result<String, String> {
                 .reason
                 .unwrap_or_else(|| "unspecified blocker".to_string());
             let Some((next_status, attempts)) =
-                crate::agent::goal::record_blocked_attempt(state, &reason)
+                crate::agent::goal::record_blocked_attempt_for_session(state, &session_id, &reason)
             else {
                 return Err("Goal is not in a state that accepts blocked attempts.".to_string());
             };
@@ -76,7 +77,7 @@ pub fn run(state: &crate::AppState, args: Value) -> Result<String, String> {
             };
             Ok(json!({
                 "success": true,
-                "goal": snapshot(state),
+                "goal": snapshot(state, &session_id),
                 "message": message,
             })
             .to_string())
@@ -85,8 +86,8 @@ pub fn run(state: &crate::AppState, args: Value) -> Result<String, String> {
     }
 }
 
-fn snapshot(state: &crate::AppState) -> Option<Value> {
-    let goal = crate::agent::goal::active_goal(state)?;
+fn snapshot(state: &crate::AppState, session_id: &str) -> Option<Value> {
+    let goal = crate::agent::goal::goal_for_session(state, session_id)?;
     Some(json!({
         "objective": goal.objective,
         "status": goal.status,

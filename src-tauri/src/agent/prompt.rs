@@ -59,15 +59,20 @@ struct SectionDecision {
     truncated: bool,
 }
 
-pub fn build_for_input(
+/// Builds a prompt for an immutable turn-owned session. The active session may
+/// change while provider/tool initialization is in flight, so runner paths
+/// must use this entry point instead of deriving context from global state.
+pub fn build_for_session_input(
     state: &crate::AppState,
+    session_id: &str,
     settings: &Settings,
     persona_text: &str,
     session_summary: Option<&str>,
     user_text: &str,
 ) -> String {
-    build_with_report_for_input(
+    build_with_report_for_session_input(
         state,
+        session_id,
         settings,
         persona_text,
         session_summary,
@@ -92,17 +97,35 @@ pub fn build_with_report_for_input(
     session_summary: Option<&str>,
     user_text: Option<&str>,
 ) -> PromptBuild {
+    let session_id = state.sessions.lock().unwrap().active.clone();
+    build_with_report_for_session_input(
+        state,
+        &session_id,
+        settings,
+        persona_text,
+        session_summary,
+        user_text,
+    )
+}
+
+fn build_with_report_for_session_input(
+    state: &crate::AppState,
+    session_id: &str,
+    settings: &Settings,
+    persona_text: &str,
+    session_summary: Option<&str>,
+    user_text: Option<&str>,
+) -> PromptBuild {
     let sandbox = state.sandbox_dir.lock().unwrap().clone();
     let data_dir = state.data_dir.lock().unwrap().clone();
     let packs_dir = state.packs_dir.lock().unwrap().clone();
-    let session_id = state.sessions.lock().unwrap().active.clone();
-    let goal_block = super::goal::build_goal_context_block(state);
+    let goal_block = super::goal::build_goal_context_block_for_session(state, session_id);
     let embed = crate::embed::provider_from_settings(&state.http, settings);
     let drafts = build_ordered_sections(
         &sandbox,
         &data_dir,
         &packs_dir,
-        &session_id,
+        session_id,
         settings,
         persona_text,
         session_summary,

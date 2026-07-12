@@ -10,7 +10,7 @@ use serde_json::{json, Value};
 
 use super::conversation::Message;
 use super::custom;
-use super::{budget, prompt};
+use super::{budget, prompt, session_engine};
 use crate::{llm, pack, store, tools};
 
 const MAX_SUBAGENT_STEPS: usize = 6;
@@ -347,7 +347,7 @@ pub async fn run(state: &crate::AppState, req: SubagentRequest) -> Result<String
     }
 
     let settings = state.settings.lock().unwrap().clone();
-    let sid = state.sessions.lock().unwrap().active.clone();
+    let sid = session_engine::execution_session_id(state);
     let packs_dir = state.packs_dir.lock().unwrap().clone();
     let persona_text = match pack::load_pack(&packs_dir, &settings.current_pack) {
         Ok(p) => p.persona_text,
@@ -431,8 +431,9 @@ pub async fn run(state: &crate::AppState, req: SubagentRequest) -> Result<String
     };
     let (tool_schema, mut msgs) = match req.context_mode {
         SubagentContextMode::Fork => {
-            let system = prompt::build_for_input(
+            let system = prompt::build_for_session_input(
                 state,
+                &sid,
                 &settings,
                 &persona_text,
                 session_summary,
@@ -456,8 +457,9 @@ pub async fn run(state: &crate::AppState, req: SubagentRequest) -> Result<String
             )
         }
         SubagentContextMode::Brief | SubagentContextMode::Recent => {
-            let mut system = prompt::build_for_input(
+            let mut system = prompt::build_for_session_input(
                 state,
+                &sid,
                 &settings,
                 &persona_text,
                 session_summary,

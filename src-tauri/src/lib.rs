@@ -379,22 +379,29 @@ async fn send(app: AppHandle, state: State<'_, AppState>, text: String) -> Resul
     )?;
     let events = agent::session_engine::TurnEventEmitter::new(&app, st);
     let trimmed = text.trim();
-    let (res, should_drive_goal) = match agent::slash::dispatch(&app, st, text.clone(), &events)
-        .await
-    {
-        Some(outcome) => outcome,
-        None => {
-            if let Some(risk) = companion::detect_high_risk_expression(trimmed) {
-                persist_direct_reply(st, &session_id, text.clone(), risk.support_message.clone());
-                events.assistant_done(risk.support_message);
-                (Ok(()), false)
-            } else {
-                (agent::run_turn(&app, st, text).await, true)
+    let (res, should_drive_goal) =
+        match agent::slash::dispatch(&app, st, &turn.session_id, text.clone(), &events).await {
+            Some(outcome) => outcome,
+            None => {
+                if let Some(risk) = companion::detect_high_risk_expression(trimmed) {
+                    persist_direct_reply(
+                        st,
+                        &turn.session_id,
+                        text.clone(),
+                        risk.support_message.clone(),
+                    );
+                    events.assistant_done(risk.support_message);
+                    (Ok(()), false)
+                } else {
+                    (
+                        agent::run_turn(&app, st, &turn.session_id, text).await,
+                        true,
+                    )
+                }
             }
-        }
-    };
+        };
     let res = if res.is_ok() && should_drive_goal && !st.cancel.load(Ordering::Relaxed) {
-        agent::goal::drive_after_turn(&app, st).await
+        agent::goal::drive_after_turn(&app, st, &turn.session_id).await
     } else {
         res
     };
@@ -433,7 +440,12 @@ async fn send_with_agents(
     let mut should_drive_goal = true;
     let res = if let Some(risk) = companion::detect_high_risk_expression(&text) {
         should_drive_goal = false;
-        persist_direct_reply(st, &session_id, text.clone(), risk.support_message.clone());
+        persist_direct_reply(
+            st,
+            &turn.session_id,
+            text.clone(),
+            risk.support_message.clone(),
+        );
         let events = agent::session_engine::TurnEventEmitter::new(&app, st);
         events.assistant_done(risk.support_message);
         Ok(())
@@ -441,6 +453,7 @@ async fn send_with_agents(
         agent::run_turn_with_options(
             &app,
             st,
+            &turn.session_id,
             text,
             agent::TurnOptions {
                 agent_names,
@@ -450,7 +463,7 @@ async fn send_with_agents(
         .await
     };
     let res = if res.is_ok() && should_drive_goal && !st.cancel.load(Ordering::Relaxed) {
-        agent::goal::drive_after_turn(&app, st).await
+        agent::goal::drive_after_turn(&app, st, &turn.session_id).await
     } else {
         res
     };
@@ -1006,18 +1019,28 @@ async fn goal_resume(
     state: State<'_, AppState>,
 ) -> Result<Option<agent::goal::GoalPanelState>, String> {
     let st = state.inner();
-    if st.busy.swap(true, Ordering::SeqCst) {
-        return Err("Demiurge is already processing a turn.".to_string());
-    }
+    let session_id = st.sessions.lock().unwrap().active.clone();
+    let input = "[Goal resumed]";
+    let turn = agent::session_engine::begin_turn(
+        &app,
+        st,
+        agent::session_engine::TurnStart {
+            entrypoint: agent::session_engine::TurnEntrypoint::Send,
+            session_id,
+            input: input.to_string(),
+            workflow_run_id: None,
+            agent_names: Vec::new(),
+        },
+    )?;
     let result = async {
-        let Some(goal) = agent::goal::resume_goal(st) else {
+        let Some(goal) = agent::goal::resume_goal_for_session(st, &turn.session_id) else {
             return Err("No paused goal to resume.".to_string());
         };
         st.persist_sessions();
-        run_goal_control_turn(&app, st, "[Goal resumed]", goal).await
+        run_goal_control_turn(&app, st, &turn.session_id, input, goal).await
     }
     .await;
-    st.busy.store(false, Ordering::SeqCst);
+    finish_command_turn(&app, st, &turn, &result);
     result
 }
 
@@ -1027,19 +1050,46 @@ async fn goal_continue(
     state: State<'_, AppState>,
 ) -> Result<Option<agent::goal::GoalPanelState>, String> {
     let st = state.inner();
-    if st.busy.swap(true, Ordering::SeqCst) {
-        return Err("Demiurge is already processing a turn.".to_string());
-    }
+    let session_id = st.sessions.lock().unwrap().active.clone();
+    let input = "[Goal continued]";
+    let turn = agent::session_engine::begin_turn(
+        &app,
+        st,
+        agent::session_engine::TurnStart {
+            entrypoint: agent::session_engine::TurnEntrypoint::Send,
+            session_id,
+            input: input.to_string(),
+            workflow_run_id: None,
+            agent_names: Vec::new(),
+        },
+    )?;
     let result = async {
-        let Some(goal) = agent::goal::continue_from_max_turns(st) else {
+        let Some(goal) = agent::goal::continue_from_max_turns_for_session(st, &turn.session_id)
+        else {
             return Err("Current goal is not waiting for continue.".to_string());
         };
         st.persist_sessions();
-        run_goal_control_turn(&app, st, "[Goal continued]", goal).await
+        run_goal_control_turn(&app, st, &turn.session_id, input, goal).await
     }
     .await;
-    st.busy.store(false, Ordering::SeqCst);
+    finish_command_turn(&app, st, &turn, &result);
     result
+}
+
+fn finish_command_turn<T>(
+    app: &AppHandle,
+    state: &AppState,
+    turn: &agent::session_engine::TurnHandle,
+    result: &Result<T, String>,
+) {
+    let status = if state.cancel.load(Ordering::Relaxed) {
+        agent::session_engine::TurnStatus::Interrupted
+    } else if result.is_ok() {
+        agent::session_engine::TurnStatus::Completed
+    } else {
+        agent::session_engine::TurnStatus::Failed
+    };
+    agent::session_engine::finish_turn(app, state, turn, status, result.as_ref().err().cloned());
 }
 
 #[tauri::command]
@@ -1052,6 +1102,7 @@ fn goal_clear(state: State<'_, AppState>) -> Option<agent::goal::GoalPanelState>
 async fn run_goal_control_turn(
     app: &AppHandle,
     state: &AppState,
+    session_id: &str,
     stored_user_text: &str,
     goal: agent::goal::GoalState,
 ) -> Result<Option<agent::goal::GoalPanelState>, String> {
@@ -1059,6 +1110,7 @@ async fn run_goal_control_turn(
     agent::run_turn_with_options(
         app,
         state,
+        session_id,
         hidden_text.clone(),
         agent::TurnOptions {
             system_overlay: Some(agent::goal::build_continuation_prompt(&goal)),
@@ -1070,9 +1122,11 @@ async fn run_goal_control_turn(
     )
     .await?;
     if !state.cancel.load(Ordering::Relaxed) {
-        agent::goal::drive_after_turn(app, state).await?;
+        agent::goal::drive_after_turn(app, state, session_id).await?;
     }
-    Ok(agent::goal::panel_state(state))
+    Ok(agent::goal::goal_for_session(state, session_id)
+        .as_ref()
+        .map(agent::goal::panel_state_from_goal))
 }
 
 #[tauri::command]
@@ -1548,12 +1602,22 @@ fn select_session(state: State<'_, AppState>, id: String) -> Result<(), String> 
 /// 删除会话；若删的是活动会话，切到最近一个（或新建空会话）。返回新的活动会话 id。
 #[tauri::command]
 fn delete_session(state: State<'_, AppState>, id: String) -> Result<String, String> {
+    delete_session_inner(state.inner(), id)
+}
+
+fn delete_session_inner(state: &AppState, id: String) -> Result<String, String> {
     let current_workspace = state
         .sandbox_dir
         .lock()
         .unwrap()
         .to_string_lossy()
         .replace('\\', "/");
+    // Keep the engine lock until removal is complete. `begin_turn` acquires
+    // locks in the same order, making target validation and deletion atomic.
+    let runtime = state.session_engine.lock().unwrap();
+    if agent::session_engine::blocks_session_deletion(&runtime, &id) {
+        return Err("正在生成回复，暂时不能删除本轮所属会话".to_string());
+    }
     let active = {
         let mut store = state.sessions.lock().unwrap();
         if !store.sessions.iter().any(|session| session.id == id) {
@@ -1582,7 +1646,8 @@ fn delete_session(state: State<'_, AppState>, id: String) -> Result<String, Stri
         }
         store.active.clone()
     };
-    workspace::sync_active_session_workspace(state.inner())?;
+    drop(runtime);
+    workspace::sync_active_session_workspace(state)?;
     state.persist_sessions();
     Ok(active)
 }

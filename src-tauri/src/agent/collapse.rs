@@ -15,10 +15,9 @@ pub struct ContextStats {
     pub compactable_messages: usize,
 }
 
-pub fn inspect(state: &crate::AppState) -> ContextStats {
+pub fn inspect_session(state: &crate::AppState, session_id: &str) -> ContextStats {
     let storeg = state.sessions.lock().unwrap();
-    let sid = storeg.active.clone();
-    let session = storeg.get(&sid);
+    let session = storeg.get(session_id);
     let messages = session.map(|s| s.messages.as_slice()).unwrap_or(&[]);
     let summary_chars = session
         .and_then(|s| s.summary.as_deref())
@@ -26,7 +25,7 @@ pub fn inspect(state: &crate::AppState) -> ContextStats {
         .unwrap_or(0);
 
     ContextStats {
-        session_id: sid,
+        session_id: session_id.to_string(),
         message_count: messages.len(),
         summary_chars,
         estimated_history_tokens: budget::estimate_messages_tokens(messages),
@@ -37,10 +36,11 @@ pub fn inspect(state: &crate::AppState) -> ContextStats {
 pub async fn run_manual_compact(
     app: &AppHandle,
     state: &crate::AppState,
+    session_id: &str,
     raw_text: String,
 ) -> Result<(), String> {
     let keep_recent = parse_keep_recent(&raw_text).unwrap_or(MANUAL_KEEP_RECENT);
-    let result = compact_active_session(state, keep_recent).await?;
+    let result = compact_session(state, session_id, keep_recent).await?;
     let text = if result.removed_messages == 0 {
         format!(
             "当前上下文无需折叠。消息数：{}，估算历史 token：{}。",
@@ -66,8 +66,9 @@ pub struct CompactResult {
     pub after: ContextStats,
 }
 
-pub async fn compact_active_session(
+pub async fn compact_session(
     state: &crate::AppState,
+    session_id: &str,
     keep_recent: usize,
 ) -> Result<CompactResult, String> {
     let settings = state.settings.lock().unwrap().clone();
@@ -76,7 +77,7 @@ pub async fn compact_active_session(
         return Err("当前 provider 需要 API Key，无法调用摘要模型折叠上下文。".to_string());
     }
 
-    let sid = state.sessions.lock().unwrap().active.clone();
+    let sid = session_id.to_string();
     let (removed, existing_summary) = {
         let mut storeg = state.sessions.lock().unwrap();
         let Some(session) = storeg.get_mut(&sid) else {
@@ -84,9 +85,20 @@ pub async fn compact_active_session(
         };
         let split_at = session.messages.len().saturating_sub(keep_recent);
         if split_at == 0 {
+            let messages = session.messages.as_slice();
             return Ok(CompactResult {
                 removed_messages: 0,
-                after: inspect(state),
+                after: ContextStats {
+                    session_id: sid,
+                    message_count: messages.len(),
+                    summary_chars: session
+                        .summary
+                        .as_deref()
+                        .map(|summary| summary.chars().count())
+                        .unwrap_or(0),
+                    estimated_history_tokens: budget::estimate_messages_tokens(messages),
+                    compactable_messages: messages.len().saturating_sub(MANUAL_KEEP_RECENT),
+                },
             });
         }
         let removed = drain_prefix_preserving_pairs(&mut session.messages, split_at);
@@ -97,7 +109,7 @@ pub async fn compact_active_session(
     if removed.is_empty() {
         return Ok(CompactResult {
             removed_messages: 0,
-            after: inspect(state),
+            after: inspect_session(state, &sid),
         });
     }
 
@@ -121,7 +133,7 @@ pub async fn compact_active_session(
 
     Ok(CompactResult {
         removed_messages: removed.len(),
-        after: inspect(state),
+        after: inspect_session(state, &sid),
     })
 }
 

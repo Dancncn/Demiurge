@@ -36,7 +36,7 @@
 
 | 类型/函数 | 位置 | 作用 |
 |---|---|---|
-| `prompt::build_for_input` | `prompt.rs:58` | runner 实际调用的入口，返回最终 system 字符串 |
+| `prompt::build_for_session_input` | `prompt.rs` | runner 实际调用的入口，按 turn-owned session 返回最终 system 字符串 |
 | `prompt::build_with_report` | `prompt.rs:68` | 面板用入口，返回带逐分区报告的 `PromptBuild` |
 | `PromptBuild` / `PromptSectionReport` | `prompt.rs:37` / `prompt.rs:25` | 组装结果与逐分区统计（chars/tokens/included/truncated） |
 | `budget::estimate_text_tokens` | `budget.rs:77` | 文本 token 启发式估算 |
@@ -229,7 +229,7 @@ return removed
 
 ```
 1. snapshot 取 (msgs, session_summary)
-2. system = prompt::build_for_input(..., session_summary, original_user_text)   // 摘要进 prompt
+2. system = prompt::build_for_session_input(..., session_id, session_summary, original_user_text) // 固定会话摘要进 prompt
    + 叠加 plan_mode / agent / 临时 overlay（apply_system_overlay）
 3. current_budget = history_budget_for_profile(settings, profile, system, tools_schema, msgs)
 4. removed = trim_collect_removed_by_tokens(msgs, current_budget.history_budget_tokens)
@@ -343,7 +343,7 @@ removed_messages → compact_messages(扁平化为 role(name): content / [tool_c
 
 两个易被误解的点：
 
-- `context_panel_state` 调 `build_with_report`（无 `user_text`），而 runner 调 `build_for_input`（带 `original_user_text`）。`user_text` 仅影响 `skills` 分区的召回（`skills::context_for_turn`），所以面板里 skills 分区可能与真实回合略有出入。
+- `context_panel_state` 调 `build_with_report`（无 `user_text`，按当前界面会话），而 runner 调 `build_for_session_input`（带 turn-owned session id 与 `original_user_text`）。`user_text` 仅影响 `skills` 分区召回，所以面板里 skills 分区可能与真实回合略有出入。
 - 面板展示的是**裁剪前**的 `history_tokens`，配合 `history_over_budget_tokens` 提示「超了多少、下一轮会被裁多少」，而不是裁剪后的真实送出量。
 
 ---
@@ -354,7 +354,7 @@ removed_messages → compact_messages(扁平化为 role(name): content / [tool_c
 flowchart TD
     User[用户输入] --> Runner[runner::run_turn_with_options]
     Runner -->|每步| Snap[SessionTurnStore.snapshot]
-    Snap --> Prompt[prompt::build_for_input]
+    Snap --> Prompt[prompt::build_for_session_input]
     Persona[persona::engine_base + pack persona] --> Prompt
     Skills[skills/memory/goal] --> Prompt
     Summary[(rolling summary)] --> Prompt

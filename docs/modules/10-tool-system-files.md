@@ -373,7 +373,7 @@ if had_trailing_newline { next.push('\n'); }
 
 1. 校验 `content` 非空（`write_plan.rs:7`–`14`）。
 2. `plans_dir = sandbox/.demiurge/plans`，`create_dir_all`。
-3. 文件名 `plan-{safe_session}-{millis}.md`，其中 `safe_session` 把活动会话 id 里非 `[A-Za-z0-9_-]` 的字符替换成 `_`（`write_plan.rs:22`–`30`）——防注入/路径穿越。
+3. 文件名 `plan-{safe_session}-{millis}.md`，其中 `safe_session` 来自 Session Engine 的 turn-owned session id（回合外才回退到当前 active），并把非 `[A-Za-z0-9_-]` 的字符替换成 `_`——既防注入/路径穿越，也避免会话切换改变计划归属。
 4. 写盘后更新 `AppState.plan_state`（`write_plan.rs:40`–`48`）：`active=true`、`approved=false`、记录 `path`/`content`/`created_at`。
 
 这把「写计划」与「Plan Mode 状态机」绑定：计划写入后处于「待批准」态，用户批准（`approve_plan`，见 `IMPLEMENTATION.md:297`）后才离开 plan 模式进入执行。`write_plan` 的风险是 `Mutating`、权限 `ask`，注册表描述明确限定写入目录（`mod.rs:287`）。

@@ -183,13 +183,13 @@ memory.rs (写)                prompt.rs (读)                 LLM
 
 ## 4. /dream 记忆整理流程
 
-入口 `run_manual_dream()`（`src-tauri/src/agent/dream.rs:22`），在 `lib.rs` 的 slash 分流里命中 `/dream` 或 `/dream ...`（`src-tauri/src/lib.rs:310`）后调用。
+入口 `run_manual_dream(app, state, session_id, command)`，在 slash 分流命中 `/dream` 后使用 `TurnHandle.session_id` 调用；它不会在异步整理期间重新读取侧栏 active session。
 
 ### 4.1 整体状态机
 
 ```
 /dream
-  │ cancel.store(false)；把用户的 /dream 文本作为 user 消息入历史并持久化
+  │ cancel.store(false)；把用户的 /dream 文本写入 turn-owned session 并持久化
   ▼
 emit "开始整理长期记忆...\n\n"
   ▼
@@ -221,7 +221,7 @@ create_dir_all(parent) ──► fs::write(memory_path, next_memory)
 emit "记忆整理完成..." ──► finish
 ```
 
-`emit_delta`/`finish`（`src-tauri/src/agent/dream.rs:181`、`189`）通过 `session_engine::TurnEventEmitter` 把进度作为一条 assistant 消息流式发给前端，并在结束时 `push_message` + `persist_sessions` 落库。
+`emit_delta`/`finish` 通过 `session_engine::TurnEventEmitter` 把进度作为一条 assistant 消息流式发给前端，并使用入口传入的不可变 session id 执行 `push_message` + `persist_sessions`；切换到同项目的另一会话不会改变落库目标。
 
 ### 4.2 待整理材料 build_source_bundle
 

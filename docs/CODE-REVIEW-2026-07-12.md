@@ -11,7 +11,7 @@
 优先级最高的风险集中在两条所有权链：
 
 1. **权限所有权**：角色包可自行把高危工具设为 Allow；Session/Project 规则没有按会话或项目分桶；deferred/MCP 工具又存在授权粒度降级。
-2. **项目所有权**：undo 与分支操作已绑定不可变的 canonical workspace identity；前端会话快照和后端 turn 的归属仍待修复。
+2. **项目所有权**：undo、分支操作与后端 turn 已绑定不可变的 workspace/session identity；前端会话快照的事务边界仍待修复。
 
 建议在发布或处理未受信角色包、外部工具服务、网页内容前，完成剩余 P1 队列。角色包权限自放行已经修复；Auto/Bypass、外部工具 read-only 注解和其他尚未关闭的边界仍不能当成强隔离。
 
@@ -191,7 +191,9 @@
 
 **建议**：项目变化时关闭菜单并清缓存；loading 时不展示/禁用旧项；响应绑定 generation；后端同时验证 expected workspace path。
 
-### P1-11 turn 起始会话与实际写入会话可能不同
+### P1-11 turn 起始会话与实际写入会话可能不同（已修复）
+
+**修复状态**：`TurnHandle` 保存 `begin_turn` 捕获的 session id，普通发送、带 Agent 发送、slash、Goal 控制与自动续跑都把它显式传给 runner；runner 在任何异步初始化前验证目标并据此构造 `SessionTurnStore`、prompt 和会话内工具上下文，不再从全局 active 推断写入目标。会话删除与 turn 登记使用同一锁序，Running/Cancelling 回合所属会话不可删除。新增可控初始化暂停测试，验证切到同项目会话 B 后，A 的 user/tool/assistant 消息仍只写入 A。
 
 **触发条件**：会话 A 发送后，外部服务初始化 await；期间切换到使用同一工作区的会话 B。
 

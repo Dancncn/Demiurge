@@ -1,6 +1,6 @@
 # Agent 主循环与 Session Engine
 
-> 审阅状态（2026-07-12）：会话现同时持久化项目路径；后端在活动回合期间禁止切换到其他项目或分支，确保工具根目录不在 turn 中途漂移。固定行号请以符号名为准。
+> 审阅状态（2026-07-12）：会话现同时持久化项目路径；后端在活动回合期间禁止切换到其他项目或分支，并把 `begin_turn` 捕获的 session id 贯穿 runner、prompt、slash、Goal 与会话相关工具。运行/取消中的回合所属会话不可删除。固定行号请以符号名为准。
 
 > 存档级技术原理文档。覆盖一次回合（turn）从入口互斥、状态建立、流式生成、多轮工具循环到收尾的完整生命周期。
 >
@@ -71,8 +71,8 @@ finish_turn (落地 status，释放 busy)
 
 ### 2.3 回合执行入口（`runner.rs`）
 
-- `run_turn`（`runner.rs:138`）：默认参数的薄封装，转发到 `run_turn_with_options`。
-- `run_turn_with_options`（`runner.rs:146`）：真正的主循环，接收 `TurnOptions`。
+- `run_turn`：默认参数的薄封装，转发显式 `session_id` 与 `TurnOptions`。
+- `run_turn_with_options`：真正的主循环，接收不可变的 turn-owned `session_id` 与 `TurnOptions`。
 - `TurnOptions`（`runner.rs:129`-`136`）：携带 `system_overlay`、`stored_user_text`、`workflow_run_id`、`agent_names`、`token_budget`。这是 slash 命令（`/goal`、`/ultracode`、`/workflow resume`）和多 Agent 模式向 runner 注入差异化行为的统一通道。
 
 两个核心常量（`runner.rs:16`-`19`）：
@@ -95,7 +95,7 @@ if state.busy.swap(true, Ordering::SeqCst) {
 }
 ```
 
-`swap(true)` 返回旧值，若旧值已是 `true` 说明上一轮还在跑，直接拒绝。抢锁成功后立即把 `state.cancel` 复位为 `false`（`session_engine.rs:270`），建立 `TurnRunState`（状态置 `Running`，写入 `input_preview` 等元数据），放进 `active_turn`，并通过 `emit_update` 广播 `session-engine-updated` 事件（`session_engine.rs:335`-`337`）。
+`swap(true)` 返回旧值，若旧值已是 `true` 说明上一轮还在跑，直接拒绝。抢锁成功后，`begin_turn` 按 `session_engine → sessions` 的固定锁序验证目标会话仍存在，建立 `TurnRunState`，并把同一个 session id 写入 `TurnHandle`。删除会话持有相同的 Session Engine 锁直到移除完成，因此不会出现“删除检查通过后才登记回合”的窗口；Running/Cancelling turn 的 owner 会被拒绝删除。最后通过 `emit_update` 广播 `session-engine-updated`。
 
 > 注意：runner 入口 `run_turn_with_options` 内部**也**会 `state.cancel.store(false, ...)`（`runner.rs:152`）。这是一处冗余但无害的复位——因为 runner 既可被 command 包裹调用（已复位过），也可能被 goal/workflow 等路径直接调用。
 
@@ -139,7 +139,7 @@ cancel 置位 → Interrupted
    - `max_steps` 取 `agent.max_steps.unwrap_or(MAX_STEPS).min(MAX_STEPS)`——agent 只能调小、不能突破 16 的硬上限；
    - `turn_budget` 优先用 `options.token_budget`（由 `/goal +Nk` 等注入），否则用 agent 的 `max_total_tokens` 构造一个 `TokenBudgetState`。
 5. `custom::record_runtime_start` 记录 agent 运行起点（`runner.rs:176`）。
-6. **捕获目标会话 id**（`runner.rs:178`）：`let sid = state.sessions.lock().unwrap().active.clone();`，并用它构造 `SessionTurnStore`。注释（`runner.rs:177`）点明设计意图——即便用户中途切换会话，本轮所有写入都落到这一段对话，不会串台。
+6. **接收目标会话 id**：调用方把 `TurnHandle.session_id` 显式传入 runner；runner 在任何 MCP/外部初始化 await 前确认该会话存在，并直接用它构造 `SessionTurnStore`，不再读取可变的 `sessions.active`。
 7. 加载当前角色包 persona 文本（`runner.rs:182`-`186`）。
 8. **工具 schema 选择**（`runner.rs:187`-`199`）：
    - provider 不支持工具 → `profile.empty_tool_schema()`；
@@ -153,7 +153,7 @@ cancel 置位 → Interrupted
 循环 `for _step in 0..max_steps`。每个 step 都**从零重建 system prompt 与请求消息**，原因正是 system 不持久化、且会话摘要可能在上一 step 被滚动更新。
 
 1. **快照**：`session_store.snapshot()`（`runner.rs:234`）返回当前 `(messages, summary)` 的 clone。
-2. **拼装 system**：`prompt::build_for_input(state, settings, persona_text, summary, original_user_text)`（`runner.rs:236`），再依次叠加三层 overlay（`apply_system_overlay`，`runner.rs:622`-`631`，以 `\n\n---\n临时任务指令：\n` 分隔）：
+2. **拼装 system**：`prompt::build_for_session_input(state, session_id, settings, persona_text, summary, original_user_text)`，按同一个 turn-owned session 读取 Goal、session memory 与摘要，再依次叠加三层 overlay（以 `\n\n---\n临时任务指令：\n` 分隔）：
    - Plan Mode overlay（仅当 `permission_mode == Plan`，`runner.rs:243`）：限制只能用只读工具 + `write_plan`（文案见 `plan_mode_overlay`，`runner.rs:618`-`620`）；
    - agent 的 `prompt_overlay`（`runner.rs:246`）；
    - `options.system_overlay`（`runner.rs:247`，承载 `/goal`、`/ultracode`、`/workflow resume` 注入的指令）。
@@ -319,7 +319,7 @@ history_budget_tokens= max(max_input - occupied, MIN_HISTORY_BUDGET_TOKENS=512)
 |----------|----------|
 | `lib.rs`（Tauri command） | `send`/`send_with_agents` 包裹 `begin_turn`/`finish_turn`；解析 slash 命令分流到 `dream`/`collapse`/`goal`/`skills`/`ultracode`/`workflow`；回合成功后调 `goal::drive_after_turn` |
 | `llm/mod.rs` | `stream_completion` 按 provider profile 路由流式生成；`ProviderProfile` 提供工具支持、schema 方言、token 上限 clamp |
-| `agent/prompt.rs` | `build_for_input` 每轮拼装 system（persona + 会话摘要 + 输入相关上下文） |
+| `agent/prompt.rs` | `build_for_session_input` 每轮按 turn-owned session 拼装 system（persona + 会话摘要 + Goal + scoped memory + 输入相关上下文） |
 | `agent/summary.rs` | `update_session_summary` 在裁剪触发时滚动压缩被移除的旧消息 |
 | `agent/budget.rs` / `agent/context.rs` | token 估算、历史预算计算、按预算裁剪 |
 | `agent/custom.rs` | `resolve_selected` 解析 Agent/Team，合并 overlay/工具/预算；`record_runtime_*` 记 agent 运行统计 |
@@ -336,7 +336,7 @@ history_budget_tokens= max(max_input - occupied, MIN_HISTORY_BUDGET_TOKENS=512)
 ## 五、安全与权限相关点
 
 1. **入口互斥防并发写**：`busy.swap` 保证同一时刻只有一个回合在跑，避免两轮同时写同一会话历史。
-2. **会话 id 锁定**：回合开始即捕获 `sid`（`runner.rs:178`），所有写入绑定这一段对话，用户中途切换会话不会污染目标会话。
+2. **会话 id 锁定**：`begin_turn` 捕获的 id 保存在 `TurnHandle`，普通/Agent 发送、slash、Goal 控制与续跑都显式传递；`SessionTurnStore`、prompt、子 Agent、context/goal/write_plan 工具只使用该 id。用户中途切换同项目会话不会污染目标会话。
 3. **逐工具权限门**：每个工具执行前都过 `permission::decide_for_mode`，`Ask` 弹窗等待用户显式授权；所有决策 `audit` 留痕。
 4. **Plan Mode 限制**（`runner.rs:243`、`plan_mode_overlay`）：`permission_mode == Plan` 时通过 system overlay 约束模型只能用只读工具与 `write_plan`，批准前不得执行实现。
 5. **协作式中断的完整性**：中断时仍补齐 tool 结果配对，既不让 provider 报 400，也不会执行用户已取消的高风险操作；权限弹窗能被中断即时唤醒成 deny。
@@ -369,7 +369,7 @@ flowchart TD
     E --> F[append_user_message + 落盘]
     F --> G{step < max_steps?}
     G -- 是 --> H[snapshot 取 messages+summary]
-    H --> I[build_for_input + 3 层 overlay 拼 system]
+    H --> I[build_for_session_input + 3 层 overlay 拼 system]
     I --> J[history_budget + 裁剪]
     J --> K{裁掉旧消息?}
     K -- 是 --> L[update_session_summary\nreplace_messages_and_summary 落盘\n重算预算二次裁剪]
