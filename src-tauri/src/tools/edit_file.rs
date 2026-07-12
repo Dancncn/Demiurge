@@ -620,7 +620,10 @@ mod tests {
             pending_confirms: Mutex::new(
                 HashMap::<String, oneshot::Sender<PermissionResponse>>::new(),
             ),
-            session_permission_rules: Mutex::new(HashMap::<String, PermissionRule>::new()),
+            session_permission_rules: Mutex::new(
+                HashMap::<String, HashMap<String, PermissionRule>>::new(),
+            ),
+            permission_store_lock: Mutex::new(()),
             plan_state: Mutex::new(crate::PlanState::default()),
             edit_undo_stack: Mutex::new(Vec::new()),
             workflow_runs: Mutex::new(Vec::new()),

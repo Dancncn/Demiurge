@@ -81,8 +81,18 @@ export const approvePlan = () => invoke<PlanState>("approve_plan");
 export const rejectPlan = () => invoke<PlanState>("reject_plan");
 export const permissionPanelState = () => invoke<PermissionPanelState>("permission_panel_state");
 export const shellPolicyState = () => invoke<ShellPolicyState>("shell_policy_state");
-export const permissionResetRule = (scope: PermissionScope, tool: string) =>
-  invoke<PermissionPanelState>("permission_reset_rule", { scope, tool });
+export const permissionResetRule = (
+  scope: PermissionScope,
+  tool: string,
+  sessionId?: string,
+  workspaceIdentity?: string,
+) =>
+  invoke<PermissionPanelState>("permission_reset_rule", {
+    scope,
+    tool,
+    sessionId: sessionId ?? null,
+    workspaceIdentity: workspaceIdentity ?? null,
+  });
 export const permissionUpsertRule = (input: PermissionRuleInput) =>
   invoke<PermissionPanelState>("permission_upsert_rule", { input });
 export const mcpPanelState = () => invoke<McpPanelState>("mcp_panel_state");

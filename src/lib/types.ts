@@ -980,6 +980,8 @@ export interface PermissionRuleView {
   scope: PermissionScope;
   reason: string;
   updated_at: number;
+  session_id?: string;
+  workspace_identity?: string;
 }
 
 export interface PermissionAuditEntry {
@@ -989,6 +991,8 @@ export interface PermissionAuditEntry {
   scope: PermissionScope;
   source: PermissionDecisionSource;
   reason: string;
+  session_id?: string;
+  workspace_identity?: string;
 }
 
 export interface PermissionToolView {
@@ -1006,12 +1010,15 @@ export interface PermissionRuleInput {
   effect: PermissionEffect;
   scope: PermissionScope;
   reason: string;
+  session_id?: string;
+  workspace_identity?: string;
 }
 
 export interface PermissionPanelState {
   rules: PermissionRuleView[];
   audit: PermissionAuditEntry[];
   tools: PermissionToolView[];
+  notices: string[];
 }
 
 export interface ShellPolicyState {

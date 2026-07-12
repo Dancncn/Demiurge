@@ -10,10 +10,10 @@
 
 优先级最高的风险集中在两条所有权链：
 
-1. **权限所有权**：角色包可自行把高危工具设为 Allow；Session/Project 规则没有按会话或项目分桶；deferred/MCP 工具又存在授权粒度降级。
+1. **权限所有权**：角色包权限升级与 Session/Project 规则跨边界复用已经修复；deferred/MCP 工具仍存在授权粒度降级。
 2. **项目所有权**：undo、分支操作与后端 turn 已绑定不可变的 workspace/session identity；前端会话快照的事务边界仍待修复。
 
-建议在发布或处理未受信角色包、外部工具服务、网页内容前，完成剩余 P1 队列。角色包权限自放行已经修复；Auto/Bypass、外部工具 read-only 注解和其他尚未关闭的边界仍不能当成强隔离。
+建议在发布或处理未受信角色包、外部工具服务、网页内容前，完成剩余 P1 队列。角色包权限自放行与权限作用域隔离已经修复；Auto/Bypass、外部工具 read-only 注解和其他尚未关闭的边界仍不能当成强隔离。
 
 | 级别 | 数量 | 含义 |
 |---|---:|---|
@@ -56,7 +56,9 @@
 
 **建议**：角色包只允许收紧默认权限，例如 Deny/AskEveryTime；任何放宽都应由独立 UI 展示差异、显式确认，并绑定包内容指纹。未知工具和未知策略必须拒绝。
 
-### P1-02 Session 与 Project 权限规则没有按声明作用域隔离
+### P1-02 Session 与 Project 权限规则没有按声明作用域隔离（已修复）
+
+**修复状态**：Session 规则改为按 `session_id -> tool` 分桶并在会话删除时清理；Project 规则按 canonical workspace identity 写入版本化 `project_permissions.json`。runner 在任何异步初始化前捕获 turn-owned `PermissionContext`，裁决、审计和确认记忆复用同一身份；设置面板修改/清除规则也携带并校验具体 session/workspace identity，拒绝晚到操作。Project/User 规则与审计写入由同一进程锁串行，规则文件通过同目录临时文件、flush/sync 和 rename 原子替换；身份、读取、解析或版本校验失败均 fail closed。旧 `permissions.json` 不读取、不迁移、不作为新存储种子，界面会提示用户按项目重新授权。新增双会话、双项目、切换中确认、边界中间态、损坏/未知版本、并发更新、旧文件、删除会话与审计兼容回归测试。
 
 **触发条件**：在会话 A 记住 Session Allow 后切到会话 B；或在项目 A 记住 Project Allow 后切到项目 B。
 

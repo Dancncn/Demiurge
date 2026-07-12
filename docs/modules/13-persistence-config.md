@@ -1,6 +1,6 @@
 # 持久化、凭据与连接测试
 
-> 审阅状态（2026-07-12）：`Session` 新增向后兼容的 `workspace_path`，`SessionMeta` 暴露项目路径与名称；会话加载后会校验目录并同步运行时项目根。固定行号请以符号名为准。
+> 审阅状态（2026-07-12）：`Session` 新增向后兼容的 `workspace_path`，`SessionMeta` 暴露项目路径与名称；会话加载后会校验目录并同步运行时项目根。权限持久化已改为 canonical 项目分桶、串行原子更新与显式 fail-closed。固定行号请以符号名为准。
 
 > 存档级技术原理文档。读者为协作开发者。
 > 覆盖源文件：
@@ -36,14 +36,15 @@
 ├─ settings.json            # 非密钥设置（store/mod.rs）
 ├─ sessions.json            # 多会话 + active + rolling summary + goal state（store/mod.rs）
 ├─ conversation.json        # 旧版单会话，仅迁移时读取
-├─ permissions.json         # 项目级权限规则（permission/mod.rs:480）
-├─ user_permissions.json    # 用户级权限规则（permission/mod.rs:490）
-├─ permission_audit.jsonl   # 权限决策审计日志，追加写（permission/mod.rs:527）
+├─ project_permissions.json # versioned；canonical workspace identity → 项目级规则
+├─ user_permissions.json    # 用户级全局规则
+├─ permission_audit.jsonl   # 带 session/workspace identity 的权限决策审计
+├─ permissions.json         # 旧版无项目身份文件；保留但不读取/迁移
 ├─ sandbox/                 # 工具沙箱根
 └─ packs/                   # 人格包
 ```
 
-> 说明：`permissions.json` 与 `permission_audit.jsonl` 由权限模块 `permission/mod.rs` 维护，不在本篇三个主文件内。本篇在「磁盘布局」与「安全」处引用它们以补全持久化全景，详细机制见权限子系统文档。
+> 说明：上述权限文件由 `permission/mod.rs` 维护，不在本篇三个主文件内。`project_permissions.json` 以版本化 envelope 保存多个项目桶；旧 `permissions.json` 因无法证明原项目身份而不会自动应用，也不会作为新 store 的种子。详细机制见权限子系统文档。
 
 ---
 
@@ -302,7 +303,7 @@ ConnectionTestResult { ok, target, detail, latency_ms }   ← 不落盘、不写
 - **LLM 模块（第 09 篇）**：`connection_tests` 复用 `ProviderProfile::for_kind`、`require_api_key`、`ProviderAdapterKind`；provider adapter 运行时直接读 `AppState.settings` 内存里的明文 `api_key`，不关心其来自迁移还是 keyring 水合。
 - **MCP 模块**：`Settings.mcp_servers`（`McpServerConfig`/`McpEnvVar`）的 secret env 由 `credentials` 单独经 keyring 处理；启动 stdio server 时用内存中水合后的 env 值。
 - **agent::goal / agent::collapse / agent::runner**：通过 `Session.summary` / `Session.goal` 把状态搭车进 `sessions.json`，落盘动作统一收口到 `AppState::persist_sessions()`。
-- **permission 模块**：独立维护 `permissions.json` / `user_permissions.json` / `permission_audit.jsonl`（`permission/mod.rs:480`、`:490`、`:527`），与本篇共用 `data_dir` 与 `store::now_millis()`，但走各自的读写函数。
+- **permission 模块**：独立维护版本化 `project_permissions.json`、`user_permissions.json` 与 `permission_audit.jsonl`，与本篇共用 `data_dir` 和 `store::now_millis()`，但走自己的串行、原子规则更新函数。旧 `permissions.json` 只用于展示重新授权提示。
 - **WebDAV 备份（`lib.rs`）**：`webdav_backup_now`（`lib.rs:585`）打包 `redacted_settings` + 全量 sessions 上云，确保备份不含 secret。
 
 ---
@@ -315,7 +316,9 @@ ConnectionTestResult { ok, target, detail, latency_ms }   ← 不落盘、不写
 4. **一次性历史明文清洗**：迁移路径把旧 `settings.json` 中的明文搬进 keyring 后回写脱敏文件（`credentials.rs:283`），消除磁盘上的历史泄露面。
 5. **连接测试无持久化副作用**：避免「测试即保存」导致错误 key 入库，也避免未保存表单污染磁盘。错误响应体经 `cap_chars` 截断到 600 字符（`connection_tests.rs:10`、`:542`），防止把超长后端报文塞进 UI/日志。
 6. **base_url 校验**：连接测试强制 scheme 为 http/https（`connection_tests.rs:477`），拒绝 `ftp://` 等（`connection_tests.rs:635` 测试）。
-7. **审计日志**：权限决策追加写 `permission_audit.jsonl`（`permission/mod.rs:288`、`:526`），面板只回读最近 80 条（`permission/mod.rs:365`、`:511`）。
+7. **权限规则的身份与原子性**：Project 规则以 canonical workspace identity 分桶；Project/User read-modify-write 和审计追加受 `permission_store_lock` 串行保护。规则先写同目录唯一临时文件，完成 `flush + sync_all` 后 `rename` 原子替换，失败会清理临时文件并向调用方报错。
+8. **权限存储 fail closed**：Project/User 读取、JSON 解析或 Project 版本失败不会回退空规则或更宽的 Allow，而会拒绝自动授权；权限面板通过 notices 暴露错误。旧无作用域 Project 文件不迁移，升级后需逐项目重新确认。
+9. **审计日志兼容身份字段**：权限决策追加写 `permission_audit.jsonl`，记录可选 session/workspace identity 且不记录完整参数；面板只回读最近 80 条，旧行缺少身份字段时仍可反序列化。
 
 ---
 

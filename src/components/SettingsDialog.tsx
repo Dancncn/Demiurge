@@ -18,6 +18,7 @@ import type {
   PackManifest,
   PermissionEffect,
   PermissionPanelState,
+  PermissionRuleView,
   PermissionScope,
   AppTheme,
   ProviderKind,
@@ -618,11 +619,14 @@ export default function SettingsDialog({
   const [permissionState, setPermissionState] = useState<PermissionPanelState | null>(null);
   const [shellPolicyState, setShellPolicyState] = useState<ShellPolicyState | null>(null);
   const [permissionBusy, setPermissionBusy] = useState(false);
+  const [permissionError, setPermissionError] = useState("");
   const [permissionDraft, setPermissionDraft] = useState<{
     tool: string;
     effect: PermissionEffect;
     scope: Exclude<PermissionScope, "once">;
     reason: string;
+    session_id?: string;
+    workspace_identity?: string;
   }>({ tool: "shell", effect: "ask", scope: "session", reason: "" });
   const [mcpState, setMcpState] = useState<McpPanelState | null>(null);
   const [mcpBusy, setMcpBusy] = useState(false);
@@ -1221,10 +1225,15 @@ export default function SettingsDialog({
     path: form.webdav_path,
   };
 
-  async function resetPermissionRule(scope: PermissionScope, tool: string) {
+  async function resetPermissionRule(rule: PermissionRuleView) {
     setPermissionBusy(true);
+    setPermissionError("");
     try {
-      setPermissionState(await api.permissionResetRule(scope, tool));
+      setPermissionState(
+        await api.permissionResetRule(rule.scope, rule.tool, rule.session_id, rule.workspace_identity),
+      );
+    } catch (err) {
+      setPermissionError(String(err));
     } finally {
       setPermissionBusy(false);
     }
@@ -1232,6 +1241,7 @@ export default function SettingsDialog({
 
   async function savePermissionRule() {
     setPermissionBusy(true);
+    setPermissionError("");
     try {
       setPermissionState(
         await api.permissionUpsertRule({
@@ -1239,19 +1249,31 @@ export default function SettingsDialog({
           effect: permissionDraft.effect,
           scope: permissionDraft.scope,
           reason: permissionDraft.reason,
+          session_id: permissionDraft.session_id,
+          workspace_identity: permissionDraft.workspace_identity,
         }),
       );
+    } catch (err) {
+      setPermissionError(String(err));
     } finally {
       setPermissionBusy(false);
     }
   }
 
-  function editPermissionRule(scope: PermissionScope, tool: string, effect: PermissionEffect, reason: string) {
-    if (scope === "once") return;
-    setPermissionDraft({ tool, effect, scope, reason });
+  function editPermissionRule(rule: PermissionRuleView) {
+    if (rule.scope === "once") return;
+    setPermissionDraft({
+      tool: rule.tool,
+      effect: rule.effect,
+      scope: rule.scope,
+      reason: rule.reason,
+      session_id: rule.session_id,
+      workspace_identity: rule.workspace_identity,
+    });
   }
 
   async function refreshPermissionState() {
+    setPermissionError("");
     const [permissions, shellPolicy] = await Promise.all([api.permissionPanelState(), api.shellPolicyState()]);
     setPermissionState(permissions);
     setShellPolicyState(shellPolicy);
@@ -4199,7 +4221,14 @@ export default function SettingsDialog({
                           <select
                             className={inputCls}
                             value={permissionDraft.tool}
-                            onChange={(e) => setPermissionDraft((draft) => ({ ...draft, tool: e.target.value }))}
+                            onChange={(e) =>
+                              setPermissionDraft((draft) => ({
+                                ...draft,
+                                tool: e.target.value,
+                                session_id: undefined,
+                                workspace_identity: undefined,
+                              }))
+                            }
                           >
                             {(permissionState?.tools.length ? permissionState.tools : []).map((tool) => (
                               <option key={tool.tool} value={tool.tool}>
@@ -4232,6 +4261,8 @@ export default function SettingsDialog({
                               setPermissionDraft((draft) => ({
                                 ...draft,
                                 scope: e.target.value as Exclude<PermissionScope, "once">,
+                                session_id: undefined,
+                                workspace_identity: undefined,
                               }))
                             }
                           >
@@ -4356,10 +4387,22 @@ export default function SettingsDialog({
                       </div>
                     )}
 
+                    {(permissionError || permissionState?.notices.length) && (
+                      <div className="mb-3 space-y-1 rounded-lg border border-[#f0c8c8] bg-[#fff7f7] p-3 text-[12px] leading-5 text-[#8f2d2d]">
+                        {permissionError && <div>{permissionError}</div>}
+                        {permissionState?.notices.map((notice) => (
+                          <div key={notice}>{notice}</div>
+                        ))}
+                      </div>
+                    )}
+
                     <div className="space-y-2">
                       {permissionState?.rules.length ? (
                         permissionState.rules.map((rule) => (
-                          <div key={`${rule.scope}:${rule.tool}`} className="rounded-lg border border-[#e2e5ea] bg-white p-3">
+                          <div
+                            key={`${rule.scope}:${rule.tool}:${rule.session_id ?? rule.workspace_identity ?? "user"}`}
+                            className="rounded-lg border border-[#e2e5ea] bg-white p-3"
+                          >
                             <div className="flex items-start gap-3">
                               <div className="min-w-0 flex-1">
                                 <div className="truncate text-[13px] font-semibold text-[#202124]">{rule.tool}</div>
@@ -4368,12 +4411,17 @@ export default function SettingsDialog({
                                   {formatTime(rule.updated_at)}
                                 </div>
                                 <div className="mt-1 text-[12px] leading-5 text-[#8a9099]">{rule.reason}</div>
+                                {(rule.session_id || rule.workspace_identity) && (
+                                  <div className="mt-1 truncate font-mono text-[10px] text-[#9aa0a9]">
+                                    {rule.session_id ? `session: ${rule.session_id}` : `workspace: ${rule.workspace_identity}`}
+                                  </div>
+                                )}
                               </div>
                               <button
                                 className={secondaryButtonCls}
                                 type="button"
                                 disabled={permissionBusy || rule.scope === "once"}
-                                onClick={() => editPermissionRule(rule.scope, rule.tool, rule.effect, rule.reason)}
+                                onClick={() => editPermissionRule(rule)}
                               >
                                 {t("settings.perm.edit")}
                               </button>
@@ -4381,7 +4429,7 @@ export default function SettingsDialog({
                                 className={secondaryButtonCls}
                                 type="button"
                                 disabled={permissionBusy}
-                                onClick={() => resetPermissionRule(rule.scope, rule.tool)}
+                                onClick={() => resetPermissionRule(rule)}
                               >
                                 {t("settings.perm.clear")}
                               </button>
@@ -4403,6 +4451,13 @@ export default function SettingsDialog({
                             {permissionEffectLabel(entry.effect, t)} / {permissionScopeLabel(entry.scope, t)} /{" "}
                             {formatTime(entry.timestamp)}
                             <div className="text-[#8a9099]">{entry.reason}</div>
+                            {(entry.session_id || entry.workspace_identity) && (
+                              <div className="truncate font-mono text-[10px] text-[#9aa0a9]">
+                                {[entry.session_id && `session: ${entry.session_id}`, entry.workspace_identity && `workspace: ${entry.workspace_identity}`]
+                                  .filter(Boolean)
+                                  .join(" / ")}
+                              </div>
+                            )}
                           </div>
                         ))
                       ) : (

@@ -32,6 +32,10 @@ pub async fn run_manual_dream(
         return Err("The target session no longer exists.".to_string());
     }
     let sid = session_id.to_string();
+    let permission_context = permission::context_for_session(state, session_id);
+    if let Some(error) = permission_context.boundary_error.as_deref() {
+        return Err(format!("无法建立可信的权限上下文：{error}"));
+    }
     let events = session_engine::TurnEventEmitter::new(app, state);
     push_message(state, &sid, Message::user(command_text));
     state.persist_sessions();
@@ -134,7 +138,7 @@ pub async fn run_manual_dream(
     let decision = PermissionDecision::from_policy(tools::PermissionPolicy::ask(
         "会整理并覆盖沙盒内的长期记忆文件。",
     ));
-    permission::audit(state, "dream", &decision);
+    permission::audit(state, &permission_context, "dream", &decision);
     let response = permission::confirm(
         app,
         state,
@@ -150,7 +154,7 @@ pub async fn run_manual_dream(
         },
     )
     .await;
-    let _ = permission::remember_response(state, "dream", &response);
+    let _ = permission::remember_response(state, &permission_context, "dream", &response);
 
     if !response.allow {
         emit_delta(&events, &mut visible, "已取消写入，记忆文件保持不变。");

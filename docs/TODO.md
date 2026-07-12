@@ -93,7 +93,7 @@ Demiurge 当前已经具备本地桌面 Agent 的主体能力：会话、工具�
 - [x] **角色包权限只能收紧**：manifest 导入/保存拒绝 `allow`、未知策略和非法工具名；运行时忽略任何绕过校验的放宽值，并保证 overlay 只能保持或收紧工具默认权限。
 - [ ] **会话—工作区原子快照**：用 navigation epoch 或后端原子命令绑定 `session_id + history + workspace + goal`；所有慢响应和 legacy 事件必须验证 session/turn 归属。
 - [x] **回合写入绑定起始会话**：`begin_turn` 的 session id 贯穿 runner、prompt、slash、Goal、子 Agent 与会话相关工具；运行/取消中的所属会话不可删除，延迟初始化切换测试证明不会写入新 active 会话。
-- [ ] **项目/会话权限真正隔离**：Project scope 按 canonical 项目根分桶；Session scope 按 session id 分桶并在切换后不串用。
+- [x] **项目/会话权限真正隔离**：Project scope 按 canonical 项目根分桶，Session scope 按 session id 分桶并随会话删除；turn-owned 权限上下文绑定裁决、审计与确认记忆，存储/身份错误 fail closed，旧无作用域 Project 文件不自动应用。
 - [x] **撤销记录绑定项目身份**：undo entry 保存 canonical workspace root；预览和执行撤销前重新规范化当前项目根并要求身份一致，跨项目记录不会被读取或写回。
 - [ ] **角色包 IPC 根目录校验**：所有 pack id 在 join 前验证；列表、读取、Live2D 与 lore 命令都必须确认解析结果仍在 `packs_dir`。
 - [ ] **Live2D 事务化安全导入**：不可信资源引用拒绝绝对路径和 `..`，重命名也做 containment；先在临时目录完整校验，再原子替换旧模型。

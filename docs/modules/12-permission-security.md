@@ -1,8 +1,8 @@
 # 权限模型与安全边界
 
-> 审阅状态（2026-07-12）：项目选择和分支切换是用户直接触发的 Tauri 命令，不走模型工具权限门；分支枚举/切换会验证 canonical expected workspace，脏工作区由 UI 二次确认，活动回合期间由后端拒绝。文件 containment 以会话项目根为边界。固定行号请以符号名为准。
+> 审阅状态（2026-07-12）：项目选择和分支切换是用户直接触发的 Tauri 命令，不走模型工具权限门；分支枚举/切换会验证 canonical expected workspace，脏工作区由 UI 二次确认，活动回合期间由后端拒绝。文件 containment 以会话项目根为边界；权限规则归属则由不可变 session/workspace identity 强制。固定行号请以符号名为准。
 
-> 修复进度：角色包自放行已修复——manifest 拒绝 allow/未知策略，运行时只允许 deny/ask 且不能把默认 Deny 放宽为 Ask。Project/Session scope 隔离、`execute_tool` 目标级授权和 MCP read-only 注解信任仍待后续独立提交。
+> 修复进度：角色包自放行与 Project/Session scope 隔离已修复——manifest 拒绝 allow/未知策略，运行时只允许 deny/ask 且不能把默认 Deny 放宽为 Ask；Session 按 id 分桶，Project 按 canonical workspace identity 分桶。`execute_tool` 目标级授权和 MCP read-only 注解信任仍待后续独立提交。
 
 > 存档级技术原理文档。读者：协作开发者。
 > 主要源文件：
@@ -45,18 +45,20 @@
 ### 2.2 权限模块自身的类型（`src-tauri/src/permission/mod.rs`）
 
 - `PermissionDecision`（`:33-40`）：一次裁决的结果，比 `PermissionPolicy` 多了 `source`（来源）和 `mode`（当时所处模式）字段。
-- `PermissionDecisionSource`（`:25-31`）：`ToolDefault` / `UserOverride` / `UnknownTool`，标记裁决「依据何来」。
+- `PermissionDecisionSource`：`ToolDefault` / `UserOverride` / `UnknownTool` / `CardOverlay`，标记裁决「依据何来」。
 - `PermissionRule`（`:54-61`）：可持久化的用户规则，带 `updated_at`。
+- `PermissionContext`：在回合或权限面板操作开始时捕获的不可变身份，包含 `session_id`、canonical `workspace_identity`、边界错误与当时的角色包权限偏好。裁决、审计和确认记忆必须复用同一个实例。
 - `PermissionResponse`（`:109-122`）：前端确认对话框的回执 `{ allow, scope }`，提供便捷构造 `deny_once()`。
 - `PermissionRequest`（`:124-133`）/ `PermissionPromptPayload`（`:135-149`）：发给前端弹窗的请求体。注意 `PermissionPromptPayload` 是**发往前端的瞬态结构**，包含 `args` 字段（完整入参），但它不会写入审计文件。
-- `PermissionAuditEntry`（`:63-73`）：落盘的审计条目，**不含** `args` 字段。
+- `PermissionAuditEntry`：落盘的审计条目，**不含** `args` 字段，但包含可选 `session_id` 与 `workspace_identity`；旧 JSONL 行通过 serde 默认值保持兼容。
 
 ### 2.3 入口函数一览
 
 | 函数 | 位置 | 职责 |
 |------|------|------|
-| `decide_for_mode` | `:178-240` | **主入口**：按当前 `PermissionMode` 产出裁决 |
-| `decide` | `:151-176` | 规则查找：会话规则 → 项目规则 → 用户规则 → 默认策略 |
+| `context_for_session` / `active_context` | `permission/mod.rs` | 捕获并校验 session 与 canonical workspace 的不可变授权上下文 |
+| `decide_for_mode` | `permission/mod.rs` | **主入口**：先验证上下文，再按当前 `PermissionMode` 产出裁决 |
+| `decide` | `permission/mod.rs` | 按上下文查找：会话桶 → canonical 项目桶 → 用户规则 → 角色包收紧 → 默认策略 |
 | `confirm` | `:306-344` | 发起前端确认并 await（含 5 分钟超时） |
 | `remember_response` | `:242-286` | 把用户的「记住」选择按 scope 落盘 |
 | `audit` | `:288-300` | 追加一条审计（不落敏感参数） |
@@ -68,7 +70,7 @@
 
 ### 3.1 一次工具调用的完整权限流（在 Agent 循环里）
 
-权限门接入点在 `src-tauri/src/agent/runner.rs:480-533`。一次工具调用的裁决数据流如下：
+runner 在任何 MCP/外部初始化 `await` 之前，用 `begin_turn` 所属 session 捕获一次 `PermissionContext`。一次工具调用的裁决数据流如下：
 
 ```
 模型返回 tool_call(name, args)
@@ -78,16 +80,16 @@ default_policy = permission_policy_for_state(state, name)   // 注册表默认�
 risk          = tool_def.risk  (未知工具 → Privileged)       // runner.rs:482-485
         │
         ▼
-decision = permission::decide_for_mode(state, name, default_policy, risk)   // 主决策
-permission::audit(state, name, &decision)                   // ① 先记一条「裁决」审计
+decision = permission::decide_for_mode(state, context, name, default_policy, risk)
+permission::audit(state, context, name, &decision)          // ① 先记一条「裁决」审计
         │
         ├── Allow ─────────────────────────────► allowed = true
         ├── Deny  ─────────────────────────────► allowed = false
         └── Ask   ──► permission::confirm(...) await 用户裁决
                           │
-                          ├─ remember_response()  // 若 scope != Once，落盘规则
+                          ├─ remember_response(context)  // 若 scope != Once，写入捕获身份对应的桶
                           ├─ 用回执覆写 decision.effect/scope/source/reason
-                          └─ permission::audit(...)  // ② 再记一条「用户最终裁决」审计
+                          └─ permission::audit(context, ...)  // ② 再记一条「用户最终裁决」审计
         │
         ▼
 interrupted = state.cancel  // runner.rs:535
@@ -99,11 +101,13 @@ else                       → tools::execute(...)               // 真正执行
 值得注意的两个设计细节：
 
 - **审计可能写两条。** `Ask` 路径会先记一条「需要询问」的裁决（`runner.rs:487`），用户回执后再记一条带 `UserOverride` 来源的最终裁决（`runner.rs:530`）。`Allow`/`Deny` 路径只记一条。
+- **界面切换不能改写归属。** 确认弹窗等待期间即使 active session 切到同项目的另一个会话，响应仍只会写入捕获的原 session/project 桶；若目标会话已经删除，Session 记忆失败且不会重新创建孤儿桶。
+- **持久化失败不伪装成长期授权。** `remember_response` 返回实际生效 scope；写入失败时 runner 把最终审计 scope 降为 `Once`，并把失败原因写进审计理由。本次已由用户明确允许的执行仍按回执进行，但不会声称规则已持久化。
 - **中断态与拒绝态被区分。** `runner.rs:537-540` 用 `interrupted` 标志把「执行前被用户中断」和「用户主动拒绝」拆成两种不同的工具结果文本，便于模型理解上下文。
 
 ### 3.2 `decide_for_mode` 模式状态机（`permission/mod.rs:178-240`）
 
-这是整个子系统的核心。它先取出 `permission_mode` 和 `plan_state` 快照，再按模式分支：
+这是整个子系统的核心。它先取出 `permission_mode` 和 `plan_state` 快照，并在任何模式分支前检查 `PermissionContext.boundary_error`；会话不存在、会话项目与工具工作区不一致或 canonicalize 失败都会直接得到 `Deny(Once)`。上下文可信时再按模式分支：
 
 ```
                        ┌─────────────────────────────────────────────┐
@@ -133,13 +137,16 @@ else                       → tools::execute(...)               // 真正执行
 `decide` 实现了一条**短路的优先级链**，先命中先返回：
 
 ```
-1. session_permission_rules（内存，本会话）   ─┐
-2. permissions.json（项目级，data_dir 下）    ─┼─► 命中即 decision_from_rule()，source = UserOverride
-3. user_permissions.json（用户级，data_dir 下）─┘
-4. 都未命中 ─► PermissionDecision::from_policy(default_policy)，source = ToolDefault
+1. session_permission_rules[context.session_id][tool]            ─┐
+2. project_permissions.json[context.workspace_identity][tool]    ─┼─► 命中即 UserOverride
+3. user_permissions.json[tool]                                   ─┘
+4. 角色包 runtime.permissions 只能保持或收紧默认 effect
+5. 都未命中 ─► PermissionDecision::from_policy(default_policy)
 ```
 
-优先级语义：**范围越窄越优先**。会话内的临时决策压过项目规则，项目规则压过用户全局规则。三层规则文件都用 `HashMap<String, PermissionRule>` 序列化（`load_rules_file` / `save_rules_file`，`:499-509`），key 是工具名。
+优先级语义：**范围越窄越优先**。会话内的临时决策压过项目规则，项目规则压过用户全局规则。Session 桶仅在内存中存在并随会话删除；Project store 是 `{ version, projects: { canonical_identity: { tool: rule }}}`；User store 才是直接以工具名为键的全局 map。
+
+Project/User 读取、解析或 Project 版本校验失败时，`decide` 返回 `Deny(Once)`，不会继续回落到更宽的 User Allow 或工具默认 Allow。权限面板会把同一错误展示在 `notices` 中，而不是伪装成「当前没有规则」。
 
 > 安全关注点：`decide_for_mode` 的 **Auto 模式对 `ReadOnly` 工具是「无条件 Allow」，绕过了 `decide()`**（`:189-196`）。也就是说，如果用户曾对某个只读工具设置了 `Deny` 规则，在 Auto 模式下该规则会被忽略。同理 Plan 模式未批准前的只读放行（`:211-218`）也绕过规则链。这是「模式优先于规则」的有意取舍，但实现者需要意识到：用户级 `Deny` 规则并非在所有模式下都生效。
 
@@ -176,11 +183,13 @@ else                       → tools::execute(...)               // 真正执行
 | scope | 落地位置 | 生命周期 |
 |-------|---------|---------|
 | `Once` | 不落地（`:247-249` 直接返回 `Ok`） | 仅本次 |
-| `Session` | `session_permission_rules`（内存 HashMap） | 本会话，重启即失 |
-| `Project` | `permissions.json`（`save_project_rules`） | 跨重启，绑定该 data_dir |
+| `Session` | `session_permission_rules[session_id]`（内存 map） | 仅该会话；删除会话或重启即失 |
+| `Project` | `project_permissions.json.projects[canonical workspace identity]` | 跨重启，仅同一规范化项目根 |
 | `User` | `user_permissions.json`（`save_user_rules`） | 跨重启，全局 |
 
-`remember_response` 把回执转成 `PermissionRule`（含 `effect`、`scope`、固定 reason「用户在确认弹窗中选择记住此决策」和 `updated_at`），再按 scope 分发存储。注意它对 `Once` 有双重短路（开头 `:247` 和 match 分支 `:264`），是冗余但无害的防御。
+`remember_response` 把回执转成 `PermissionRule`（含 `effect`、`scope`、固定 reason 和 `updated_at`），再按捕获上下文分发。Session 写入在持有 sessions 锁时验证并插入，和删除会话形成确定顺序；Project/User 更新受 `AppState.permission_store_lock` 串行保护，避免 read-modify-write 丢更新。
+
+持久化使用目标文件同目录的唯一临时文件，依次执行 `write_all`、`flush`、`sync_all`，再通过 `rename` 原子替换；写入或替换失败会清理临时文件并返回错误。旧版 `permissions.json` 缺少项目身份，因此不会读取、迁移或作为新文件种子；文件原样保留，权限面板提示升级用户在当前项目重新确认 Project 规则。
 
 ### 3.6 interrupt 唤醒待确认项按拒绝处理（`lib.rs:506-513`）
 
@@ -248,14 +257,14 @@ pub struct PlanState {
 
 ## 五、安全与权限相关点
 
-### 5.1 审计不落敏感参数（`permission/mod.rs:63-73, 288-300, 526-535`）
+### 5.1 审计不落敏感参数，但绑定授权身份
 
 审计是「谁、什么时候、对哪个工具、做了什么裁决」的记录，**刻意不包含工具入参**：
 
-- 落盘结构 `PermissionAuditEntry` 字段仅有 `timestamp / tool / effect / scope / source / reason / mode`，**没有 args**。
+- 落盘结构 `PermissionAuditEntry` 字段有 `timestamp / tool / effect / scope / source / reason / mode / session_id / workspace_identity`，**没有 args**。后两个身份字段可选，因而仍能读取升级前的 JSONL 行。
 - 完整入参只出现在两处瞬态场景：发往前端弹窗的 `PermissionPromptPayload.args`（`:140`），以及 runner 里 `serde_json::to_string_pretty(&args)` 生成的 `pretty`（`runner.rs:492`）——后者也只塞进 `PermissionRequest` 给前端展示，不进审计。
 - `reason` 字段是固定话术或工具默认理由，不含动态参数内容。
-- 审计以 JSON Lines 追加写入 `permission_audit.jsonl`（`append_audit`，`:526-535`，`OpenOptions::create().append()`）。读取时 `load_recent_audit`（`:511-524`）按时间戳倒序取最近 N 条（面板默认 80，`panel_state` `:365`）。
+- 审计以 JSON Lines 追加写入 `permission_audit.jsonl`。追加与 Project/User 规则文件更新共用 `permission_store_lock`，避免同一进程中的并发行交错；读取时按时间戳倒序取最近 N 条（面板默认 80）。
 
 这一设计的意图：审计可以安全地长期保留、可以展示给用户，而不会泄漏诸如文件内容、shell 命令、剪贴板数据等敏感载荷。
 
@@ -318,13 +327,13 @@ Tauri v2 的能力（capability）系统决定前端 WebView 能调用哪些核�
 | 协作方 | 交互内容 | 关键调用 |
 |--------|---------|---------|
 | 工具注册表 `tools/mod.rs` | 提供默认策略、风险等级、工具 schema；提供沙盒解析与审计辅助 | `permission_policy_for_state` / `definition_for_state` / `registry` / `resolve_in_sandbox` |
-| Agent 循环 `agent/runner.rs` | 每次工具调用前调用权限门，按裁决执行/拒绝/确认 | `decide_for_mode` → `audit` → `confirm` → `remember_response` |
+| Agent 循环 `agent/runner.rs` | 初始化前捕获 turn-owned context；每次工具调用前按同一身份裁决、审计和记忆 | `context_for_session` → `decide_for_mode` → `audit` → `confirm` → `remember_response` |
 | 设置/会话存储 `store/mod.rs` | 提供 `PermissionMode`、`now_millis`、持久化 settings | `state.settings.permission_mode` |
 | Tauri 命令层 `lib.rs` | 回执 `respond_confirm`、中断 `interrupt`、计划 `approve_plan`/`reject_plan`/`set_permission_mode` | 见第三、四节 |
 | MCP 动态工具 `mcp` | 为 MCP 工具提供权限摘要；MCP 工具按 annotation 映射风险后接入同一权限门 | `permission_summary_for_state` 内的 `crate::mcp::permission_summary`（`tools/mod.rs:1103-1108`） |
 | 前端 | 监听 `tool-confirm-request` / `plan-updated` / `permission-mode-updated` 事件，渲染弹窗与权限面板 | `app.emit(...)` |
 
-权限面板（`panel_state`，`:346-368`）把三层规则（会话+项目+用户）、最近 80 条审计、以及全部工具的默认策略（`tool_views`，`:453-467`，来自 `registry()`）一并返回给前端展示。`upsert_rule`（`:396-441`）允许用户在面板里直接编辑规则——它会校验工具存在（`definition_for_state`）、拒绝 `Once` scope（`Once` 仅对单次确认回执有效，`:400-401`），再按 scope 落盘。
+权限面板把当前 Session 桶、当前 canonical Project 桶、User 规则、最近 80 条审计、全部工具默认策略与存储/迁移告警一并返回。每条 Session/Project 规则都携带自己的 `session_id` 或 `workspace_identity`；前端编辑、清除时原样回传，后端与当前上下文比对。界面在请求后切换会话或项目时，晚到操作会报 stale identity，而不会作用到新上下文中的同名规则。`upsert_rule` 仍会校验工具存在并拒绝 `Once` scope，因为 Once 只对单次确认回执有效。
 
 ---
 
@@ -334,9 +343,9 @@ Tauri v2 的能力（capability）系统决定前端 WebView 能调用哪些核�
 
 2. **审计仅追加、无轮转**：`permission_audit.jsonl` 只追加不轮转（`append_audit`），长期运行会无限增长。读取端虽只取最近 80 条，但文件本身不会被裁剪。
 
-3. **规则文件无 schema 版本**：`permissions.json` / `user_permissions.json` 直接是 `HashMap` 序列化（`load_rules_file` 解析失败时静默回退到空 map，`:499-504`），损坏或字段演进时会静默丢弃全部规则，无迁移机制。
+3. **User 规则仍无独立 schema 版本**：Project store 已有版本号，且 Project/User 解析错误都会显式 fail closed；但 `user_permissions.json` 仍是直接序列化的 map。未来演进 User 规则字段时，应增加带版本的 envelope 与显式迁移，而不是依赖 serde 字段兼容。
 
-4. **`PermissionDecisionSource::UnknownTool` 已声明但未在主流程使用**：枚举里定义了 `UnknownTool`（`:30`，且整个枚举带 `#[allow(dead_code)]`），但 `decide`/`decide_for_mode` 对未知工具走的是 `permission_policy_for_state` 的 `ask()` 回退（`tools/mod.rs:855-859`），来源仍标 `ToolDefault`。该变体目前是预留。
+4. **`PermissionDecisionSource::UnknownTool` 已声明但未在主流程使用**：未知工具走 `permission_policy_for_state` 的 `ask()` 回退，来源仍标 `ToolDefault`。该变体目前是预留。
 
 5. **CSP 未设置**：`tauri.conf.json` 的 `csp: null`（见 5.3），属当前为本地 dist 加载下的可接受现状，是后续加固的扩展点。
 

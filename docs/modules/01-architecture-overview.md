@@ -47,7 +47,7 @@ flowchart TD
 - 会话与设置：`SessionStore`、`Settings`（含运行时水合出的内存态 secret）。
 - 项目所有权：`sandbox_dir` 保存当前活动会话解析后的项目根；`Session.workspace_path` 是持久化来源。
 - 回合治理：`session_engine`（`active_turn`/`last_turn`）、`busy` / `cancel` 原子标记。
-- 编排与权限：workflow 运行时状态、Plan Mode 的 `plan_state`、权限规则与待确认项。
+- 编排与权限：workflow 运行时状态、Plan Mode 的 `plan_state`、按 session id 分桶的临时规则、权限文件串行锁与待确认项。
 - 外部连接：MCP Manager、provider/HTTP client 等。
 
 > 详见 [18-应用外壳、命令面与构建](18-app-shell-build.md)。
@@ -104,12 +104,13 @@ sequenceDiagram
     LIB->>SE: begin_turn（busy 抢锁、建立 TurnRunState、记录中断标记）
     LIB->>LIB: slash 命令分流（/goal /effort /compact /dream /ultracode /workflows …）
     LIB->>RUN: run_turn_with_options（普通回合）
+    RUN->>RUN: 捕获 PermissionContext（turn session + canonical workspace）
     RUN->>PB: 组装 system prompt + 按 token 预算裁剪历史
     RUN->>LLM: stream_completion（流式）
     LLM-->>UI: 增量 token（assistant 事件）
     alt 模型请求工具
         LLM-->>RUN: tool_calls
-        RUN->>TOOL: 权限检查 → 执行工具
+        RUN->>TOOL: 用 turn-owned context 权限检查/审计 → 执行工具
         TOOL-->>RUN: tool_result 写回历史
         RUN->>LLM: 下一轮请求
     end
@@ -122,6 +123,7 @@ sequenceDiagram
 关键设计点：
 
 - **入口互斥与所有权**：`begin_turn`/`finish_turn` 包裹发送和 Goal 控制；`TurnHandle.session_id` 从入口贯穿 runner、prompt、slash、续跑与会话相关工具，运行/取消中的 owner 不可删除，切换侧栏会话不会改变回合写入目标。
+- **权限身份同样不可变**：runner 在任何异步初始化前从 turn session 捕获 `PermissionContext`；Session 规则按该 id 查找，Project 规则按 canonical workspace identity 查找，审计和确认后的记忆复用同一上下文。
 - **协作式中断**：`interrupt` 置 cancel 标记并把状态推进到 `Cancelling`，runner 在安全点检查后退出，同时唤醒所有待确认项按拒绝处理。
 - **system prompt 每轮重建**：会话历史不持久化 system 消息；persona、skills、项目指令、环境、goal、summary、记忆每轮动态拼装。
 - **续跑闭环**：若当前会话有 active goal，普通回合结束后自动调度下一轮，直到完成/暂停/阻塞/超预算/超回合/被中断。
@@ -134,8 +136,10 @@ sequenceDiagram
 app_data_dir/
 ├─ settings.json                 # 非密钥设置（密钥引用置空）
 ├─ sessions.json                 # 多会话、active session、rolling summary、goal state
-├─ permissions.json              # 项目级权限规则
-├─ permission_audit.jsonl        # 轻量权限审计（不落敏感参数）
+├─ project_permissions.json      # versioned；canonical workspace identity → 项目规则
+├─ user_permissions.json         # 用户全局规则
+├─ permission_audit.jsonl        # 带 session/workspace identity 的轻量审计
+├─ permissions.json              # 旧无作用域文件；保留但不读取/迁移
 ├─ memory/user.md                # user-scope 手动记忆
 ├─ skills/*/SKILL.md             # global skills
 ├─ ocr-models/                   # 本地 OCR 模型

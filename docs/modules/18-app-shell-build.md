@@ -1,6 +1,6 @@
 # 应用外壳、命令面与构建
 
-> 审阅状态（2026-07-12）：命令面新增工作区目录/预览、Git 分支/更改与分支切换；分支操作验证 canonical expected workspace，turn 命令链固定使用 `begin_turn` 捕获的 session id，运行/取消中的 owner 不可删除。生产构建通过但仍有 Live2D vendor 大分包警告。固定行号请以符号名为准。
+> 审阅状态（2026-07-12）：命令面新增工作区目录/预览、Git 分支/更改与分支切换；分支操作验证 canonical expected workspace，turn 命令链固定使用 `begin_turn` 捕获的 session id，运行/取消中的 owner 不可删除。权限命令绑定具体 session/workspace identity，规则文件串行原子更新。生产构建通过但仍有 Live2D vendor 大分包警告。固定行号请以符号名为准。
 
 > 存档级技术原理文档。读者为协作开发者。
 > 覆盖源文件：
@@ -48,7 +48,8 @@ fn main() { demiurge_lib::run() }
 | 受锁状态 | `settings: Mutex<Settings>` | 运行时全量设置（脱敏后落盘，密钥走 keyring，见第 13 篇） |
 | | `sessions: Mutex<SessionStore>` | 多会话集合 + 当前 active 会话 |
 | | `pending_confirms: Mutex<HashMap<String, oneshot::Sender<PermissionResponse>>>` | 待确认工具调用：调用 id → oneshot 发送端，前端回执时回填 |
-| | `session_permission_rules: Mutex<HashMap<String, PermissionRule>>` | 本会话内的临时权限规则 |
+| | `session_permission_rules: Mutex<HashMap<String, HashMap<String, PermissionRule>>>` | session id → tool rules；会话之间不共享且删除会话时清理 |
+| | `permission_store_lock: Mutex<()>` | 串行 Project/User 规则的读改写、原子替换与审计追加 |
 | | `plan_state: Mutex<PlanState>` | 计划模式的计划文件状态机 |
 | | `edit_undo_stack: Mutex<Vec<EditUndoEntry>>` | 进程内 `edit_file` 撤销栈，供 `undo_edit` 安全回退 |
 | | `workflow_runs` / `workflow_cancels` | workflow run 进度与取消标志（`Arc<AtomicBool>`） |
@@ -110,7 +111,10 @@ run()
 <app_data_dir>/                 // app.path().app_data_dir()
 ├─ settings.json                // 脱敏设置
 ├─ sessions.json                // 多会话 + active + summary + goal
-├─ permissions.json / user_permissions.json / permission_audit.jsonl
+├─ project_permissions.json      // versioned canonical 项目桶
+├─ user_permissions.json         // 用户全局规则
+├─ permission_audit.jsonl        // 带 session/workspace identity
+├─ permissions.json              // 旧无作用域文件，仅保留并提示重新授权
 ├─ skills/                      // 全局技能目录（open_skills_dir 按需建）
 ├─ sandbox/                     // 工具沙箱根（open_sandbox 打开）
 │   └─ .demiurge/ ...            // 项目本地配置与兼容目录
@@ -129,7 +133,7 @@ run()
 | 设置 | `get_settings`(:535)、`save_settings`(:540) | save 先把各类密钥写 keyring，再脱敏落盘并 emit `settings-updated` |
 | 连接测试 | `provider_check_connection`(:558)、`web_search_check_connection`(:566)、`webdav_check_connection`(:575) | 纯探测、不落盘（见第 13 篇） |
 | 权限模式/计划 | `set_permission_mode`(:643)、`plan_state`(:668)、`approve_plan`(:673)、`reject_plan`(:696) | 见 3.4 |
-| 权限规则 | `permission_panel_state`(:707)、`shell_policy_state`(:712)、`permission_reset_rule`(:717)、`permission_upsert_rule`(:726) | 转调 `permission` 模块 |
+| 权限规则 | `permission_panel_state`、`shell_policy_state`、`permission_reset_rule`、`permission_upsert_rule` | Session/Project 规则返回并回传具体身份；后端拒绝 stale identity，持久层错误原样返回 |
 | WebDAV 备份 | `webdav_backup_now`(:584)、`webdav_list_backups`(:616)、`webdav_delete_backup`(:625) | 见 3.5 |
 | MCP | `mcp_panel_state`(:734)、`mcp_refresh`(:740)、`mcp_set_server_enabled`(:751) | 改动后 emit `mcp-updated` |
 | 人格包 | `list_packs`(:776)、`import_pack_zip`(:782) | 转调 `pack` 模块 |
@@ -276,6 +280,8 @@ context_panel_state:
 - **CSP 关闭**。`tauri.conf.json:26` 设 `"csp": null`。这放宽了 WebView 的内容安全策略（便于内联资源、动态加载），但意味着不依赖 CSP 兜底，安全边界主要落在「命令面只暴露受控命令 + 工具层权限确认」。
 - **路径穿越防护**：WebDAV `validate_backup_file_name`（`lib.rs:1460`）拒绝含 `/` `\` `..` 的名字；`webdav_collection_url` 强制协议前缀。
 - **工具权限确认**：`pending_confirms` + `respond_confirm` + `interrupt` 三者构成确认回路，确认弹窗以 oneshot 异步等待用户裁决，中断时强制 `deny_once`（见 3.3）。
+- **权限归属确认**：runner 在异步初始化前捕获 turn-owned session/canonical workspace context，裁决、审计与确认记忆复用同一身份。Session 规则按 id 分桶并随会话删除；Project 规则按 canonical 项目根分桶。
+- **规则存储失败关闭**：Project/User 读取、解析、版本或原子替换失败都会向调用方暴露并阻止自动授权；旧 `permissions.json` 不自动应用，避免无项目身份授权扩散。
 - **并发保护**：`busy: AtomicBool` 防止并发 turn（`goal_resume`/`goal_continue` 用 `busy.swap(true)` 抢占，`lib.rs:854`、`:875`）；`cancel: AtomicBool` 是全局中断闸。
 - **项目本地兼容目录**：兼容能力统一收敛到 `.demiurge/compat/`，环境变量统一使用 `DEMIURGE_*` 前缀，降低跨工具约定带来的命名噪声。
 

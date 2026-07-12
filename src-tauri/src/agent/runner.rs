@@ -181,6 +181,7 @@ pub async fn run_turn_with_options(
     if state.sessions.lock().unwrap().get(session_id).is_none() {
         return Err("The target session no longer exists.".to_string());
     }
+    let permission_context = permission::context_for_session(state, session_id);
     state.cancel.store(false, Ordering::Relaxed);
     let events = session_engine::TurnEventEmitter::new(app, state);
 
@@ -537,8 +538,14 @@ pub async fn run_turn_with_options(
                 .as_ref()
                 .map(|t| t.risk)
                 .unwrap_or(tools::ToolRisk::Privileged);
-            let mut decision = permission::decide_for_mode(state, &name, default_policy, risk);
-            permission::audit(state, &name, &decision);
+            let mut decision = permission::decide_for_mode(
+                state,
+                &permission_context,
+                &name,
+                default_policy,
+                risk,
+            );
+            permission::audit(state, &permission_context, &name, &decision);
             let allowed = match decision.effect {
                 tools::PermissionEffect::Allow => true,
                 tools::PermissionEffect::Deny => false,
@@ -568,20 +575,29 @@ pub async fn run_turn_with_options(
                         },
                     )
                     .await;
-                    let _ = permission::remember_response(state, &name, &response);
+                    let remembered_scope =
+                        permission::remember_response(state, &permission_context, &name, &response);
+                    let (effective_scope, persistence_error) = match remembered_scope {
+                        Ok(scope) => (scope, None),
+                        Err(error) => (tools::PermissionScope::Once, Some(error)),
+                    };
                     decision.effect = if response.allow {
                         tools::PermissionEffect::Allow
                     } else {
                         tools::PermissionEffect::Deny
                     };
-                    decision.scope = response.scope;
+                    decision.scope = effective_scope;
                     decision.source = permission::PermissionDecisionSource::UserOverride;
-                    decision.reason = if response.allow {
+                    let base_reason = if response.allow {
                         "用户在确认弹窗中允许本次操作。".to_string()
                     } else {
                         "用户在确认弹窗中拒绝本次操作。".to_string()
                     };
-                    permission::audit(state, &name, &decision);
+                    decision.reason = match persistence_error {
+                        None => base_reason,
+                        Some(error) => format!("{base_reason} 规则未持久化：{error}"),
+                    };
+                    permission::audit(state, &permission_context, &name, &decision);
                     response.allow
                 }
             };

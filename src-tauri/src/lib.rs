@@ -51,8 +51,11 @@ pub struct AppState {
     pub sessions: Mutex<SessionStore>,
     /// 待确认的工具调用：id -> oneshot 发送端
     pub pending_confirms: Mutex<HashMap<String, oneshot::Sender<PermissionResponse>>>,
-    /// 本会话内的权限规则：tool -> rule
-    pub session_permission_rules: Mutex<HashMap<String, PermissionRule>>,
+    /// 会话权限规则：session id -> (tool -> rule)。
+    /// 每个会话拥有独立规则桶，切换活动会话不会继承其他会话的记忆授权。
+    pub session_permission_rules: Mutex<HashMap<String, HashMap<String, PermissionRule>>>,
+    /// 串行权限规则与审计文件的读取、更新和原子替换，防止丢更新或读到半写文件。
+    pub permission_store_lock: Mutex<()>,
     /// 当前计划模式的计划文件状态。
     pub plan_state: Mutex<PlanState>,
     /// 本进程内最近 edit_file 修改记录，用于 undo_edit 安全撤销
@@ -96,6 +99,7 @@ impl AppState {
             sessions: Mutex::new(SessionStore::default()),
             pending_confirms: Mutex::new(HashMap::new()),
             session_permission_rules: Mutex::new(HashMap::new()),
+            permission_store_lock: Mutex::new(()),
             plan_state: Mutex::new(PlanState::default()),
             edit_undo_stack: Mutex::new(Vec::new()),
             workflow_runs: Mutex::new(Vec::new()),
@@ -717,8 +721,16 @@ fn permission_reset_rule(
     state: State<'_, AppState>,
     scope: tools::PermissionScope,
     tool: String,
+    session_id: Option<String>,
+    workspace_identity: Option<String>,
 ) -> Result<permission::PermissionPanelState, String> {
-    permission::reset_rule(state.inner(), scope, &tool)
+    permission::reset_rule(
+        state.inner(),
+        scope,
+        &tool,
+        session_id.as_deref(),
+        workspace_identity.as_deref(),
+    )
 }
 
 #[tauri::command]
@@ -1647,6 +1659,7 @@ fn delete_session_inner(state: &AppState, id: String) -> Result<String, String> 
         store.active.clone()
     };
     drop(runtime);
+    permission::clear_session_rules(state, &id);
     workspace::sync_active_session_workspace(state)?;
     state.persist_sessions();
     Ok(active)

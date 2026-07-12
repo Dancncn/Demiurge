@@ -143,7 +143,7 @@ Demiurge/
 | `tools/package_scripts.rs` | 读取沙盒 `package.json` scripts，检测包管理器并生成建议 shell 命令；不直接执行脚本 | `run()` |
 | `tools/web_common.rs` | Web Search / Fetch 共享 JSON/SSE 解析、HTML/text 清洗、source markdown 输出、source-quality 计数和 Exa MCP 调用外壳 | `parse_json_payloads()` / `append_source_lines()` / `call_exa_mcp()` |
 | `tools/shell.rs` | shell 风险分类、policy state、standard/strict/sandboxed isolation、平台 process containment 和 sandbox wrapper | `run()` / `preview()` / `policy_state()` |
-| `permission/mod.rs` | 权限模式决策、confirm 工具的前后端确认往返、权限审计 | `decide_for_mode()` / `confirm()` |
+| `permission/mod.rs` | turn-owned 权限上下文、Session/Project/User 分层规则、confirm 往返、原子规则持久化与带身份审计 | `context_for_session()` / `decide_for_mode()` / `confirm()` |
 | `pack/mod.rs` | 角色包加载、manifest 校验、头像 data URL 读取、zip 导入校验与默认包落地 | `list_packs()` / `load_pack()` / `import_zip()` |
 | `store/mod.rs` | settings、sessions、权限规则等持久化 | `Settings` / `SessionStore` |
 
@@ -179,8 +179,10 @@ Demiurge/
 app_data_dir/
 ├─ settings.json                 # 非密钥设置
 ├─ sessions.json                 # 多会话、active session、workspace_path、rolling summary、goal state
-├─ permissions.json              # 项目级权限规则
-├─ permission_audit.jsonl        # 轻量权限审计
+├─ project_permissions.json      # versioned；canonical workspace identity → 项目级规则
+├─ user_permissions.json         # 用户级权限规则
+├─ permission_audit.jsonl        # 带 session/workspace identity 的轻量权限审计
+├─ permissions.json              # 旧版无项目身份文件；仅保留，不读取或迁移
 ├─ companion-memory-queue.json   # 陪伴记忆待确认队列
 ├─ pomodoro.json                 # 番茄钟当前状态、任务绑定和节奏记忆
 ├─ memory/user.md                # user-scope 手动记忆
@@ -215,7 +217,7 @@ Git 调用使用固定参数数组与 `current_dir`，不经过 shell。分支�
 1. `send` 捕获当前 active session id，并通过 `session_engine::begin_turn` 建立 turn runtime state、入口互斥、input preview、agent/workflow metadata 和中断标记；`TurnHandle.session_id` 随后成为整轮不可变所有者。turn 登记与会话删除使用相同锁序，运行或取消中的所属会话不可删除。
 2. slash command 先分流，例如 `/skills`、`/skill`、`/goal`、`/effort`、`/compact`、`/dream`、`/ultracode`、`/workflows`、`/workflow resume <run_id>`。
 3. 普通回合调用带显式 `session_id` 的 `run_turn_with_options`；runner 在任何 MCP/外部初始化 await 前验证目标，并用该 id 构造 `SessionTurnStore`，统一读取、追加、替换 messages 与 rolling summary。slash、Goal 续跑、子 Agent、context/goal/write_plan 工具也使用同一 turn-owned id。
-4. `prompt::build_for_session_input` 按 turn-owned session 组装 engine、persona、skills、project instructions、environment、goal、summary 和 scoped memories；如果 `settings.permission_mode == plan`，runner 额外注入 Plan Mode overlay，要求只读探索并用 `write_plan` 生成实施计划。
+4. runner 同时在异步初始化前用 turn-owned session 捕获不可变 `PermissionContext`；后续权限查找、审计和确认记忆始终复用该 session/canonical workspace identity。`prompt::build_for_session_input` 按同一 session 组装 engine、persona、skills、project instructions、environment、goal、summary 和 scoped memories；如果 `settings.permission_mode == plan`，runner 额外注入 Plan Mode overlay，要求只读探索并用 `write_plan` 生成实施计划。
 5. `budget` 和 `context` 按预算裁剪历史。
 6. provider adapter 发起流式请求。
 7. 如果模型返回 tool calls，后端执行工具并把 tool result 写回历史，再进入下一轮模型请求。
@@ -351,17 +353,20 @@ MCP 工具是运行时动态注册的：`agent::runner` 在生成工具 schema �
 
 ## 安全模型
 
-> 当前限制：以下机制描述设计目标，不代表所有边界已闭环。角色包自行放宽工具权限、跨项目 undo、Windows open_path 命令注入、分支跨项目竞态与 turn 写入归属已修复；Project/Session 权限隔离、pack/Live2D 路径、HTTP SSRF、deferred/MCP 授权粒度和其余前端工作区竞态仍需逐项修复。详情见 [代码审查报告](./CODE-REVIEW-2026-07-12.md)。
+> 当前限制：以下机制描述设计目标，不代表所有边界已闭环。角色包自行放宽工具权限、Project/Session 权限串用、跨项目 undo、Windows open_path 命令注入、分支跨项目竞态与 turn 写入归属已修复；pack/Live2D 路径、HTTP SSRF、deferred/MCP 授权粒度和其余前端工作区竞态仍需逐项修复。详情见 [代码审查报告](./CODE-REVIEW-2026-07-12.md)。
 
 - `PermissionMode` 支持 `plan` / `default` / `auto` / `bypass`：`default` 走工具默认策略与用户规则；`auto` 自动允许只读工具；`bypass` 跳过确认但仍审计；`plan` 未批准前只允许只读工具和受限 `write_plan`。
 - Plan Mode 的计划状态在 `AppState.plan_state` 中维护；`write_plan` 只能写入沙盒 `.demiurge/plans/`，前端通过 `approve_plan` 批准后自动回到 `default` 执行模式。
 - 文件与 shell 工具只能访问当前会话项目根；未选择项目时使用默认沙盒。
 - 路径先做词法校验，再对最近存在祖先做 canonicalize，防止符号链接和 junction 逃逸。
 - 回复生成期间禁止切换到其他项目或 Git 分支，避免工具执行根目录在回合中途改变。
+- Session 规则按 session id 存在内存独立桶中并随会话删除；Project 规则以 canonical workspace identity 为键持久化，User 规则才是全局规则。
+- runner 在异步初始化前捕获 turn-owned 权限上下文，整个回合的规则查找、审计和确认记忆不再依赖可变 active session；设置面板更新/清除也校验界面携带的具体身份。
+- `project_permissions.json` 与 `user_permissions.json` 受同一存储锁保护并以同目录临时文件原子替换；边界或存储错误按 `Deny(Once)` 处理。旧 `permissions.json` 不自动应用，避免把无项目身份的历史授权扩散到任意项目。
 - 写入、shell、open_path、截图/OCR 等操作走确认门。
 - 屏幕感知工具受 `computer_use_enabled` 统一开关和逐次确认门控；关闭时 `screen_list_windows`、截图和 OCR 入口会拒绝执行，Settings 的 OCR 区域展示当前边界。
 - 桌面陪伴壳只是透明状态窗口，不默认读取屏幕、麦克风或精确位置；小窗和 Settings 会展示屏幕工具、语音与位置/天气状态。麦克风只由录音按钮或应用聚焦快捷键触发，天气只按设置中的手动城市或粗略城市模式查询。
-- confirm 支持 once/session/project scope。
+- confirm 支持 once/session/project/user scope；记忆持久化失败时，本次审计作用域降为 once 并记录失败原因。
 - `interrupt` 会唤醒所有待确认项并按拒绝处理。
 - shell 限制 cwd、timeout、output cap 和环境变量；所有 shell 子进程使用独立进程组/进程树，超时时终止整棵进程树。
 - shell `strict` isolation 强制最小环境白名单，并拒绝联网、依赖安装、破坏性、提权和外部执行类命令；Settings 的 Permission Rules 区域展示 env allowlist、strict deny 风险、命令模式和平台 containment 状态。
@@ -371,7 +376,7 @@ MCP 工具是运行时动态注册的：`agent::runner` 在生成工具 schema �
 - MCP 第一阶段仅支持本地 stdio server；server command/env 来自设置页，secret-like env 写入 keyring，`settings.json` 和备份只保留空值。
 - MCP 动态工具默认按 annotation 映射风险，执行前接入现有权限确认与审计；`mcp_read_resource` 按外部资源读取处理。
 - 子 Agent 只暴露 `SUBAGENT_READONLY_TOOL_NAMES` 中的只读/外部读取工具，不暴露 `shell`、`clipboard` 和写入类工具。
-- 权限审计不写完整敏感参数。
+- 权限审计不写完整敏感参数，但记录实际裁决所绑定的 session/workspace identity；旧审计行保持兼容读取。
 
 ## Goal 持续驱动
 

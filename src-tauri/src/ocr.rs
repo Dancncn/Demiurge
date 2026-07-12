@@ -480,6 +480,7 @@ mod tests {
             sessions: Mutex::new(crate::store::SessionStore::default()),
             pending_confirms: Mutex::new(std::collections::HashMap::new()),
             session_permission_rules: Mutex::new(std::collections::HashMap::new()),
+            permission_store_lock: Mutex::new(()),
             plan_state: Mutex::new(crate::PlanState::default()),
             edit_undo_stack: Mutex::new(Vec::new()),
             workflow_runs: Mutex::new(Vec::new()),
