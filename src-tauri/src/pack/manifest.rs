@@ -29,6 +29,7 @@ pub(super) const MAX_PACK_READ_BYTES: u64 = 512 * 1024;
 pub(super) const MAX_PACK_LIST_ENTRIES: usize = 1000;
 pub(super) const MAX_LIVE2D_IMPORT_BYTES: u64 = 200 * 1024 * 1024;
 pub(super) const MAX_LIVE2D_IMPORT_FILES: usize = 200;
+const MAX_PACK_ID_BYTES: usize = 128;
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct PackManifest {
@@ -435,8 +436,17 @@ If the user asks for a capability outside the role card's permission or safety b
 
 /// 确保 packs 目录存在，且至少有一个可用的 default 包。
 pub fn ensure_default(packs_dir: &Path) -> Result<(), String> {
-    let dir = packs_dir.join("default");
-    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    fs::create_dir_all(packs_dir).map_err(|e| format!("创建 packs 目录失败：{e}"))?;
+    let root = canonical_packs_root(packs_dir)?;
+    let candidate = root.join("default");
+    match fs::symlink_metadata(&candidate) {
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            fs::create_dir(&candidate).map_err(|e| format!("创建默认角色包目录失败：{e}"))?;
+        }
+        Err(error) => return Err(format!("检查默认角色包目录失败：{error}")),
+    }
+    let dir = resolve_pack_dir(packs_dir, "default")?;
     let manifest = dir.join("manifest.json");
     if !manifest.exists() {
         fs::write(&manifest, DEFAULT_MANIFEST).map_err(|e| e.to_string())?;
@@ -467,11 +477,16 @@ pub fn list_packs(packs_dir: &Path) -> Vec<PackManifest> {
         return out;
     };
     for e in entries.flatten() {
-        let p = e.path();
-        if !p.is_dir() {
+        let Some(id) = e.file_name().to_str().map(str::to_string) else {
             continue;
-        }
+        };
+        let Ok(p) = resolve_pack_dir(packs_dir, &id) else {
+            continue;
+        };
         if let Ok(m) = read_manifest_with_avatar(&p) {
+            if m.id != id {
+                continue;
+            }
             out.push(m);
         }
     }
@@ -479,13 +494,89 @@ pub fn list_packs(packs_dir: &Path) -> Vec<PackManifest> {
     out
 }
 
-pub(super) fn pack_dir(packs_dir: &Path, id: &str) -> PathBuf {
-    packs_dir.join(id)
+/// Resolve an existing pack id to a canonical direct child of the trusted
+/// packs root. Callers must use this before reading, writing, opening, or
+/// deleting any pack-owned path.
+pub fn resolve_pack_dir(packs_dir: &Path, id: &str) -> Result<PathBuf, String> {
+    validate_pack_id(id)?;
+    let root = canonical_packs_root(packs_dir)?;
+    let candidate = root.join(id);
+    let metadata = fs::symlink_metadata(&candidate).map_err(|error| {
+        if error.kind() == std::io::ErrorKind::NotFound {
+            format!("角色包 `{id}` 不存在")
+        } else {
+            format!("读取角色包 `{id}` 目录信息失败：{error}")
+        }
+    })?;
+    if metadata_is_link_or_reparse(&metadata) {
+        return Err(format!("角色包 `{id}` 目录不能是符号链接或 junction"));
+    }
+    if !metadata.is_dir() {
+        return Err(format!("角色包 `{id}` 不是目录"));
+    }
+    let canonical = candidate
+        .canonicalize()
+        .map_err(|error| format!("角色包 `{id}` 路径校验失败：{error}"))?;
+    if canonical.parent() != Some(root.as_path()) {
+        return Err(format!("角色包 `{id}` 必须是 packs 根目录的直接子目录"));
+    }
+    Ok(canonical)
+}
+
+pub fn validate_pack_id(id: &str) -> Result<(), String> {
+    if id.is_empty() || id.trim() != id || id.len() > MAX_PACK_ID_BYTES {
+        return Err(format!(
+            "角色包 id 不能为空、包含首尾空白或超过 {MAX_PACK_ID_BYTES} 字节"
+        ));
+    }
+    if !id
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_'))
+    {
+        return Err("角色包 id 只能包含 ASCII 字母、数字、- 和 _".to_string());
+    }
+    Ok(())
+}
+
+fn canonical_packs_root(packs_dir: &Path) -> Result<PathBuf, String> {
+    let root = packs_dir
+        .canonicalize()
+        .map_err(|error| format!("packs 根目录校验失败：{error}"))?;
+    if !root.is_dir() {
+        return Err("packs 根路径不是目录".to_string());
+    }
+    Ok(root)
+}
+
+fn new_pack_destination(packs_dir: &Path, id: &str) -> Result<PathBuf, String> {
+    validate_pack_id(id)?;
+    fs::create_dir_all(packs_dir).map_err(|e| format!("创建 packs 目录失败：{e}"))?;
+    let root = canonical_packs_root(packs_dir)?;
+    let destination = root.join(id);
+    match fs::symlink_metadata(&destination) {
+        Ok(_) => Err(format!("角色包 `{id}` 已存在，导入已取消。")),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(destination),
+        Err(error) => Err(format!("检查角色包 `{id}` 目标目录失败：{error}")),
+    }
+}
+
+fn metadata_is_link_or_reparse(metadata: &fs::Metadata) -> bool {
+    if metadata.file_type().is_symlink() {
+        return true;
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0400;
+        return metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0;
+    }
+    #[cfg(not(windows))]
+    false
 }
 
 /// 按 id 加载角色包（读 manifest + persona 正文）。
 pub fn load_pack(packs_dir: &Path, id: &str) -> Result<Pack, String> {
-    let dir = pack_dir(packs_dir, id);
+    let dir = resolve_pack_dir(packs_dir, id)?;
     let manifest = read_manifest_with_avatar(&dir)?;
     let persona_path = resolve_pack_file(&dir, &manifest.persona, "persona")?;
     let persona_text =
@@ -498,7 +589,10 @@ pub fn load_pack(packs_dir: &Path, id: &str) -> Result<Pack, String> {
 }
 
 pub fn skill_policy(packs_dir: &Path, id: &str) -> PackSkillPolicy {
-    let Ok(manifest) = read_manifest_no_avatar(&pack_dir(packs_dir, id)) else {
+    let Ok(dir) = resolve_pack_dir(packs_dir, id) else {
+        return PackSkillPolicy::default();
+    };
+    let Ok(manifest) = read_manifest_no_avatar(&dir) else {
         return PackSkillPolicy::default();
     };
     manifest
@@ -515,7 +609,8 @@ pub fn skill_policy(packs_dir: &Path, id: &str) -> PackSkillPolicy {
 /// 读取角色包声明的 memory namespace；返回 None 表示走默认（共享）路径。
 /// 非 default 的 namespace 会让 memory 模块把 user/project 记忆文件隔离到带后缀的路径。
 pub fn manifest_namespace(packs_dir: &Path, id: &str) -> Option<String> {
-    let manifest = read_manifest_no_avatar(&pack_dir(packs_dir, id)).ok()?;
+    let dir = resolve_pack_dir(packs_dir, id).ok()?;
+    let manifest = read_manifest_no_avatar(&dir).ok()?;
     let ns = manifest
         .runtime
         .and_then(|runtime| runtime.memory)
@@ -531,7 +626,10 @@ pub fn manifest_namespace(packs_dir: &Path, id: &str) -> Option<String> {
 /// 读取角色卡 runtime.permissions 限制（tool → "deny"/"ask_once"/"ask_every_time"）。
 /// manifest 校验拒绝会放宽权限的值；permission 层还会做单调收紧检查。
 pub fn permission_preferences(packs_dir: &Path, id: &str) -> BTreeMap<String, String> {
-    let Ok(manifest) = read_manifest_no_avatar(&pack_dir(packs_dir, id)) else {
+    let Ok(dir) = resolve_pack_dir(packs_dir, id) else {
+        return BTreeMap::new();
+    };
+    let Ok(manifest) = read_manifest_no_avatar(&dir) else {
         return BTreeMap::new();
     };
     manifest
@@ -558,7 +656,6 @@ pub fn import_zip(
         return Err("角色包导入只支持 .zip 文件".to_string());
     }
 
-    fs::create_dir_all(packs_dir).map_err(|e| format!("创建 packs 目录失败：{e}"))?;
     let mut archive =
         ZipArchive::new(Cursor::new(bytes)).map_err(|e| format!("读取 zip 失败：{e}"))?;
     let manifest_path = find_manifest_entry(&mut archive)?;
@@ -570,25 +667,26 @@ pub fn import_zip(
     let manifest = parse_manifest(&manifest_text)?;
     validate_manifest_paths(&manifest)?;
 
-    let dest = packs_dir.join(&manifest.id);
-    if dest.exists() {
-        return Err(format!("角色包 `{}` 已存在，导入已取消。", manifest.id));
-    }
-    let temp = packs_dir.join(format!(
+    let dest = new_pack_destination(packs_dir, &manifest.id)?;
+    let root = dest
+        .parent()
+        .ok_or_else(|| "角色包目标目录缺少可信父目录".to_string())?;
+    let temp = root.join(format!(
         ".import-{}-{}",
         manifest.id,
         crate::store::new_session_id()
     ));
-    if temp.exists() {
-        fs::remove_dir_all(&temp).map_err(|e| format!("清理临时导入目录失败：{e}"))?;
+    if fs::symlink_metadata(&temp).is_ok() {
+        return Err("角色包临时导入目录已存在，请重试".to_string());
     }
-    fs::create_dir_all(&temp).map_err(|e| format!("创建临时导入目录失败：{e}"))?;
+    fs::create_dir(&temp).map_err(|e| format!("创建临时导入目录失败：{e}"))?;
 
     let result = extract_archive(&mut archive, &prefix, &temp)
         .and_then(|_| validate_extracted_pack(&temp, &manifest))
         .and_then(|_| {
             fs::rename(&temp, &dest).map_err(|e| format!("保存角色包失败：{e}"))?;
-            read_manifest_with_avatar(&dest)
+            let committed = resolve_pack_dir(packs_dir, &manifest.id)?;
+            read_manifest_with_avatar(&committed)
         });
     if result.is_err() {
         let _ = fs::remove_dir_all(&temp);
@@ -597,7 +695,7 @@ pub fn import_zip(
 }
 
 pub fn read_manifest_json(packs_dir: &Path, id: &str) -> Result<String, String> {
-    let dir = pack_dir(packs_dir, id);
+    let dir = resolve_pack_dir(packs_dir, id)?;
     let manifest = read_manifest_no_avatar(&dir)?;
     serde_json::to_string_pretty(&manifest).map_err(|e| format!("序列化角色卡清单失败：{e}"))
 }
@@ -607,10 +705,7 @@ pub fn save_manifest_json(
     current_id: &str,
     raw_json: &str,
 ) -> Result<PackManifest, String> {
-    let dir = pack_dir(packs_dir, current_id);
-    if !dir.is_dir() {
-        return Err(format!("角色包 `{current_id}` 不存在"));
-    }
+    let dir = resolve_pack_dir(packs_dir, current_id)?;
     let mut manifest = parse_manifest(raw_json)?;
     if manifest.id != current_id {
         return Err("暂不支持通过编辑 manifest.id 重命名角色包".to_string());
@@ -652,16 +747,7 @@ fn parse_manifest(text: &str) -> Result<PackManifest, String> {
 }
 
 fn validate_manifest_identity(manifest: &PackManifest) -> Result<(), String> {
-    let id = manifest.id.trim();
-    if id.is_empty() || id != manifest.id {
-        return Err("manifest.id 不能为空或包含首尾空白".to_string());
-    }
-    if !id
-        .chars()
-        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_'))
-    {
-        return Err("manifest.id 只能包含 ASCII 字母、数字、- 和 _".to_string());
-    }
+    validate_pack_id(&manifest.id).map_err(|error| format!("manifest.id 非法：{error}"))?;
     if manifest.name.trim().is_empty() {
         return Err("manifest.name 不能为空".to_string());
     }
@@ -1621,6 +1707,74 @@ mod tests {
             zip.write_all(bytes).unwrap();
         }
         zip.finish().unwrap().into_inner()
+    }
+
+    #[cfg(unix)]
+    fn create_directory_link(target: &Path, link: &Path) -> bool {
+        std::os::unix::fs::symlink(target, link).is_ok()
+    }
+
+    #[cfg(windows)]
+    fn create_directory_link(target: &Path, link: &Path) -> bool {
+        if std::os::windows::fs::symlink_dir(target, link).is_ok() {
+            return true;
+        }
+        std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(link)
+            .arg(target)
+            .output()
+            .map(|output| output.status.success())
+            .unwrap_or(false)
+    }
+
+    #[cfg(unix)]
+    fn remove_directory_link(link: &Path) {
+        let _ = fs::remove_file(link);
+    }
+
+    #[cfg(windows)]
+    fn remove_directory_link(link: &Path) {
+        let _ = fs::remove_dir(link);
+    }
+
+    #[test]
+    fn pack_directory_resolver_enforces_trusted_direct_children() {
+        let root = temp_dir("trusted-root");
+        let packs = root.join("packs");
+        let direct = packs.join("safe_pack-1");
+        let outside = root.join("outside");
+        fs::create_dir_all(&direct).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+
+        let resolved = resolve_pack_dir(&packs, "safe_pack-1").unwrap();
+        assert_eq!(resolved, direct.canonicalize().unwrap());
+
+        for id in [
+            "",
+            "../outside",
+            "safe_pack-1/child",
+            "/tmp/outside",
+            r"C:\Windows",
+            r"C:relative",
+            r"\\server\share",
+            ".",
+            "含非ASCII",
+        ] {
+            assert!(
+                resolve_pack_dir(&packs, id).is_err(),
+                "untrusted pack id must be rejected: {id:?}"
+            );
+        }
+
+        let link = packs.join("linked_pack");
+        assert!(
+            create_directory_link(&outside, &link),
+            "failed to create a directory link for the resolver regression test"
+        );
+        assert!(resolve_pack_dir(&packs, "linked_pack").is_err());
+        remove_directory_link(&link);
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]

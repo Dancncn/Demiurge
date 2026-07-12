@@ -188,19 +188,22 @@ pub fn slash_response(state: &crate::AppState, text: &str) -> Result<String, Str
 
 pub fn discover(sandbox: &Path, data_dir: &Path, packs_dir: &Path, pack_id: &str) -> SkillCatalog {
     let mut catalog = SkillCatalog::default();
-    for (scope, base) in [
+    let mut roots = vec![
         (SkillScope::Global, data_dir.join("skills")),
         (
             SkillScope::Project,
             sandbox.join(".demiurge").join("skills"),
         ),
         (SkillScope::Repository, sandbox.join("skills")),
-        (SkillScope::Pack, packs_dir.join(pack_id).join("skills")),
-        (
-            SkillScope::Compat,
-            sandbox.join(".demiurge").join("compat").join("skills"),
-        ),
-    ] {
+    ];
+    if let Ok(pack_dir) = crate::pack::resolve_pack_dir(packs_dir, pack_id) {
+        roots.push((SkillScope::Pack, pack_dir.join("skills")));
+    }
+    roots.push((
+        SkillScope::Compat,
+        sandbox.join(".demiurge").join("compat").join("skills"),
+    ));
+    for (scope, base) in roots {
         discover_skill_dir(&mut catalog, scope, &base);
     }
 
@@ -839,6 +842,35 @@ Use evidence before conclusions.
         let _ = fs::remove_dir_all(&sandbox);
         let _ = fs::remove_dir_all(&data);
         let _ = fs::remove_dir_all(&packs);
+    }
+
+    #[test]
+    fn invalid_pack_ids_cannot_add_external_skill_roots() {
+        let root = temp_root("pack_boundary");
+        let sandbox = root.join("sandbox");
+        let data = root.join("data");
+        let packs = root.join("packs");
+        let escaped = root.join("outside").join("skills").join("escaped");
+        fs::create_dir_all(&sandbox).unwrap();
+        fs::create_dir_all(&data).unwrap();
+        fs::create_dir_all(&packs).unwrap();
+        fs::create_dir_all(&escaped).unwrap();
+        fs::write(
+            escaped.join("SKILL.md"),
+            "---\nname: Escaped Pack Skill\nalways_include: true\n---\nMust not load.",
+        )
+        .unwrap();
+
+        let catalog = discover(&sandbox, &data, &packs, "../outside");
+        assert!(catalog
+            .skills
+            .iter()
+            .all(|skill| skill.name != "Escaped Pack Skill"));
+        assert!(catalog
+            .skills
+            .iter()
+            .all(|skill| skill.scope != SkillScope::Pack));
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]

@@ -155,7 +155,9 @@
 
 **建议**：权限/审计身份使用 `execute_tool:<actual_tool_name>`，并使用目标工具自己的风险、预览和 affected paths；或禁止 wrapper 使用 Once 之外的记忆作用域。
 
-### P1-08 角色包 IPC 的 id 可重新定义信任根
+### P1-08 角色包 IPC 的 id 可重新定义信任根（已修复）
+
+**修复状态**：新增统一 `resolve_pack_dir`：id 不能为空、含空白、超过 128 字节或包含 ASCII 字母数字、`-`、`_` 之外的字符；解析器 canonicalize `packs` 根与现有目标，要求目标是根的直接子目录，并通过 `symlink_metadata` 与 Windows reparse attribute 拒绝 symlink/junction。manifest、文件浏览/读取、lore、Live2D、打开目录、设置中的当前包、pack memory/skills 与梦境材料全部复用该边界；zip 新目标先验证 id 和 canonical 父根，临时目录不再清理碰巧同名的既有路径。无错误返回的上下文路径在校验失败时省略 pack 来源。新增直接子目录成功，以及绝对路径、盘符、UNC、父目录、嵌套、非 ASCII、目录链接、外部 memory/skills 旁路拒绝回归。
 
 **触发条件**：IPC 传入绝对目录、不同盘符、UNC 或含 `..` 的包 id，再调用列表/读取等命令。
 

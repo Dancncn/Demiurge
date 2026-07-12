@@ -401,7 +401,7 @@ fn scope_files(
     let session_id = sanitize_path_segment(session_id);
     let ns = active_namespace(packs_dir, pack_id);
     let user_name = namespaced_file_name("user", ns.as_deref());
-    vec![
+    let mut scopes = vec![
         MemoryScopeFile {
             id: "user",
             label: "User",
@@ -420,12 +420,15 @@ fn scope_files(
                 .join("session-memory")
                 .join(format!("{session_id}.md")),
         },
-        MemoryScopeFile {
+    ];
+    if let Ok(pack_dir) = crate::pack::resolve_pack_dir(packs_dir, pack_id) {
+        scopes.push(MemoryScopeFile {
             id: "pack",
             label: "Pack",
-            path: packs_dir.join(pack_id).join("memory.md"),
-        },
-    ]
+            path: pack_dir.join("memory.md"),
+        });
+    }
+    scopes
 }
 
 /// 当前角色包声明的 memory namespace；None 表示走默认共享路径。
@@ -712,6 +715,7 @@ mod tests {
         let data = root.join("data");
         let sandbox = root.join("sandbox");
         let packs = root.join("packs");
+        std::fs::create_dir_all(packs.join("default")).unwrap();
         let memory_dir = sandbox.join(".demiurge");
         std::fs::create_dir_all(&memory_dir).unwrap();
         std::fs::write(
@@ -766,6 +770,7 @@ mod tests {
         let data = root.join("data");
         let sandbox = root.join("sandbox");
         let packs = root.join("packs");
+        std::fs::create_dir_all(packs.join("default")).unwrap();
 
         let state = add_entry(
             &data,
@@ -815,6 +820,36 @@ mod tests {
             .join("session_1.md")
             .is_file());
         assert!(packs.join("default").join("memory.md").is_file());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn invalid_pack_ids_do_not_create_external_memory_scopes() {
+        let root = std::env::temp_dir().join(format!(
+            "demiurge_memory_pack_boundary_{}",
+            crate::store::new_session_id()
+        ));
+        let data = root.join("data");
+        let sandbox = root.join("sandbox");
+        let packs = root.join("packs");
+        let outside = root.join("outside");
+        std::fs::create_dir_all(&packs).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+
+        let scopes = scope_files(&data, &sandbox, &packs, "../outside", "session-1");
+        assert!(scopes.iter().all(|scope| scope.id != "pack"));
+        assert!(add_entry(
+            &data,
+            &sandbox,
+            &packs,
+            "../outside",
+            "session-1",
+            "pack",
+            "pack",
+            "must not escape",
+        )
+        .is_err());
+        assert!(!outside.join("memory.md").exists());
         let _ = std::fs::remove_dir_all(root);
     }
 

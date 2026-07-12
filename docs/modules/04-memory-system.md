@@ -47,6 +47,8 @@ Demiurge 的长期记忆刻意保持为「人类可读的 Markdown 文件」，�
 
 `session_id` 在拼路径前会经过 `sanitize_path_segment()`（`src-tauri/src/agent/memory.rs:560`）清洗：只保留 ASCII 字母数字与 `-`、`_`，其余字符替换为 `_`，空串回退为 `"default"`。这一步是路径安全的关键——它阻止了用 `session_id` 做目录穿越（`../`）或写到沙盒外。例如测试 `adds_entries_to_user_session_and_pack_scopes`（`src-tauri/src/agent/memory.rs:632`）传入 `"session/1"`，最终落盘文件是 `session_1.md`。
 
+pack scope 不直接执行 `packs_dir.join(pack_id)`。`scope_files()` 先调用 `pack::resolve_pack_dir`，要求 id 符合 ASCII 白名单、目标是 canonical `packs_dir` 下非 symlink/junction 的直接子目录；只有成功时才加入 `<canonical_pack>/memory.md`。非法、缺失或链接包不会出现 pack scope，写入 `scope="pack"` 会返回未知作用域错误。回归测试同时确认 `../outside` 不能创建外部 `memory.md`。
+
 `scope_files()` 的入参 `(data_dir, sandbox_dir, packs_dir, pack_id, session_id)` 全部由上层 `memory_context()`（`src-tauri/src/lib.rs:187`）从 `AppState` 里取出：`pack_id` 来自 `settings.current_pack`，`session_id` 来自当前活动会话。
 
 ### 2.2 对外暴露的类型
@@ -231,12 +233,14 @@ emit "记忆整理完成..." ──► finish
 |------|------|------|
 | 当前自动记忆 | `sandbox_dir/.demiurge/memory.md` | 整理基线，也是唯一写回目标 |
 | 项目 memory.md | `sandbox_dir/memory.md` | legacy/项目根记忆 |
-| 角色包 memory.md | `packs_dir/<current_pack>/memory.md` | pack scope |
+| 角色包 memory.md | `<canonical_pack>/memory.md` | pack scope；当前包解析失败时省略 |
 | 项目 DEMIURGE.md | `sandbox_dir/DEMIURGE.md` | 项目说明文件 |
 | 项目 SYSTEM.md | `sandbox_dir/SYSTEM.md` | 本项目自有的中性指令/记忆文件 |
 | 会话快照 | `current_session_snapshot()` | 会话摘要 + 最近最多 12 条非 tool 消息 |
 
 每个文件经 `read_limited_text()`（`src-tauri/src/agent/dream.rs:270`）读取：必须是文件且 `<= 32 KiB`，否则跳过。会话快照 `current_session_snapshot()`（`src-tauri/src/agent/dream.rs:200`）取 `session.summary` 与末尾 12 条消息（跳过 `role == "tool"` 与空内容），并截到 `MAX_INPUT_CHARS/3`。整个 bundle 用 `\n\n---\n\n` 连接，再整体截到 `MAX_INPUT_CHARS = 18000` 字符。
+
+梦境材料中的角色包 `memory.md` 同样先走 `resolve_pack_dir`；解析失败时不读取该来源，避免持久化的异常 `current_pack` 把整理输入重定向到 `packs` 根之外。
 
 > 关于 `SYSTEM.md`：代码读取沙盒下的 `SYSTEM.md`（本项目自有的中性指令/记忆文件名，与 `DEMIURGE.md` 并列），仅作为整理材料的输入来源之一。
 

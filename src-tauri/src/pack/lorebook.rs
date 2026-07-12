@@ -16,10 +16,10 @@ use crate::embed;
 
 use super::manifest::{
     char_count, collect_lore_sources, is_cjk, lore_file_signatures, merge_unique,
-    normalize_search_text, pack_dir, parse_markdown_meta, query_terms, read_manifest_no_avatar,
-    resolve_pack_file, search_tokens, split_lore_markdown, LoreChunk, LoreHit, LoreHitDetail,
-    LoreIndexCache, LoreIndexStatus, LoreRecallDetail, LoreSearchStats, PackManifest,
-    LORE_INDEX_VERSION, MAX_LORE_CONTEXT_CHARS, MAX_LORE_CONTEXT_CHUNKS,
+    normalize_search_text, parse_markdown_meta, query_terms, read_manifest_no_avatar,
+    resolve_pack_dir, resolve_pack_file, search_tokens, split_lore_markdown, LoreChunk, LoreHit,
+    LoreHitDetail, LoreIndexCache, LoreIndexStatus, LoreRecallDetail, LoreSearchStats,
+    PackManifest, LORE_INDEX_VERSION, MAX_LORE_CONTEXT_CHARS, MAX_LORE_CONTEXT_CHUNKS,
 };
 
 pub fn lorebook_context(
@@ -66,7 +66,7 @@ pub fn lorebook_index_status(
     data_dir: &Path,
     id: &str,
 ) -> Result<LoreIndexStatus, String> {
-    let dir = pack_dir(packs_dir, id);
+    let dir = resolve_pack_dir(packs_dir, id)?;
     let manifest = read_manifest_no_avatar(&dir)?;
     let cache_path = lore_index_cache_path(data_dir, id);
     let mut status = LoreIndexStatus {
@@ -169,6 +169,7 @@ pub fn lorebook_rebuild_index(
     data_dir: &Path,
     id: &str,
 ) -> Result<LoreIndexStatus, String> {
+    resolve_pack_dir(packs_dir, id)?;
     let cache_path = lore_index_cache_path(data_dir, id);
     let _ = fs::remove_file(&cache_path);
     let _ = load_lore_index(packs_dir, data_dir, id)?;
@@ -185,7 +186,7 @@ fn load_lore_index_with_cache(
     data_dir: &Path,
     id: &str,
 ) -> Result<(Vec<LoreChunk>, PathBuf, Option<LoreSearchStats>), String> {
-    let dir = pack_dir(packs_dir, id);
+    let dir = resolve_pack_dir(packs_dir, id)?;
     let manifest = read_manifest_no_avatar(&dir)?;
     let cache_path = lore_index_cache_path(data_dir, id);
     if manifest.lorebook.is_empty() {

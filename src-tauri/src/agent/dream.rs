@@ -255,15 +255,15 @@ fn build_source_bundle(
         ));
     }
 
-    for (label, path) in [
-        ("项目 memory.md", sandbox_dir.join("memory.md")),
-        (
-            "角色包 memory.md",
-            packs_dir.join(&settings.current_pack).join("memory.md"),
-        ),
+    let mut sources = vec![("项目 memory.md", sandbox_dir.join("memory.md"))];
+    if let Ok(pack_dir) = crate::pack::resolve_pack_dir(packs_dir, &settings.current_pack) {
+        sources.push(("角色包 memory.md", pack_dir.join("memory.md")));
+    }
+    sources.extend([
         ("项目 DEMIURGE.md", sandbox_dir.join("DEMIURGE.md")),
         ("项目 SYSTEM.md", sandbox_dir.join("SYSTEM.md")),
-    ] {
+    ]);
+    for (label, path) in sources {
         if let Some(text) = read_limited_text(&path) {
             parts.push(format!("# {label}\n{}", text.trim()));
         }
@@ -333,5 +333,39 @@ fn cap_chars(s: impl AsRef<str>, max_chars: usize) -> String {
     } else {
         let head: String = s.chars().take(max_chars).collect();
         format!("{head}\n…[已截断]")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn source_bundle_reads_only_resolved_pack_memory() {
+        let root = std::env::temp_dir().join(format!(
+            "demiurge_dream_pack_boundary_{}",
+            crate::store::new_session_id()
+        ));
+        let sandbox = root.join("sandbox");
+        let packs = root.join("packs");
+        let outside = root.join("outside");
+        fs::create_dir_all(&sandbox).unwrap();
+        fs::create_dir_all(&packs).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        fs::write(outside.join("memory.md"), "external secret").unwrap();
+
+        let mut settings = Settings::default();
+        settings.current_pack = "../outside".to_string();
+        let rejected = build_source_bundle(&sandbox, &packs, &settings, "", "");
+        assert!(!rejected.contains("external secret"));
+
+        let direct = packs.join("default");
+        fs::create_dir_all(&direct).unwrap();
+        fs::write(direct.join("memory.md"), "trusted pack memory").unwrap();
+        settings.current_pack = "default".to_string();
+        let accepted = build_source_bundle(&sandbox, &packs, &settings, "", "");
+        assert!(accepted.contains("trusted pack memory"));
+
+        let _ = fs::remove_dir_all(root);
     }
 }

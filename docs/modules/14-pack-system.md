@@ -1,8 +1,8 @@
 # 角色包系统
 
-> 审阅状态（2026-07-12）：角色包清单、zip 导入、persona、memory 与 skill 作用域已按当前源码复核；本轮项目工作区改动不改变角色包路径校验。固定行号请以符号名为准。
+> 审阅状态（2026-07-12）：角色包清单、zip 导入、persona、memory、skill 与 IPC 信任根已按当前源码复核。固定行号请以符号名为准。
 
-> 安全复核进度：`runtime.permissions` 自放行与 Live2D 事务导入已修复；清单权限只能声明 deny/ask/default，Live2D 全引用受 containment 约束且失败恢复旧模型。pack id 的 IPC 根目录约束仍待独立提交；zip-slip 或 Live2D 内部校验都不能替代该 IPC 边界。
+> 安全复核进度：`runtime.permissions` 自放行、Live2D 事务导入与 pack id 信任根均已修复；清单权限只能声明 deny/ask/default，Live2D 全引用受 containment 约束且失败恢复旧模型，所有 IPC 与运行时 pack 来源都先经过 canonical direct-child 解析。
 
 > 存档级技术原理文档。覆盖角色包的清单校验、persona 注入、头像 data URL 生成、zip 导入安全校验、默认包落地，以及角色包作为 memory / skills 作用域载体的衔接逻辑。
 >
@@ -62,12 +62,13 @@ pub struct Pack {
 | --- | --- | --- | --- |
 | `ensure_default` | `pack/mod.rs:47` | 首启动落地 `packs/default` | `lib.rs:1665`（setup） |
 | `list_packs` | `pack/mod.rs:62` | 枚举所有合法角色包 | Tauri 命令 `list_packs`（`lib.rs:777`） |
+| `resolve_pack_dir` | `pack/manifest.rs` | 验证 id，解析 canonical 根与非链接直接子目录 | 所有按 id 访问包路径的 IPC 与运行时入口 |
 | `load_pack` | `pack/mod.rs:85` | 按 id 读清单 + persona 正文 | runner / subagent / context panel |
 | `import_zip` | `pack/mod.rs:97` | 导入并安全落地 zip 角色包 | Tauri 命令 `import_pack_zip`（`lib.rs:783`） |
 
 `persona.rs` 侧的入口仅有 `engine_base()`（`src-tauri/src/agent/persona.rs:17`），返回 `&'static str`。
 
-`packs_dir` 的真实根目录在应用启动时确定为 `app_data_dir()/packs`（`src-tauri/src/lib.rs:1663`），随后 `ensure_default` 在其下创建 `default` 子目录。`AppState` 用 `Mutex<PathBuf>` 持有该路径（`src-tauri/src/lib.rs:60`）。
+`packs_dir` 的真实根目录在应用启动时确定为 `app_data_dir()/packs`（`src-tauri/src/lib.rs:1663`），随后 `ensure_default` 在其下创建并重新解析 `default` 子目录。`AppState` 用 `Mutex<PathBuf>` 持有该路径（`src-tauri/src/lib.rs:60`）；保存设置前也必须确认 `current_pack` 能被同一解析器解析为现有包。
 
 ---
 
@@ -78,8 +79,8 @@ pub struct Pack {
 校验被有意拆成三个正交函数，分别负责「身份」「相对路径安全」「最终落地存在性」，这样在不同阶段（解析时 / 解压前 / 解压后）可以按需复用：
 
 1. **身份校验** `validate_manifest_identity`（`pack/mod.rs:174`）
-   - `id` 不能为空、不能有首尾空白（`id != manifest.id` 的对比就是在拒绝「trim 后才合法」的输入）。
-   - `id` 只允许 ASCII 字母数字与 `-` `_`（`pack/mod.rs:179`）。这是**第一道目录穿越防线**：因为 `id` 会直接拼成落地目录名 `packs/<id>`，所以 `.`、`/`、`\` 全部被禁，`../bad` 这类输入在解析阶段就被打回（对应测试 `validates_manifest_identity_and_paths`，`pack/mod.rs:393`）。
+   - `id` 不能为空、不能有首尾空白，且最长 128 字节。
+   - `id` 只允许 ASCII 字母数字与 `-` `_`。这是**第一道目录穿越防线**：因为 `id` 会成为落地目录名 `packs/<id>`，所以 `.`、`/`、`\`、盘符、UNC 与非 ASCII 全部被禁，`../bad` 这类输入在解析阶段就被打回。
    - `name` 不能为空白。
 
 2. **相对路径校验** `validate_manifest_paths` → `validate_relative_file`（`pack/mod.rs:191`、`pack/mod.rs:202`）
@@ -90,6 +91,10 @@ pub struct Pack {
 3. **落地存在性校验** `validate_extracted_pack`（`pack/mod.rs:333`）：仅在 zip 导入解压后调用，确认 `manifest.json`、`persona`、（若声明了）`avatar` 三者真的落到了临时目录里。
 
 `parse_manifest`（`pack/mod.rs:167`）= `serde_json::from_str` + 身份校验，是清单进入系统的统一入口；`read_manifest_with_avatar`（`pack/mod.rs:153`）= 读盘 + `parse_manifest` + 路径校验 + 头像编码，是「从已落地目录加载清单」的统一入口。
+
+身份白名单之后还有独立的信任根校验。`resolve_pack_dir(packs_dir, id)` 会 canonicalize `packs_dir`，用 `symlink_metadata` 检查候选，并在 Windows 上检查 reparse attribute；symlink/junction、非目录或 canonical 父目录不等于根目录的目标一律拒绝。返回值是受检 canonical 直接子目录，后续读取、写入、打开与删除均以它为 base。`list_packs` 也把目录项名称送入解析器，并要求清单 id 与目录名一致，因此不会枚举链接目录或身份错位目录。
+
+zip 导入尚无现成目标可 canonicalize，因此使用配套的新目标边界：先复用同一 id 校验并 canonicalize 父根，确认目标尚不存在，再在该 canonical 根下创建唯一 staging；不会为了重试而递归删除碰巧同名的既有临时路径。rename 后再次通过 `resolve_pack_dir` 复核正式目录。
 
 ### 3.2 persona 注入：从磁盘到 system prompt
 
@@ -188,7 +193,7 @@ extract_archive(prefix → temp)                           pack/mod.rs:141 / 289
 
 ### 3.6 列举与排序
 
-`list_packs`（`pack/mod.rs:62`）遍历 `packs_dir` 下所有子目录，对每个目录尝试 `read_manifest_with_avatar`，失败的目录（含临时 `.import-*` 目录、无清单目录）被静默跳过。结果按 `name` 再按 `id` 排序（`pack/mod.rs:76`），保证 UI 列表稳定。
+`list_packs` 遍历 `packs_dir` 的目录项，但不会直接信任 `is_dir()`：目录项名称必须先通过 id 白名单与 `resolve_pack_dir`，随后清单 id 还必须等于目录名。链接/junction、临时 `.import-*`、非 ASCII 名称、身份错位或无清单目录都会被静默跳过。结果按 `name` 再按 `id` 排序，保证 UI 列表稳定。
 
 ---
 
@@ -217,8 +222,8 @@ extract_archive(prefix → temp)                           pack/mod.rs:141 / 289
 角色包不是只有 persona 一块内容会进 prompt，它同时是 memory 和 skills 的一个**作用域载体**，三条线在 `prompt.rs` 汇合，但 key 都是 `settings.current_pack`：
 
 - **persona**：`load_pack().persona_text` → `pack_persona` 分区（见 §3.2）。
-- **pack memory**：`memory::scope_files` 把 `packs_dir.join(pack_id).join("memory.md")` 作为 `id="pack"` 作用域（`src-tauri/src/agent/memory.rs:339`）。`prompt::memory_section` 通过 `scoped_memory_paths`（`memory.rs:299`）读取 user/project/session/pack 四层记忆，pack 层即角色包自带的 `memory.md`。Settings 的记忆面板也能对 pack scope 做增删改查与去重（命令在 `lib.rs:925` 一带）。
-- **pack skills**：`skills::discover` 把 `packs_dir.join(pack_id).join("skills")` 作为 `SkillScope::Pack`（`src-tauri/src/agent/skills.rs:189`），与 global / project / repository / compat 目录并列发现（`skills.rs:185`）。`prompt::skills_section` 经 `skills::context_for_turn`（`skills.rs:111`）按当前用户输入选择性注入。
+- **pack memory**：`memory::scope_files` 先调用 `resolve_pack_dir`，成功后才把 canonical pack 下的 `memory.md` 作为 `id="pack"` 作用域。`prompt::memory_section` 读取 user/project/session/pack 四层记忆；Settings 的记忆面板也能对有效 pack scope 做增删改查与去重。解析失败时 pack scope 整体省略，不能用恶意设置值构造外部路径。
+- **pack skills**：`skills::discover` 只在 `resolve_pack_dir` 成功时把 canonical pack 下的 `skills/` 加入 `SkillScope::Pack`，与 global / project / repository / compat 目录并列发现。`prompt::skills_section` 按当前用户输入选择性注入；非法 pack id 不会新增外部发现根。
 
 **衔接含义**：一个第三方角色包 zip 完全可以同时携带 `persona.md`、`memory.md` 和 `skills/<name>/SKILL.md`。导入后，只要把 `current_pack` 切到该 id，这三类内容会自动随角色一起进入 prompt——角色包因此不只是「换人设」，而是「换一整套人设 + 预置记忆 + 专属技能」。需要注意：`import_zip` 的解压只做相对路径与体积/数量校验，并不强制要求或特殊处理 `memory.md`/`skills/`，它们就是普通文件，被原样落地后由 memory/skills 模块在 prompt 装配时各自发现。
 
@@ -228,13 +233,14 @@ extract_archive(prefix → temp)                           pack/mod.rs:141 / 289
 
 ## 5. 安全与权限相关点
 
-1. **目录穿越的两层防御**：`id` 字符白名单（拼目录名用）+ 相对路径组件校验（拼包内文件用），加上 zip 条目名归一化后的再校验。三处都用同一个 `validate_relative_file`，逻辑集中、不易出现某条路径漏校验。
+1. **信任根与包内路径分层防御**：`validate_pack_id` 约束 id；`resolve_pack_dir` canonicalize 根/目标并拒绝非直接子目录与 symlink/junction；`validate_relative_file` 再约束包内文件和 zip 条目。包目录 containment 与包内资源 containment 是两条独立边界。
 2. **资源耗尽防御**：压缩前 25 MiB、解压后累计 25 MiB、文件数 100、清单 256 KiB，四道闸覆盖空包 / 超大包 / 解压炸弹 / 解析炸弹。
 3. **原子性与无残留**：临时目录 + `rename` + 失败清理，避免半成品包污染 `packs/`。
-4. **重复 id 拒绝而非覆盖**：`dest.exists()` 即报错（`pack/mod.rs:128`），不会静默覆盖用户已有同名包。
+4. **重复 id 拒绝而非覆盖**：新目标解析使用 `symlink_metadata`，任何同名文件、目录或链接都报错，不会静默覆盖用户已有路径。
 5. **头像不落地为可执行/可注入内容**：头像只被读成 base64 data URL，扩展名白名单排除了 SVG（可含脚本）等。
 6. **角色包无法越权改写引擎规则**：`engine_base()` 作为不参与裁剪的 `base` 置顶，安全规则分区优先级（95）高于 persona（90），结构上保证角色设定不能凌驾于安全/工具约束之上。
 7. **不暴露本地绝对路径**：头像走 data URL 而非文件路径回前端。
+8. **运行时旁路 fail closed**：当前包设置保存要求目标存在；memory、skills 与梦境材料在解析失败时省略 pack 来源，其他 Result API 直接返回错误。
 
 ---
 

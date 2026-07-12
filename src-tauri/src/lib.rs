@@ -525,6 +525,8 @@ fn save_settings(
     state: State<'_, AppState>,
     settings: Settings,
 ) -> Result<(), String> {
+    let packs_dir = state.packs_dir.lock().unwrap().clone();
+    pack::resolve_pack_dir(&packs_dir, &settings.current_pack)?;
     let current_launch_on_startup = state.settings.lock().unwrap().launch_on_startup;
     if settings.launch_on_startup != current_launch_on_startup {
         startup::apply_launch_on_startup(settings.launch_on_startup)?;
@@ -824,6 +826,7 @@ fn preview_pack_lorebook(
     query: String,
 ) -> Result<String, String> {
     let packs_dir = state.packs_dir.lock().unwrap().clone();
+    pack::resolve_pack_dir(&packs_dir, &id)?;
     let data_dir = state.data_dir.lock().unwrap().clone();
     let settings = state.settings.lock().unwrap().clone();
     let embed = crate::embed::provider_from_settings(&state.http, &settings);
@@ -878,10 +881,8 @@ fn remove_pack_live2d(
 /// 在系统文件管理器中打开指定角色包目录。
 #[tauri::command]
 fn open_pack_dir(state: State<'_, AppState>, id: String) -> Result<(), String> {
-    let dir = state.packs_dir.lock().unwrap().clone().join(&id);
-    if !dir.is_dir() {
-        return Err(format!("角色包 `{id}` 不存在"));
-    }
+    let packs_dir = state.packs_dir.lock().unwrap().clone();
+    let dir = pack::resolve_pack_dir(&packs_dir, &id)?;
     tools::execute_open(&dir.to_string_lossy()).map(|_| ())
 }
 

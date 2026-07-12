@@ -219,7 +219,7 @@ Demiurge/
 
 ## Security Model
 
-> 注意：2026-07-12 审查确认了若干高优先级边界。角色包自行放宽工具权限、权限规则跨会话/项目扩散、跨项目撤销、Windows 系统打开命令注入、direct 网页读取访问私网、deferred wrapper 共用授权、分支缓存跨项目复用和运行中回合写错会话已修复；角色包路径、MCP 动态工具风险下限，以及其余前端会话—工作区竞态仍待逐项修复。详情见 [代码审查报告](docs/CODE-REVIEW-2026-07-12.md)。
+> 注意：2026-07-12 审查确认了若干高优先级边界。角色包权限升级与路径越界、权限规则跨会话/项目扩散、跨项目撤销、Windows 系统打开命令注入、direct 网页读取访问私网、deferred wrapper 共用授权、分支缓存跨项目复用和运行中回合写错会话已修复；MCP 动态工具风险下限与其余前端会话—工作区竞态仍待逐项修复。详情见 [代码审查报告](docs/CODE-REVIEW-2026-07-12.md)。
 
 - 文件与 shell 工具只能访问当前会话绑定的项目根；未选择项目时回退到应用数据目录下的 `sandbox/`。
 - 路径先做词法校验，再做 canonicalize 校验，防止 `..`、符号链接和 junction 逃逸。
@@ -230,6 +230,7 @@ Demiurge/
 - Project/User 权限文件在进程内串行并通过同目录临时文件原子替换；工作区身份或规则存储无法验证时拒绝自动授权。旧版无项目身份的 `permissions.json` 不会自动应用，升级后需在当前项目重新确认 Project 规则。
 - direct `http_get` / `web_fetch` 只连接公开 HTTP(S) 地址：首跳和每次重定向都会重做 DNS 全答案校验，固定已验证 IP，并拒绝凭据 URL、loopback、私网、链路本地、组播、未指定和保留地址。该路径禁用系统代理以防代理重新解析目标；外部抓取 adapter 不经过本机 direct fetch。
 - Live2D 导入只复制普通文件，拒绝源链接/特殊文件；model3 的 Moc、纹理、物理、Pose、DisplayInfo、UserData、表情、动作和声音引用统一拒绝绝对路径、盘符、`.`/`..` 与链接逃逸。候选目录完整验证后以备份/rename 提交，任何提交错误都会尝试恢复旧目录和 manifest。
+- 角色包 id 只允许最长 128 字节的 ASCII 字母、数字、`-` 与 `_`；所有读取、修改、打开、Live2D、lore、memory 和 skills 入口都先 canonicalize `packs` 根与目标，要求目标是非链接的直接子目录。设置保存也拒绝无效或不存在的当前包。
 - `execute_tool` 只负责 deferred 分发；权限规则、角色包收紧策略、风险、确认内容、affected paths 与审计都绑定内层真实 target。允许 `open_path` 不会自动允许截图/OCR，旧的宽泛 wrapper Allow 也不再命中有效 target。
 - 写文件、shell、open_path、截图/OCR 等操作会先请求确认。
 - shell 限制 cwd、timeout 和 output cap。

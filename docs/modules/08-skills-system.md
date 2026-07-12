@@ -87,14 +87,17 @@ slash_response   = 解析 query → panel_state → format_panel（拼人类可�
 `discover(sandbox, data_dir, packs_dir, pack_id)` 按**固定顺序**扫描五类目录：
 
 ```rust
-// skills.rs:185-191
-for (scope, base) in [
+// skills.rs:189 起
+let mut roots = vec![
     (SkillScope::Global,     data_dir.join("skills")),
     (SkillScope::Project,    sandbox.join(".demiurge").join("skills")),
     (SkillScope::Repository, sandbox.join("skills")),
-    (SkillScope::Pack,       packs_dir.join(pack_id).join("skills")),
-    (SkillScope::Compat,     sandbox.join(".demiurge").join("compat").join("skills")),
-] {
+];
+if let Ok(pack_dir) = pack::resolve_pack_dir(packs_dir, pack_id) {
+    roots.push((SkillScope::Pack, pack_dir.join("skills")));
+}
+roots.push((SkillScope::Compat, sandbox.join(".demiurge").join("compat").join("skills")));
+for (scope, base) in roots {
     discover_skill_dir(&mut catalog, scope, &base);
 }
 ```
@@ -107,7 +110,7 @@ for (scope, base) in [
 | 4 | Pack | `{packs_dir}/{pack_id}/skills/` | 绑定当前角色包（persona）的能力 |
 | 5 | Compat | `{sandbox}/.demiurge/compat/skills/` | 项目内兼容能力入口 |
 
-`sandbox` / `data_dir` / `packs_dir` 三个根来自 `AppState`（`lib.rs:58-60` 的 `data_dir` / `sandbox_dir` / `packs_dir`），`pack_id` 取自 `settings.current_pack`（`lib.rs:191` 等处）。兼容目录仅作为额外本地能力入口，引擎不对该来源做任何特殊优待。
+`sandbox` / `data_dir` / `packs_dir` 三个根来自 `AppState`，`pack_id` 取自 `settings.current_pack`。Pack 根不是字符串拼接结果：`resolve_pack_dir` 要求 ASCII id、canonical direct child，并拒绝 symlink/junction；失败时只省略 Pack scope，其余四类发现继续。专项回归在 `packs` 的同级外部目录放置技能，并确认 `../outside` 不会加载它。兼容目录仅作为额外本地能力入口，引擎不对该来源做任何特殊优待。
 
 > **重要：发现顺序不等于优先级。** 上面的 `for` 顺序只决定「先把谁 push 进 catalog」。`discover` 末尾（`skills.rs:220-221`）会用 `(scope.label(), name)` 重新整体排序，所以最终列表的物理顺序是按 scope 标签字母序再按名字排。真正影响「哪条被注入」的是后续 `select` 的打分，而非发现顺序。同名 Skill 也**不会**互相覆盖——不同 scope 的同名 Skill 会因 `id = "{scope}-{name}"` 不同而共存。
 

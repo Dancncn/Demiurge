@@ -19,7 +19,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
 use super::manifest::{
-    pack_dir, read_manifest_no_avatar, read_manifest_with_avatar, validate_manifest_paths,
+    read_manifest_no_avatar, read_manifest_with_avatar, resolve_pack_dir, validate_manifest_paths,
     validate_pack_files, PackManifest, MAX_LIVE2D_IMPORT_BYTES, MAX_LIVE2D_IMPORT_FILES,
 };
 
@@ -49,10 +49,7 @@ pub fn import_live2d_folder(
     let _mutation_guard = LIVE2D_MUTATION_LOCK
         .lock()
         .map_err(|_| "Live2D 导入锁已损坏，已拒绝修改".to_string())?;
-    let pack_path = pack_dir(packs_dir, pack_id);
-    if !pack_path.is_dir() {
-        return Err(format!("角色包 `{pack_id}` 不存在"));
-    }
+    let pack_path = resolve_pack_dir(packs_dir, pack_id)?;
     let pack_base = pack_path
         .canonicalize()
         .map_err(|e| format!("角色包路径校验失败：{e}"))?;
@@ -331,10 +328,7 @@ pub fn resolve_live2d_model_path(packs_dir: &Path, pack_id: &str) -> Result<Stri
 }
 
 fn resolve_live2d_model_path_inner(packs_dir: &Path, pack_id: &str) -> Result<String, String> {
-    let dir = pack_dir(packs_dir, pack_id);
-    if !dir.is_dir() {
-        return Err(format!("角色包 `{pack_id}` 不存在"));
-    }
+    let dir = resolve_pack_dir(packs_dir, pack_id)?;
     let manifest = read_manifest_no_avatar(&dir)?;
     let live2d = manifest
         .live2d
@@ -362,10 +356,6 @@ pub fn live2d_bundle(packs_dir: &Path, pack_id: &str) -> Result<Live2DBundle, St
     let _mutation_guard = LIVE2D_MUTATION_LOCK
         .lock()
         .map_err(|_| "Live2D 修改锁已损坏，已拒绝读取".to_string())?;
-    let pack_path = pack_dir(packs_dir, pack_id);
-    if !pack_path.is_dir() {
-        return Err(format!("角色包 `{pack_id}` 不存在"));
-    }
     let model_path = PathBuf::from(resolve_live2d_model_path_inner(packs_dir, pack_id)?);
     let model_dir = model_path
         .parent()
@@ -873,10 +863,7 @@ pub fn remove_live2d(packs_dir: &Path, pack_id: &str) -> Result<PackManifest, St
     let _mutation_guard = LIVE2D_MUTATION_LOCK
         .lock()
         .map_err(|_| "Live2D 修改锁已损坏，已拒绝修改".to_string())?;
-    let dir = pack_dir(packs_dir, pack_id);
-    if !dir.is_dir() {
-        return Err(format!("角色包 `{pack_id}` 不存在"));
-    }
+    let dir = resolve_pack_dir(packs_dir, pack_id)?;
     let mut manifest = read_manifest_no_avatar(&dir)?;
     if manifest.live2d.is_none() {
         return read_manifest_with_avatar(&dir);

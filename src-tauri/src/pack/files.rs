@@ -12,10 +12,10 @@ use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
 use super::manifest::{
-    avatar_mime, pack_dir, read_manifest_no_avatar, read_manifest_with_avatar, resolve_pack_file,
-    validate_lore_file_extension, validate_relative_file, PackFileContent, PackFileEntry,
-    PackLoreFile, PackManifest, DEFAULT_LORE_EXTENSIONS, MAX_LORE_FILE_BYTES, MAX_LORE_INDEX_FILES,
-    MAX_PACK_LIST_ENTRIES, MAX_PACK_READ_BYTES,
+    avatar_mime, read_manifest_no_avatar, read_manifest_with_avatar, resolve_pack_dir,
+    resolve_pack_file, validate_lore_file_extension, validate_relative_file, PackFileContent,
+    PackFileEntry, PackLoreFile, PackManifest, DEFAULT_LORE_EXTENSIONS, MAX_LORE_FILE_BYTES,
+    MAX_LORE_INDEX_FILES, MAX_PACK_LIST_ENTRIES, MAX_PACK_READ_BYTES,
 };
 
 /// 计算 manifest 的授权缺失警告（非阻塞）。avatar/persona/lore 无 credit 记录时提示。
@@ -47,10 +47,7 @@ pub fn import_pack_lore_files(
     id: &str,
     files: Vec<PackLoreFile>,
 ) -> Result<PackManifest, String> {
-    let dir = pack_dir(packs_dir, id);
-    if !dir.is_dir() {
-        return Err(format!("角色包 `{id}` 不存在"));
-    }
+    let dir = resolve_pack_dir(packs_dir, id)?;
     let manifest = read_manifest_no_avatar(&dir)?;
     if files.is_empty() {
         return Err("没有可导入的 lore 文件".to_string());
@@ -108,10 +105,7 @@ pub fn list_pack_files(
     id: &str,
     sub_dir: Option<&str>,
 ) -> Result<Vec<PackFileEntry>, String> {
-    let dir = pack_dir(packs_dir, id);
-    if !dir.is_dir() {
-        return Err(format!("角色包 `{id}` 不存在"));
-    }
+    let dir = resolve_pack_dir(packs_dir, id)?;
     let base = dir
         .canonicalize()
         .map_err(|e| format!("路径校验失败：{e}"))?;
@@ -168,10 +162,7 @@ pub fn list_pack_files(
 
 /// 读取包内单个文件：md/txt/json 返 text，图片返 base64 data URL，其余仅返大小。
 pub fn read_pack_file(packs_dir: &Path, id: &str, path: &str) -> Result<PackFileContent, String> {
-    let dir = pack_dir(packs_dir, id);
-    if !dir.is_dir() {
-        return Err(format!("角色包 `{id}` 不存在"));
-    }
+    let dir = resolve_pack_dir(packs_dir, id)?;
     validate_relative_file(path, "path")?;
     let joined = dir.join(path);
     let canon = joined
