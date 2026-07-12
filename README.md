@@ -33,7 +33,7 @@ Demiurge 是一个桌面伴侣 Agent 的“空引擎”。它不绑定具体角�
 - **可控安全**：写文件、shell、打开路径、截图/OCR 等敏感操作走确认门；文件工具被限制在当前会话项目根；角色卡可声明 permission 偏好，在用户规则与工具默认之间形成可配置 overlay。
 - **可持续推进**：`/goal` 可以设置长期目标，普通回合结束后继续自动驱动，直到完成、暂停、阻塞或预算耗尽。
 - **Lorebook 向量召回**：本地 BM25 稀疏检索 + 远程 embedding 稠密检索 + RRF 混合融合，chunk 向量按 provider+维度缓存；`/recall` 与设置面板可视化命中关键词、score、索引状态。
-- **Live2D 面板**：角色包可挂载 Cubism 4/5 模型（`untitled-pixi-live2d-engine` + PixiJS v8），在应用内渲染带 idle 物理/眨眼/呼吸的 Live2D 面板，支持缩放与拖拽。需先运行 `npm run fetch:cubism-core` 取回 Live2D Cubism Core（私有运行时，不入库），再在设置 > 人物包导入模型文件夹。
+- **Live2D 面板**：角色包可挂载 Cubism 4/5 模型（`untitled-pixi-live2d-engine` + PixiJS v8），在应用内渲染带 idle 物理/眨眼/呼吸的 Live2D 面板，支持缩放与拖拽。文件夹导入会在临时目录复制、规范化并验证全部模型引用，成功后才替换旧模型。需先运行 `npm run fetch:cubism-core` 取回 Live2D Cubism Core（私有运行时，不入库）。
 
 ## 功能概览
 
@@ -95,7 +95,7 @@ Demiurge 是一个桌面伴侣 Agent 的“空引擎”。它不绑定具体角�
 ### Voice 与素材接口
 
 - Voice：语音输入（STT/ASR）已接入云端转写后端；语音输出支持云端与本地服务、语速/情感/streaming 请求参数、连接测试、失败降级，以及按句切分的播放队列、静音和打断。默认安装包不分发本地语音模型权重。
-- 角色包素材字段：avatar、Live2D（已实现，经 Tauri asset 协议加载）、voice（预留）等。
+- 角色包素材字段：avatar、Live2D（已实现，经后端受检 bundle 转成前端 blob/data URL）、voice（预留）等。
 
 ## 快速开始
 
@@ -229,6 +229,7 @@ Demiurge/
 - Session 权限按 session id 分桶并随会话删除；Project 权限按 canonical workspace identity 存入版本化 `project_permissions.json`，不会跨项目复用。
 - Project/User 权限文件在进程内串行并通过同目录临时文件原子替换；工作区身份或规则存储无法验证时拒绝自动授权。旧版无项目身份的 `permissions.json` 不会自动应用，升级后需在当前项目重新确认 Project 规则。
 - direct `http_get` / `web_fetch` 只连接公开 HTTP(S) 地址：首跳和每次重定向都会重做 DNS 全答案校验，固定已验证 IP，并拒绝凭据 URL、loopback、私网、链路本地、组播、未指定和保留地址。该路径禁用系统代理以防代理重新解析目标；外部抓取 adapter 不经过本机 direct fetch。
+- Live2D 导入只复制普通文件，拒绝源链接/特殊文件；model3 的 Moc、纹理、物理、Pose、DisplayInfo、UserData、表情、动作和声音引用统一拒绝绝对路径、盘符、`.`/`..` 与链接逃逸。候选目录完整验证后以备份/rename 提交，任何提交错误都会尝试恢复旧目录和 manifest。
 - 写文件、shell、open_path、截图/OCR 等操作会先请求确认。
 - shell 限制 cwd、timeout 和 output cap。
 - 子 Agent 默认只读，不允许写文件、跑 shell 或递归派生。

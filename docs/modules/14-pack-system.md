@@ -2,7 +2,7 @@
 
 > 审阅状态（2026-07-12）：角色包清单、zip 导入、persona、memory 与 skill 作用域已按当前源码复核；本轮项目工作区改动不改变角色包路径校验。固定行号请以符号名为准。
 
-> 安全复核进度：`runtime.permissions` 自放行已修复，清单只能声明 deny/ask/default，导入/保存和运行时均 fail closed。pack id 的 IPC 根目录约束与 Live2D 事务导入仍待后续独立提交；zip-slip 校验不能替代这些入口的修复。
+> 安全复核进度：`runtime.permissions` 自放行与 Live2D 事务导入已修复；清单权限只能声明 deny/ask/default，Live2D 全引用受 containment 约束且失败恢复旧模型。pack id 的 IPC 根目录约束仍待独立提交；zip-slip 或 Live2D 内部校验都不能替代该 IPC 边界。
 
 > 存档级技术原理文档。覆盖角色包的清单校验、persona 注入、头像 data URL 生成、zip 导入安全校验、默认包落地，以及角色包作为 memory / skills 作用域载体的衔接逻辑。
 >
@@ -24,7 +24,7 @@
 
 这种拆分的设计意图是：角色包是可被用户替换、可被第三方制作分发的「皮」，而引擎规则是不可被角色包覆盖的「骨」。两者在 `agent/prompt.rs` 中以不同优先级合成，保证再花哨的角色设定也无法改写工具/安全约束。
 
-模块顶部注释明确把当前定位写成「MVP 文本版清单，格式预留可成长字段（Live2D / TTS / 表情等）」（`src-tauri/src/pack/mod.rs:1`）。清单结构本身为扩展预留，现阶段已落地 `id` / `name` / `persona` / `avatar` / `live2d` 等字段（`live2d` 指向 `.model3.json` 相对路径，经 Tauri asset 协议加载）。注意区分：清单里的 TTS **字段**（角色 voice 偏好）仍是预留方向；voice 模块的 TTS **后端**已接通 dashscope + gpt-sovits 双后端（`voice.rs:193-249`），见 §6。
+模块顶部注释明确把当前定位写成「MVP 文本版清单，格式预留可成长字段（Live2D / TTS / 表情等）」。清单结构本身为扩展预留，现阶段已落地 `id` / `name` / `persona` / `avatar` / `live2d` 等字段；`live2d` 指向包内 `.model3.json`，后端读取受检资源 bundle，前端再改写为 blob/data URL。注意区分：清单里的 TTS **字段**仍是预留方向；voice 模块的 TTS **后端**已接通，见 §6。
 
 ---
 
@@ -46,7 +46,7 @@ pub struct PackManifest {
 
 `avatar_data_url` 是一个**派生字段**：磁盘清单里不存在它（`#[serde(... skip_serializing_if = "Option::is_none")]`），而是在 `read_manifest_with_avatar` 阶段把磁盘头像读出来、编码成 data URL 后填回内存对象，供前端直接 `<img src>` 渲染。这避免了前端再去走一次 Tauri 命令读图片字节，也避免暴露本地绝对路径。
 
-`live2d` 与 `avatar` 走**不同路径**：它只存相对路径字符串，**不** base64 进清单。原因是 Live2D 模型是多 MB 的 `.moc3` + 多张纹理 + 物理/动作 JSON，且 `.model3.json` 会以相对路径引用这些 sibling 文件。前端通过 `resolve_pack_live2d_path` 命令拿到绝对路径，再用 `convertFileSrc` 转成 Tauri asset 协议 URL（`$APPDATA/packs/**` scope）交给 `untitled-pixi-live2d-engine`，引擎以该 URL 为 base 原生 fetch 全部相对引用。
+`live2d` 与 `avatar` 走**不同路径**：清单只存 model3 相对路径，不把大模型内联进 manifest。打开面板时，`pack_live2d_bundle` 解析 model3，使用与导入相同的引用校验器读取 Moc/纹理/物理/Pose/DisplayInfo/UserData/表情/动作/声音，编码为 bundle；前端把图片转 data URL、其余资源转 blob URL，并重写 model3 引用后交给渲染引擎。磁盘绝对路径不会直接成为模型加载基址。
 
 ```rust
 // src-tauri/src/pack/mod.rs:28
@@ -240,7 +240,7 @@ extract_archive(prefix → temp)                           pack/mod.rs:141 / 289
 
 ## 6. 已知限制与扩展点
 
-- **清单是 MVP 文本版，部分「成长字段」已落地**。`live2d`（指向 `.model3.json` 的相对路径，经 Tauri asset 协议加载，非 data URL）已在 `PackManifest` 中落地并通过 `import_live2d_folder` / `resolve_pack_live2d_path` / `remove_live2d` 命令暴露。源码注释列出的清单级 TTS / 表情等**字段**仍是预留方向（角色包 manifest 的 voice 偏好字段），但 voice 模块的 TTS **后端**已接通（见本节上一条），请勿把"清单字段未落地"误写成"TTS 后端未接通"。
+- **清单是 MVP 文本版，部分「成长字段」已落地**。`live2d` 指向 `.model3.json` 相对路径，已通过 staging 导入、受检 bundle 与移除命令暴露；清单级 TTS / 表情等**字段**仍是预留方向，但 voice 模块的 TTS **后端**已接通（见本节上一条），请勿把“清单字段未落地”误写成“TTS 后端未接通”。
 - **语音后端与播放队列已接通**。角色包 manifest 的 `runtime.voice` 作为 system prompt hint 渲染（角色偏好音色/语气），后端支持 STT、云端/本地 TTS、连接测试、失败降级和语速/情感参数；前端按模型文字增量分句排队并支持静音/打断。角色包 voice 偏好与 Live2D 口型/动作联动仍是扩展点。
 - **头像无大小上限**。`MAX_IMPORT_BYTES` 只约束 zip 导入；对一个已落地包，`avatar_data_url` 会把整张图 base64 进内存/panel 状态，超大头像可能放大 IPC 负载。
 - **`manifest.id` 与目录名强绑定**。导入后 id 不可改名（改名等于新包），且大小写/同名冲突依赖文件系统语义。

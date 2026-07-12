@@ -1,6 +1,6 @@
 # 19 — Live2D 面板（MVP）
 
-> 审阅状态（2026-07-12）：应用内面板能力已复核；生产构建中的 Live2D vendor 约 1.1 MB，仍触发非阻断体积警告。语音播放队列已实现，但口型/动作联动仍未实现。
+> 审阅状态（2026-07-12）：应用内面板与资源 bundle 已复核；文件夹导入现已具备全引用 containment、staging 验证和失败回滚。生产构建中的 Live2D vendor 约 1.1 MB，仍触发非阻断体积警告；语音播放队列已实现，但口型/动作联动仍未实现。
 
 本篇讲 Demiurge 如何把一个 Cubism 4/5 Live2D 模型挂到角色包上、在应用内渲染出来，以及当前 MVP 的边界与待打磨项。面向想扩展桌宠外壳或接 TTS 口型同步的协作者。
 
@@ -22,21 +22,16 @@ Live2D 是角色包的**可选素材**，与 `avatar`（静态头像）并列。
 
 本项目用 Vite 6 + React 18，配 Pixi v8 最顺，故选本库。安装：`pixi.js@^8`、`@pixi/sound@^6`（引擎 peer，SoundManager 在模块加载期就引用）、`untitled-pixi-live2d-engine`。
 
-### 2.2 资源加载：Tauri asset 协议（不是 data URL，也不是 `read_pack_file`）
+### 2.2 资源加载：后端受检 bundle + 前端 blob/data URL
 
-Live2D 模型是多 MB 的 `.moc3` + 多张纹理 + `.physics3.json` + `.cdi3.json`，且 `.model3.json` 以**相对路径**引用这些 sibling 文件。这与 `avatar`（单张图，base64 成 `avatarDataUrl` data URL 塞进 manifest）完全不同——把几 MB 的 moc3 + 纹理 base64 进清单既爆 `MAX_PACK_READ_BYTES`，也破坏相对引用。
+Live2D 模型是 `.model3.json` + `.moc3` + 纹理 + 物理/Pose/DisplayInfo/UserData/表情/动作/声音的引用图。清单仍只保存 model3 相对路径，不把大模型内联进 manifest；真正打开面板时走专用 bundle：
 
-引擎的 `CubismModelSettings` 拿到 model3.json 的 URL 后，用 `new URL(relative, base)` 原生解析 sibling，再逐个 fetch。所以只要给引擎一个**能原生解析相对路径的 base URL**，它自己会把 `.moc3`/纹理/物理/cdi 全部取回来。
+- `pack_live2d_bundle` 先 canonicalize model 文件与模型根，再解析 `FileReferences`。Moc、Textures、Physics、Pose、DisplayInfo、UserData、Expressions.File、Motions.File/Sound 都必须通过同一个便携路径 + canonical containment 解析器。
+- 后端只读取模型根内的普通文件，把每项资源作为 `{ path, mime, base64 }` 返回。绝对路径、盘符/UNC、`.`/`..`、链接逃逸、缺失或类型错误会在文件字节进入 IPC 前失败。
+- `createLive2DBlobModelUrl` 把图片做成带 MIME 的 data URL，把 moc/json/audio 做成 blob URL；随后按资源 map 重写 model3 的每个引用，再把重写后的 model3 本身做成 blob URL。
+- `Live2DPanel` 把这个 model blob URL 交给引擎。模型加载完成或失败/重载时统一 revoke blob URL，不把磁盘绝对路径当作浏览器资源基址。
 
-Tauri 2 的 asset 协议正好满足：`convertFileSrc(绝对路径)` 把本地路径转成 `https://asset.localhost/<编码路径>`（Windows），引擎从这个 URL fetch model3.json，再相对解析出 sibling 的 asset URL，全部命中 asset scope。
-
-实现：
-
-- `tauri.conf.json` 的 `app.security.assetProtocol` 开 `enable: true`，scope `["$APPDATA/packs/**"]`（`$APPDATA` 解析到 app data dir，即 `packs_dir`）。
-- `Cargo.toml` 给 `tauri` 加 `protocol-asset` feature（开启 assetProtocol 时 Tauri 2 强制要求，否则 build script 报错）。
-- 前端不直接读文件字节，而是调 `resolve_pack_live2d_path` 拿绝对路径，再 `convertFileSrc` 转 URL 交给引擎。
-
-> 现有的 `read_pack_file`（`pack/mod.rs`）对 `.moc3` 这类非文本非图片二进制返回空（`PackFileContent { text: None, data_url: None }`），对 Live2D 不可用——这反证了 asset 协议才是正道。
+仓库仍保留 Tauri asset protocol 配置和 `resolve_pack_live2d_path` 兼容命令，但当前面板主路径使用受检 bundle；安全结论不能依赖 WebView 对本地 asset URL 的编码行为。
 
 ### 2.3 Cubism Core：私有运行时，用户自取，动态注入
 
@@ -65,45 +60,47 @@ Pixi v8 + 引擎 + `@pixi/sound` 体积大（构建后 `vendor-live2d` chunk 约
   └─ @tauri-apps/plugin-dialog open({directory:true})
        └─ invoke import_pack_live2d_folder(packId, srcDir)
             └─ pack::import_live2d_folder
-                 ├─ 校验源目录有且仅有 1 个 .model3.json
-                 ├─ 清空并重建 <pack>/live2d/，递归复制（文件数/字节数上限）
-                 ├─ read_manifest_no_avatar → manifest.live2d = "live2d/<model>.model3.json"
-                 ├─ validate_manifest_paths + validate_pack_files
-                 └─ 写回 manifest.json，返回更新后的 PackManifest
+                 ├─ 获取 Live2D mutation lock；canonicalize 源/目标
+                 ├─ 在包内建立唯一 staging；只复制普通文件（200 文件 / 200 MB 上限）
+                 ├─ staging 顶层必须恰有一个 .model3.json
+                 ├─ 全 FileReferences 做便携路径 + canonical containment 校验
+                 ├─ 非 ASCII 引用只在 staging 内移动到 normalized_assets/ 并全部重写
+                 ├─ 完整复核候选模型树，预写并 sync manifest 临时文件
+                 ├─ 备份旧 live2d/ 与 manifest，rename 提交新目录/清单
+                 └─ 最终复核失败则回滚旧目录和清单；成功才清理备份
        └─ 前端刷新 packs + manifest JSON 编辑器
 
 侧栏 > Live2D
   └─ Live2DPanel 挂载（React.lazy + Suspense）
        └─ loadModel()
-            ├─ invoke resolve_pack_live2d_path(packId) → 绝对路径
-            ├─ convertFileSrc(absPath) → https://asset.localhost/.../xxx.model3.json
-            └─ loadLive2DModel(url, canvas)
+            ├─ invoke pack_live2d_bundle(packId) → model JSON + base64 assets
+            ├─ createLive2DBlobModelUrl() → 重写全部引用的 model blob URL
+            └─ loadLive2DModel(blobUrl, canvas)
                  ├─ ensureCubismCore() → 动态注入 live2dcubismcore.min.js
                  ├─ 动态 import pixi.js + untitled-pixi-live2d-engine/cubism
                  ├─ extensions.add(Live2DPlugin)（仅首次，模块级守卫）
                  ├─ await app.init({ preference:"webgl", backgroundAlpha:0, resizeTo })
-                 ├─ configureCubismSDK({ memorySizeMB:32 })
-                 └─ Live2DModel.from(url, { textureOptions:{lod:"single-auto"}, autoUpdate:true })
-                      └─ 引擎以 url 为 base，fetch .moc3 / 纹理 / .physics3.json / .cdi3.json（全部走 asset 协议）
+                 ├─ configureCubismSDK({ memorySizeMB:128 })
+                 └─ Live2DModel.from(url, { textureOptions:{lod:false}, autoUpdate:true })
+                      └─ 引擎读取已重写为 blob/data URL 的资源，不再解析磁盘相对路径
 ```
 
 ## 4. 关键文件
 
 | 关注点 | 位置 |
 |---|---|
-| manifest 字段 | `src-tauri/src/pack/mod.rs:44` `pub live2d: Option<String>` |
-| 路径校验 | `src-tauri/src/pack/mod.rs` `validate_manifest_paths`（live2d 块：相对路径 + `.model3.json` 后缀） |
-| 存在性校验 | `src-tauri/src/pack/mod.rs` `validate_pack_files`（live2d 块） |
-| 文件夹导入 | `src-tauri/src/pack/mod.rs:814` `import_live2d_folder` + `:873` `copy_live2d_dir_recursive` |
-| 路径解析 | `src-tauri/src/pack/mod.rs:912` `resolve_live2d_model_path`（返回绝对路径） |
-| 移除 | `src-tauri/src/pack/mod.rs:930` `remove_live2d` |
-| Tauri 命令 | `src-tauri/src/lib.rs:945/956/963` 三个 `#[tauri::command]`，`:2333` 起注册，`:2256` dialog 插件 |
-| asset 协议 | `src-tauri/tauri.conf.json` `app.security.assetProtocol` |
+| manifest 字段 | `src-tauri/src/pack/manifest.rs` `PackManifest.live2d` |
+| manifest 路径/存在性 | `validate_manifest_paths` / `validate_pack_files` |
+| 事务导入与回滚 | `src-tauri/src/pack/live2d.rs` `import_live2d_folder` / `install_prepared_live2d` |
+| 内部引用边界 | `normalize_live2d_reference` / `resolve_model_relative_file` / `collect_live2d_refs_checked` |
+| 受检资源读取 | `live2d_bundle` / `resolve_live2d_model_path` |
+| 移除 | `src-tauri/src/pack/live2d.rs` `remove_live2d` |
+| Tauri 命令 | `import_pack_live2d_folder` / `resolve_pack_live2d_path` / `pack_live2d_bundle` / `remove_pack_live2d` |
 | dialog 权限 | `src-tauri/capabilities/default.json` `dialog:default` |
-| Cargo feature | `src-tauri/Cargo.toml` `tauri = { features = ["protocol-asset"] }` + `tauri-plugin-dialog` |
-| 引擎初始化 | `src/lib/live2d.ts:21` `ensureCubismCore`、`:56` `loadLive2DModel` |
-| 面板组件 | `src/components/Live2DPanel.tsx:14`（canvas 生命周期、缩放、拖拽、重载） |
-| 设置 UI | `src/components/SettingsDialog.tsx:2272` Live2D Section、`:1001/1023` 导入/移除 handler、`:839` `currentPackManifest` |
+| bundle URL 改写 | `src/lib/live2d.ts` `createLive2DBlobModelUrl` |
+| 引擎初始化 | `src/lib/live2d.ts` `ensureCubismCore` / `loadLive2DModel` |
+| 面板组件 | `src/components/Live2DPanel.tsx`（bundle、canvas 生命周期、缩放、拖拽、重载） |
+| 设置 UI | `src/components/SettingsDialog.tsx` Live2D 导入/移除区域 |
 | Cubism Core 下载 | `scripts/fetch-cubism-core.mjs` |
 | bundle 隔离 | `vite.config.ts` `manualChunks`（`vendor-live2d`）+ `src/App.tsx` `React.lazy` |
 
@@ -112,8 +109,8 @@ Pixi v8 + 引擎 + `@pixi/sound` 体积大（构建后 `vendor-live2d` chunk 约
 - `extensions.add(Live2DPlugin)` 必须在 `app.init()` 之前注册，否则 live2d 渲染管线不会安装。`live2d.ts` 用模块级 `engineInitialized` 守卫，只在首次 `loadLive2DModel` 调用时注册。
 - `preference: "webgl"` 必须显式传——Live2D 渲染管线是 WebGL-only，Pixi v8 默认 `auto-detect` 可能选 WebGPU 导致模型不渲染。
 - `Application` 在 Pixi v8 是异步的：`await app.init(...)` 之后才能 `addChild`。
-- `configureCubismSDK({ memorySizeMB: 32 })` 把 Cubism Core 工作内存从默认 16MB 提到 32MB，避免复杂/4096 纹理模型卡更新。
-- `textureOptions: { lod: "single-auto" }` 让引擎按屏幕尺寸按需生成降采样图集，规避 4096 纹理在低显存 WebView 上超 `MAX_TEXTURE_SIZE`。
+- `configureCubismSDK({ memorySizeMB: 128 })` 为复杂模型预留更充足的 Cubism Core 工作内存。
+- 当前 `textureOptions: { lod: false }`，加载后还会检查每张 texture 是否有 source；这能把纹理失败显式转成面板错误，但不会主动降低 4096 纹理显存占用。
 - **`eyeBlink` / `breathDepth` 不是 `Live2DFactoryOptions` 的有效字段**（那是原 `pixi-live2d-display` 的 API）。Untitled 引擎默认就开自动眨眼（`EyeBlink` 组存在时驱动 `ParamEyeLOpen`/`ParamEyeROpen`）和 CubismBreath（呼吸/微晃），无需显式传。要关掉得在加载后改 `model.internalModel`，MVP 未暴露这个开关。
 
 ## 6. 限制与待打磨
@@ -125,15 +122,22 @@ Pixi v8 + 引擎 + `@pixi/sound` 体积大（构建后 `vendor-live2d` chunk 约
 - **眨眼/呼吸开关**：面板只有缩放和重载，没暴露眨眼/呼吸 toggle（引擎 API 不支持 factory option 级开关，要在 `internalModel` 上改，留到下一轮）。
 
 ### 6.2 已知风险点
-- **CJK 路径**：模型路径含 `三月七` 等非 ASCII 字符。`convertFileSrc` 会 URL 编码，asset 协议解码后应能命中。若引擎 fetch sibling 报 404，先查 asset scope 是否真覆盖到含 CJK 的绝对路径，必要时把 scope 放宽到 `$APPDATA/**` 排查。
-- **4096 纹理**：`texture_00.png` / `texture_01.png` 是 4096×4096。`lod: "single-auto"` 会按需降采样；若仍 OOM 或纹理黑，检查 GPU VRAM（4096² RGBA ≈ 64MB/张）。
+- **大纹理与 IPC 体积**：bundle 把资源 base64 送到前端，且当前关闭 LOD。4096² RGBA 纹理展开约 64 MB/张，超大模型虽然受 200 MB/200 文件导入上限约束，仍可能放大 IPC、内存和 GPU 压力。
+- **进程异常退出的隐藏备份**：普通函数错误会执行目录/manifest 回滚；若进程在极短的 rename 提交窗口被强制终止，包目录可能留下 `.live2d-*.bak/.tmp`，后续可增加启动恢复/清理日志进一步加固崩溃一致性。
 - **Cubism Core 缺失**：用户未跑 `npm run fetch:cubism-core` 时，`ensureCubismCore` 的 `onerror` 会抛「Failed to load Cubism Core. Run: npm run fetch:cubism-core」，面板进 error 态。
-- **`$APPDATA` scope 解析**：Tauri 2 的 `$APPDATA` 应解析到含 identifier 的 app data dir（`.../com.demiurge.engine/packs`）。若 asset 报 "not allowed"，先确认解析结果是否含 identifier，必要时放宽 scope。
 - **License**：Cubism Core 受 Live2D Proprietary Software License 约束（非商业免费，商业需 Release License）。本项目不分发该文件，由用户自行下载接受许可。
 
 ### 6.3 测试覆盖
-- `pack/mod.rs` 的 `validates_manifest_identity_and_paths` 已补 `live2d: None` + `credits` + `license` 字段（此前字面量缺 `credits`/`license` 会导致 `cargo test` 编译失败，顺手修）。
-- **未覆盖**：`import_live2d_folder` / `resolve_live2d_model_path` / `remove_live2d` 的行为测试尚未补（涉及真实文件系统复制，可仿 `imports_zip_pack_and_exposes_avatar_data_url` 的临时目录模式补）。
+
+`pack::live2d::tests` 使用真实临时目录覆盖：
+
+- Unix 根路径、UNC、Windows drive/prefix、`.`/`..`、空组件、尾点/空格与保留设备名拒绝；
+- 绝对、父目录和 Windows 路径导入失败时，旧 manifest/模型及包外文件字节保持不变；
+- Moc、纹理、Physics、Expression、Motion、Sound 的非 ASCII 文件全部在 staging 内改名并重写，bundle 可完整读取；
+- 源 symlink 与已有模型引用 symlink 逃逸均拒绝；
+- 故意让 manifest 提交失败，验证新目录被移除、旧目录和旧 manifest 恢复且无临时 artifact。
+
+`remove_live2d` 的显式删除成功/失败分支仍可补独立行为测试；它不影响本次不可信导入的安全闭环。
 
 ## 7. 扩展指引
 

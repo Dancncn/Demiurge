@@ -96,7 +96,7 @@ Demiurge 当前已经具备本地桌面 Agent 的主体能力：会话、工具�
 - [x] **项目/会话权限真正隔离**：Project scope 按 canonical 项目根分桶，Session scope 按 session id 分桶并随会话删除；turn-owned 权限上下文绑定裁决、审计与确认记忆，存储/身份错误 fail closed，旧无作用域 Project 文件不自动应用。
 - [x] **撤销记录绑定项目身份**：undo entry 保存 canonical workspace root；预览和执行撤销前重新规范化当前项目根并要求身份一致，跨项目记录不会被读取或写回。
 - [ ] **角色包 IPC 根目录校验**：所有 pack id 在 join 前验证；列表、读取、Live2D 与 lore 命令都必须确认解析结果仍在 `packs_dir`。
-- [ ] **Live2D 事务化安全导入**：不可信资源引用拒绝绝对路径和 `..`，重命名也做 containment；先在临时目录完整校验，再原子替换旧模型。
+- [x] **Live2D 事务化安全导入**：源链接/特殊文件直接拒绝；全部 model3 资源引用只允许受 containment 约束的便携 Normal component；候选模型在 staging 中复制、ASCII 重写并全量验证，提交故障回滚旧模型与 manifest。
 - [x] **公开 URL SSRF 防护**：direct HTTP 工具拒绝 credentials、loopback、私网、链路本地、CGNAT、未指定/保留/组播地址；每跳校验全部 DNS 答案、固定已验证 IP、禁用代理/自动重定向并复核 peer。
 - [x] **Windows 系统打开去除命令解释器**：Windows 直接调用 `ShellExecuteW`，目标作为独立 UTF-16 参数传入并拒绝内部 NUL；元字符、引号、空格、URL query 与本地路径已有回归覆盖。
 - [ ] **deferred 工具按目标授权**：`execute_tool` 的记忆规则包含实际 tool name，或在 wrapper 内再次走目标工具权限门。
@@ -105,7 +105,7 @@ Demiurge 当前已经具备本地桌面 Agent 的主体能力：会话、工具�
 
 ## P2/P3 / 正确性、协议、体验与门禁修复队列
 
-- [ ] **恢复 Rust 格式门禁**：修正 `src-tauri/src/pack/live2d.rs:303` 的 rustfmt 差异，确保全仓 `cargo fmt -- --check` 通过。
+- [x] **恢复 Rust 格式门禁**：`live2d.rs` 已随事务导入修复统一格式，`cargo fmt -- --check` 恢复通过。
 - [ ] **历史工具状态结构化**：持久化 ok/denied/failed、错误、耗时和受影响路径；未知状态不显示为绿色成功。
 - [ ] **第三种供应商 SSE 对齐**：复用公共解码器，处理无换行流尾、多行 data、命名/内嵌错误，并拒绝静默 JSON 丢弃。
 - [ ] **完整流终止校验与解码上限**：缺少协议终止事件的 clean EOF 不能归一为 stop；为单行、单事件和累计缓冲设置字节上限。
@@ -222,7 +222,7 @@ Demiurge 当前已经具备本地桌面 Agent 的主体能力：会话、工具�
 - [x] **桌面陪伴壳**：新增非 Live2D 的透明置顶桌面小窗，支持轻量状态展示、点击穿透、可收起/展开和主窗口入口，避免遮挡工作流。
 - [x] **Live2D 面板 MVP**：使用 `untitled-pixi-live2d-engine`（PixiJS v8 原生渲染管线，Cubism 2–5）在应用内渲染 Live2D 模型面板；角色包 manifest 新增 `live2d` 字段指向 `.model3.json`；支持文件夹导入、idle 物理/眨眼、缩放和拖拽；Cubism Core 由用户自行下载（`npm run fetch:cubism-core`）。
 - [ ] **Live2D 桌宠方案**：在面板 MVP 基础上，做独立透明置顶桌宠窗口，支持透明背景、置顶、拖拽、缩放、隐藏/显示和基础表情动作。
-- [ ] **Live2D 资产管理（扩展）**：在已落地的 `live2d` 路径字段基础上，扩展模型版本、默认动作、表情映射和授权说明；导入时校验模型文件、纹理路径和包内相对路径，避免路径穿越。
+- [ ] **Live2D 资产管理（扩展）**：安全导入、全引用校验与事务回滚已完成；继续扩展模型版本、默认动作、表情映射和授权说明。
 - [ ] **Live2D 状态映射**：把 Companion 状态映射到表情/动作，例如专注中低动作频率、休息时轻松动作、天气提醒时短动作；动作触发必须低频，避免干扰工作。
 - [ ] **Live2D 与语音联动**：TTS 播放时驱动口型或简化嘴型动画；无 TTS 时只做轻量 idle，不做默认常驻麦克风监听。
 - [x] **桌宠窗口权限边界**：桌面陪伴壳不默认读取屏幕、麦克风或精确位置；Settings 与桌面小窗展示屏幕/麦克风/位置状态，截图/OCR/语音/天气沿用已有显式权限与状态提示。

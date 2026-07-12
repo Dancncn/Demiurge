@@ -122,7 +122,9 @@
 
 **建议**：首跳与每次重定向都拒绝 loopback、私网、链路本地、组播、未指定/保留地址；连接前复核实际 DNS 解析结果；本机开发服务使用独立显式授权。在闭环前先把工具改为 Ask。
 
-### P1-06 Live2D 导入可把包外文件移动进包内
+### P1-06 Live2D 导入可把包外文件移动进包内（已修复）
+
+**修复状态**：导入在包内同父级唯一 staging 目录完成，源目录仅复制普通文件并拒绝 symlink/junction、特殊文件、源根逃逸和目录循环。统一引用解析器只接受便携 Normal component，显式拒绝绝对/根路径、Windows prefix/盘符、`.`、`..`、ADS/保留名与不可移植尾缀；canonicalize 后还必须是候选模型根内的普通文件。Moc、Textures、Physics、Pose、DisplayInfo、UserData、Expressions.File、Motions.File/Sound 全部复用该边界，非 ASCII 引用统一移动到候选目录内的 ASCII 资源目录并重写。候选模型和 manifest 完整验证后才进入串行提交；旧模型目录与 manifest 均有同父级备份，目录/清单替换或最终复核失败会回滚。读取 bundle 也使用相同引用校验并拒绝链接逃逸。新增绝对/父目录/盘符、非 ASCII 全引用类型、链接、失败保留旧文件和提交故障回滚测试。
 
 **触发条件**：模型 JSON 的资源引用使用绝对路径或 `../`，且路径含非 ASCII 字符以触发重命名分支。
 
@@ -381,7 +383,9 @@
 
 建议在中小宽度使用 drawer/overlay 或 `clamp()`，必要时自动折叠侧栏，并为 980/1280/1811px 建立布局回归。
 
-### P3-03 全仓 Rust 格式门禁当前未通过
+### P3-03 全仓 Rust 格式门禁当前未通过（已修复）
+
+**修复状态**：P1-06 对 `live2d.rs` 的业务修改已统一经过 rustfmt，原换行差异自然消失；`cargo fmt --manifest-path src-tauri/Cargo.toml -- --check` 已恢复通过。
 
 `cargo fmt --manifest-path src-tauri/Cargo.toml -- --check` 在 `src-tauri/src/pack/live2d.rs:303` 报告一处纯换行格式差异。该问题不影响编译或 215 项测试，但会阻断把 rustfmt 作为强制门禁的流水线。本轮没有运行写入式格式化，以免超出“代码审查 + Markdown 更新”的授权范围。
 
