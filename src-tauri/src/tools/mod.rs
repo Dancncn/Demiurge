@@ -741,6 +741,45 @@ pub fn definition_for_state(state: &crate::AppState, name: &str) -> Option<ToolD
         .find(|t| t.name == name)
 }
 
+#[derive(Clone, Debug)]
+pub(crate) struct ToolAuthorizationTarget {
+    /// Capability identity used for rule lookup, remember, card overlay, and audit.
+    pub(crate) name: String,
+    /// Arguments interpreted by the real capability, excluding wrapper metadata.
+    pub(crate) args: Value,
+    /// The target capability definition. Invalid wrappers retain the outer
+    /// Privileged/Ask definition so parse failures can never lower security.
+    pub(crate) definition: Option<ToolDefinition>,
+    /// Present when a meta-tool invocation was safely resolved to its target.
+    pub(crate) wrapped_by: Option<&'static str>,
+}
+
+pub(crate) fn authorization_target_for_state(
+    state: &crate::AppState,
+    outer_name: &str,
+    outer_args: &Value,
+) -> ToolAuthorizationTarget {
+    if outer_name == "execute_tool" {
+        if let Ok(invocation) = execute_tool::parse_invocation(outer_args) {
+            if let Some(definition) = definition_for_state(state, &invocation.tool_name) {
+                return ToolAuthorizationTarget {
+                    name: invocation.tool_name,
+                    args: invocation.args,
+                    definition: Some(definition),
+                    wrapped_by: Some("execute_tool"),
+                };
+            }
+        }
+    }
+
+    ToolAuthorizationTarget {
+        name: outer_name.to_string(),
+        args: outer_args.clone(),
+        definition: definition_for_state(state, outer_name),
+        wrapped_by: None,
+    }
+}
+
 pub fn deferred_definitions() -> Vec<ToolDefinition> {
     registry()
         .into_iter()
@@ -1311,5 +1350,56 @@ mod registry_tests {
         assert!(SUBAGENT_READONLY_TOOL_NAMES.contains(&"list_dir"));
         assert!(SUBAGENT_READONLY_TOOL_NAMES.contains(&"http_get"));
         assert!(SUBAGENT_READONLY_TOOL_NAMES.contains(&"package_scripts"));
+    }
+
+    #[test]
+    fn deferred_authorization_uses_the_real_target_identity_and_metadata() {
+        let state = crate::AppState::new(reqwest::Client::new());
+        let open = authorization_target_for_state(
+            &state,
+            "execute_tool",
+            &json!({
+                "tool_name": "open_path",
+                "args": {"target": "https://example.com/path"}
+            }),
+        );
+        assert_eq!(open.name, "open_path");
+        assert_eq!(open.wrapped_by, Some("execute_tool"));
+        assert_eq!(open.args["target"], "https://example.com/path");
+        assert_eq!(open.definition.as_ref().unwrap().name, "open_path");
+        assert_eq!(
+            affected_paths(&open.name, &open.args),
+            vec!["https://example.com/path".to_string()]
+        );
+
+        let screen = authorization_target_for_state(
+            &state,
+            "execute_tool",
+            &json!({
+                "tool_name": "screen_capture_region",
+                "args": {"x": 1, "y": 2, "width": 3, "height": 4}
+            }),
+        );
+        assert_eq!(screen.name, "screen_capture_region");
+        assert_ne!(open.name, screen.name);
+        assert_eq!(
+            affected_paths(&screen.name, &screen.args),
+            vec![".demiurge/screens".to_string()]
+        );
+        let preview = confirmation_preview(&state, &screen.name, screen.args.clone()).unwrap();
+        assert!(preview.contains("x=1"));
+        assert!(preview.contains("width=3"));
+
+        // Invalid/core targets retain the outer Privileged/Ask boundary.
+        let invalid = authorization_target_for_state(
+            &state,
+            "execute_tool",
+            &json!({"tool_name": "shell", "args": {"command": "echo unsafe"}}),
+        );
+        assert_eq!(invalid.name, "execute_tool");
+        assert!(invalid.wrapped_by.is_none());
+        let definition = invalid.definition.unwrap();
+        assert_eq!(definition.risk, ToolRisk::Privileged);
+        assert_eq!(definition.permission.effect, PermissionEffect::Ask);
     }
 }

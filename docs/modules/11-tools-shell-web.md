@@ -46,7 +46,7 @@
 | `open_path` | Privileged | SerialOnly | Ask | `open_path::run`（deferred）|
 | `system_info` | ReadOnly | ParallelSafe | Allow | `system_info::run` |
 | `tool_search` | ReadOnly | ParallelSafe | Allow | `tool_search::run` |
-| `execute_tool` | Privileged | SerialOnly | Ask | `execute_tool::run` |
+| `execute_tool` | Privileged | SerialOnly | Ask | wrapper 解析失败时的保守兜底；有效调用改用真实 target metadata |
 
 ---
 
@@ -402,11 +402,12 @@ execute_tool(tool_name, args)  ── 校验是 deferred，再 match 路由到�
 
 **tool_search::run**（`tool_search.rs:10`）：对 `deferred_definitions()`（`mod.rs:743`，即 registry 中 `is_deferred_tool` 为真的项）做关键词打分——名称命中每词 +5，name+description+parameters 拼成的 haystack 命中每词 +1，按分降序、同分按名称升序排（`tool_search.rs:34`）。`limit` 默认 8、最大 20。输出末尾提示用 `execute_tool` 调用。它是 `ReadOnly`/`Allow`，只读本地元数据，不触网。
 
-**execute_tool::run**（`execute_tool.rs:11`）：
-1. `is_deferred_tool`（`mod.rs:168`）校验——若是已加载的 core tool 则报错「请直接调用」，杜绝用 execute_tool 绕过 core tool 的正常分发。
-2. `match` 路由到真实实现：`open_path` → `open_path::run`；`screen_*` → `screen::*`。未支持的 deferred 名返回错误（`execute_tool.rs:27`）。
+**execute_tool 的两段边界**：
 
-它是 `Privileged`/`Ask`，因为最终会触发打开路径、读屏、OCR 等系统能力。`execute_tool::preview`（`execute_tool.rs:31`）在确认门展示「将执行 deferred tool `<name>`，参数：<pretty json>」。
+1. runner 在 `tool-start` 和权限门之前调用 `authorization_target_for_state`；`parse_invocation` 再次要求 `tool_name` 属于 `DEFERRED_TOOL_NAMES`。成功后，规则 key、角色包 overlay、risk/default policy、确认 description/summary/preview、affected paths、remember 和 audit 全部切到真实 target + inner args。
+2. `execute_tool::run` 执行时再次解析同一不可变参数并做白名单校验，再 match 路由：`open_path` → `open_path::run`；`screen_*` → `screen::*`。core、未知或未支持 target 返回错误。
+
+外层 `execute_tool` 名称只用于模型 tool-call/result 配对、事件卡片和实际分发。解析失败时才保留 wrapper 自身的 `Privileged`/`Ask` metadata，确保格式错误不可能降低安全级别。因此任何已记住的宽泛 wrapper Allow 都不会命中有效 target；`open_path` 的 Session/Project/User 规则也不会扩散为截图或 OCR 授权。
 
 > 注意：`execute_tool` 自己并不做 `open_path` 的协议校验——校验在 `open_path::run` 内部完成（§4.2），因此无论直接调还是经 execute_tool 代理，安全闸门都生效。
 

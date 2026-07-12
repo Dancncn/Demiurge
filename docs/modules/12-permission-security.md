@@ -2,7 +2,7 @@
 
 > 审阅状态（2026-07-12）：项目选择和分支切换是用户直接触发的 Tauri 命令，不走模型工具权限门；分支枚举/切换会验证 canonical expected workspace，脏工作区由 UI 二次确认，活动回合期间由后端拒绝。文件 containment 以会话项目根为边界；权限规则归属则由不可变 session/workspace identity 强制。固定行号请以符号名为准。
 
-> 修复进度：角色包自放行与 Project/Session scope 隔离已修复——manifest 拒绝 allow/未知策略，运行时只允许 deny/ask 且不能把默认 Deny 放宽为 Ask；Session 按 id 分桶，Project 按 canonical workspace identity 分桶。`execute_tool` 目标级授权和 MCP read-only 注解信任仍待后续独立提交。
+> 修复进度：角色包自放行、Project/Session scope 隔离和 `execute_tool` 目标级授权已修复——manifest 权限只收紧；Session/Project 按不可变身份分桶；deferred 调用按真实 target 决策、记忆和审计。MCP read-only 注解信任仍待独立提交。
 
 > 存档级技术原理文档。读者：协作开发者。
 > 主要源文件：
@@ -74,6 +74,9 @@ runner 在任何 MCP/外部初始化 `await` 之前，用 `begin_turn` 所属 se
 
 ```
 模型返回 tool_call(name, args)
+        │
+        ▼
+若 name=execute_tool：校验 deferred target，授权身份/参数切换为真实 target/inner args
         │
         ▼
 default_policy = permission_policy_for_state(state, name)   // 注册表默认策略；未知工具回退到 ask()
@@ -328,6 +331,7 @@ Tauri v2 的能力（capability）系统决定前端 WebView 能调用哪些核�
 |--------|---------|---------|
 | 工具注册表 `tools/mod.rs` | 提供默认策略、风险等级、工具 schema；提供沙盒解析与审计辅助 | `permission_policy_for_state` / `definition_for_state` / `registry` / `resolve_in_sandbox` |
 | Agent 循环 `agent/runner.rs` | 初始化前捕获 turn-owned context；每次工具调用前按同一身份裁决、审计和记忆 | `context_for_session` → `decide_for_mode` → `audit` → `confirm` → `remember_response` |
+| deferred wrapper `tools/execute_tool.rs` | 只负责白名单解析与真实能力分发；授权 metadata 由 runner 按 target 提前解析 | `parse_invocation` / `authorization_target_for_state` |
 | 设置/会话存储 `store/mod.rs` | 提供 `PermissionMode`、`now_millis`、持久化 settings | `state.settings.permission_mode` |
 | Tauri 命令层 `lib.rs` | 回执 `respond_confirm`、中断 `interrupt`、计划 `approve_plan`/`reject_plan`/`set_permission_mode` | 见第三、四节 |
 | MCP 动态工具 `mcp` | 为 MCP 工具提供权限摘要；MCP 工具按 annotation 映射风险后接入同一权限门 | `permission_summary_for_state` 内的 `crate::mcp::permission_summary`（`tools/mod.rs:1103-1108`） |

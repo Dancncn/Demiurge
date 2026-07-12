@@ -319,7 +319,7 @@ dashscope 分支复用 §5 的 `media::synthesize_speech`，模型默认 `qwen3-
 - **screen ↔ ocr**：`screen::ocr_region/ocr_window` 截图后直接调 `ocr::recognize_rgba`，是 OCR 推理的主要调用方之一。
 - **voice ↔ media**：voice 模块复用 media 模块的 `dashscope_api_key` / `dashscope_base_url`（`voice.rs:12`），凭据与 base URL 解析逻辑统一在 media 一处。
 - **全局状态 `AppState`**：`OcrState` 是 `AppState.ocr` 字段（`lib.rs:61`）；截图落盘依赖 `AppState.sandbox_dir`；模型目录依赖 `AppState.data_dir`；HTTP 请求统一走 `AppState.http`（共享 `reqwest::Client`）。
-- **工具注册 / 权限门**：屏幕工具的风险等级、确认提示、deferred 归类都在 `tools/mod.rs` 定义，执行经 `tools/execute_tool.rs` 代理（`is_deferred_tool` 校验）。
+- **工具注册 / 权限门**：屏幕工具的风险等级、确认提示、deferred 归类都在 `tools/mod.rs` 定义。`execute_tool` 只保留模型协议分发身份；runner 会在确认前解析真实 screen/OCR target，并用其名称与内层参数做规则、preview、affected paths、remember 和审计，避免不同屏幕能力共享 wrapper 授权。
 
 ---
 

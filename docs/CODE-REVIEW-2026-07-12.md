@@ -10,7 +10,7 @@
 
 优先级最高的风险集中在两条所有权链：
 
-1. **权限所有权**：角色包权限升级与 Session/Project 规则跨边界复用已经修复；deferred/MCP 工具仍存在授权粒度降级。
+1. **权限所有权**：角色包权限升级、Session/Project 规则跨边界复用与 deferred wrapper 共用身份已经修复；MCP 动态工具仍存在风险下限降级。
 2. **项目所有权**：undo、分支操作与后端 turn 已绑定不可变的 workspace/session identity；前端会话快照的事务边界仍待修复。
 
 建议在发布或处理未受信角色包、外部工具服务、网页内容前，完成剩余 P1 队列。角色包权限自放行与权限作用域隔离已经修复；Auto/Bypass、外部工具 read-only 注解和其他尚未关闭的边界仍不能当成强隔离。
@@ -139,7 +139,9 @@
 
 **建议**：只允许 Normal path component，拒绝根、盘符、`..` 和链接逃逸；在独立临时目录完成复制、重写和全量验证，成功后原子替换。
 
-### P1-07 deferred 工具共享一个权限身份
+### P1-07 deferred 工具共享一个权限身份（已修复）
+
+**修复状态**：runner 在生成工具事件与进入权限门前调用 `authorization_target_for_state`。有效 `execute_tool` 调用会解析并再次校验 `tool_name` 必须属于 deferred 白名单，随后以真实 target 名称和内层 args 执行规则查找、角色包 overlay、风险/default policy、确认 description/summary/preview、affected paths、remember 与两次审计；模型协议中的外层 tool call/result 仍保持 `execute_tool`，不破坏配对。非法、未知或 core target 不会被解析为真实能力，继续使用外层 Privileged/Ask 兜底且执行层再次拒绝。新增解析白名单、open_path/screen metadata 映射，以及“open_path Session Allow 不命中 screen_capture_region、审计无 wrapper 身份”回归测试。旧的宽泛 `execute_tool` Allow 不再授权有效 target。
 
 **触发条件**：用户允许 `execute_tool` 执行低敏目标并选择 Session/Project/User 记忆，之后模型用同一 wrapper 调截图、OCR 或打开路径。
 

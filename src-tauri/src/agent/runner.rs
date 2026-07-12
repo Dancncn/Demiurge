@@ -507,9 +507,14 @@ pub async fn run_turn_with_options(
 
             let args: serde_json::Value =
                 serde_json::from_str(&tc.function.arguments).unwrap_or_else(|_| json!({}));
-            let tool_def = tools::definition_for_state(state, &name);
-            let preview = tools::confirmation_preview(state, &name, args.clone());
-            let affected_paths = tools::affected_paths(&name, &args);
+            let authorization = tools::authorization_target_for_state(state, &name, &args);
+            let permission_name = authorization.name;
+            let permission_args = authorization.args;
+            let tool_def = authorization.definition;
+            let wrapped_by = authorization.wrapped_by;
+            let preview =
+                tools::confirmation_preview(state, &permission_name, permission_args.clone());
+            let affected_paths = tools::affected_paths(&permission_name, &permission_args);
 
             events.tool_start(session_engine::ToolStartEvent {
                 tool_call_id: tc.id.clone(),
@@ -528,12 +533,18 @@ pub async fn run_turn_with_options(
                     state,
                     run_id,
                     "tool_started",
-                    json!({ "tool_call_id": tc.id.clone(), "name": name.clone(), "args": args.clone() }),
+                    json!({
+                        "tool_call_id": tc.id.clone(),
+                        "name": name.clone(),
+                        "args": args.clone(),
+                        "permission_target": permission_name.clone(),
+                        "wrapped_by": wrapped_by,
+                    }),
                 );
             }
 
             // 权限门（confirm 等待期间若用户点「停止」，interrupt 会立即唤醒并返回 deny-once）
-            let default_policy = tools::permission_policy_for_state(state, &name);
+            let default_policy = tools::permission_policy_for_state(state, &permission_name);
             let risk = tool_def
                 .as_ref()
                 .map(|t| t.risk)
@@ -541,16 +552,16 @@ pub async fn run_turn_with_options(
             let mut decision = permission::decide_for_mode(
                 state,
                 &permission_context,
-                &name,
+                &permission_name,
                 default_policy,
                 risk,
             );
-            permission::audit(state, &permission_context, &name, &decision);
+            permission::audit(state, &permission_context, &permission_name, &decision);
             let allowed = match decision.effect {
                 tools::PermissionEffect::Allow => true,
                 tools::PermissionEffect::Deny => false,
                 tools::PermissionEffect::Ask => {
-                    let pretty = serde_json::to_string_pretty(&args).unwrap_or_default();
+                    let pretty = serde_json::to_string_pretty(&permission_args).unwrap_or_default();
                     let description = tool_def
                         .as_ref()
                         .map(|t| t.description)
@@ -559,12 +570,16 @@ pub async fn run_turn_with_options(
                         .as_ref()
                         .map(|t| t.risk)
                         .unwrap_or(tools::ToolRisk::Privileged);
-                    let summary = tools::permission_summary_for_state(state, &name, &args);
+                    let summary = tools::permission_summary_for_state(
+                        state,
+                        &permission_name,
+                        &permission_args,
+                    );
                     let response = permission::confirm(
                         app,
                         state,
                         PermissionRequest {
-                            tool: &name,
+                            tool: &permission_name,
                             args_pretty: &pretty,
                             description,
                             risk,
@@ -575,8 +590,12 @@ pub async fn run_turn_with_options(
                         },
                     )
                     .await;
-                    let remembered_scope =
-                        permission::remember_response(state, &permission_context, &name, &response);
+                    let remembered_scope = permission::remember_response(
+                        state,
+                        &permission_context,
+                        &permission_name,
+                        &response,
+                    );
                     let (effective_scope, persistence_error) = match remembered_scope {
                         Ok(scope) => (scope, None),
                         Err(error) => (tools::PermissionScope::Once, Some(error)),
@@ -597,7 +616,7 @@ pub async fn run_turn_with_options(
                         None => base_reason,
                         Some(error) => format!("{base_reason} 规则未持久化：{error}"),
                     };
-                    permission::audit(state, &permission_context, &name, &decision);
+                    permission::audit(state, &permission_context, &permission_name, &decision);
                     response.allow
                 }
             };
@@ -621,8 +640,8 @@ pub async fn run_turn_with_options(
                 }
             };
             let duration_ms = tool_started_at.elapsed().as_millis() as u64;
-            let error_hint = tool_error_hint(&name, &result, tool_ok, denied);
-            let source_quality = source_quality_hint(&name, &result, tool_ok);
+            let error_hint = tool_error_hint(&permission_name, &result, tool_ok, denied);
+            let source_quality = source_quality_hint(&permission_name, &result, tool_ok);
 
             events.tool_end(session_engine::ToolEndEvent {
                 tool_call_id: tc.id.clone(),
@@ -642,6 +661,7 @@ pub async fn run_turn_with_options(
                     json!({
                         "tool_call_id": tc.id.clone(),
                         "name": name.clone(),
+                        "permission_target": permission_name.clone(),
                         "ok": tool_ok,
                         "denied": denied,
                         "result": truncate_ui(&result),

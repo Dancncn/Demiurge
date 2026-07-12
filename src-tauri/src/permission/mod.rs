@@ -1298,6 +1298,80 @@ mod tests {
     }
 
     #[test]
+    fn deferred_targets_do_not_share_remembered_rules_or_wrapper_audit_identity() {
+        let root = temp_dir("deferred_target_scope");
+        let data_dir = root.join("data");
+        let workspace = root.join("workspace");
+        std::fs::create_dir_all(&data_dir).unwrap();
+        std::fs::create_dir_all(&workspace).unwrap();
+        let state = test_state(
+            &data_dir,
+            &workspace,
+            vec![session_with("session-a", &workspace)],
+        );
+        let context = active_context(&state);
+        let open = crate::tools::authorization_target_for_state(
+            &state,
+            "execute_tool",
+            &serde_json::json!({
+                "tool_name": "open_path",
+                "args": {"target": "https://example.com"}
+            }),
+        );
+        let screen = crate::tools::authorization_target_for_state(
+            &state,
+            "execute_tool",
+            &serde_json::json!({
+                "tool_name": "screen_capture_region",
+                "args": {"x": 1, "y": 2, "width": 3, "height": 4}
+            }),
+        );
+        assert_eq!(open.name, "open_path");
+        assert_eq!(screen.name, "screen_capture_region");
+
+        remember_response(
+            &state,
+            &context,
+            &open.name,
+            &PermissionResponse {
+                allow: true,
+                scope: PermissionScope::Session,
+            },
+        )
+        .unwrap();
+        let open_decision = decide(
+            &state,
+            &context,
+            &open.name,
+            open.definition.as_ref().unwrap().permission,
+        );
+        assert_eq!(open_decision.effect, PermissionEffect::Allow);
+        assert_eq!(
+            decide(
+                &state,
+                &context,
+                &screen.name,
+                screen.definition.as_ref().unwrap().permission,
+            )
+            .effect,
+            PermissionEffect::Ask
+        );
+
+        audit(&state, &context, &open.name, &open_decision);
+        let entries = load_recent_audit(&data_dir, 10);
+        assert!(entries.iter().any(|entry| entry.tool == "open_path"));
+        assert!(entries.iter().all(|entry| entry.tool != "execute_tool"));
+        assert!(!state
+            .session_permission_rules
+            .lock()
+            .unwrap()
+            .get("session-a")
+            .is_some_and(|rules| rules.contains_key("execute_tool")));
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn project_rules_are_bucketed_by_canonical_workspace_identity() {
         let root = temp_dir("project_scope");
         let data_dir = root.join("data");

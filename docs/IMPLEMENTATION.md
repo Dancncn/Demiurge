@@ -355,7 +355,7 @@ MCP 工具是运行时动态注册的：`agent::runner` 在生成工具 schema �
 
 ## 安全模型
 
-> 当前限制：以下机制描述设计目标，不代表所有边界已闭环。角色包自行放宽工具权限、Project/Session 权限串用、跨项目 undo、Windows open_path 命令注入、direct HTTP SSRF、Live2D 内部引用/事务导入、分支跨项目竞态与 turn 写入归属已修复；pack IPC 根目录、deferred/MCP 授权粒度和其余前端工作区竞态仍需逐项修复。详情见 [代码审查报告](./CODE-REVIEW-2026-07-12.md)。
+> 当前限制：以下机制描述设计目标，不代表所有边界已闭环。角色包自行放宽工具权限、Project/Session 权限串用、跨项目 undo、Windows open_path 命令注入、direct HTTP SSRF、Live2D 内部引用/事务导入、deferred 目标授权、分支跨项目竞态与 turn 写入归属已修复；pack IPC 根目录、MCP 动态工具风险下限和其余前端工作区竞态仍需逐项修复。详情见 [代码审查报告](./CODE-REVIEW-2026-07-12.md)。
 
 - `PermissionMode` 支持 `plan` / `default` / `auto` / `bypass`：`default` 走工具默认策略与用户规则；`auto` 自动允许只读工具；`bypass` 跳过确认但仍审计；`plan` 未批准前只允许只读工具和受限 `write_plan`。
 - Plan Mode 的计划状态在 `AppState.plan_state` 中维护；`write_plan` 只能写入沙盒 `.demiurge/plans/`，前端通过 `approve_plan` 批准后自动回到 `default` 执行模式。
@@ -377,6 +377,7 @@ MCP 工具是运行时动态注册的：`agent::runner` 在生成工具 schema �
 - `package_scripts` 只读取沙盒 `package.json` 的 scripts 字段并返回建议 shell 命令；脚本执行仍必须走 `shell` 的确认门和隔离策略。
 - `http_get` 与 direct `web_fetch` 只访问公开 HTTP(S) 地址：每个 redirect hop 都重新解析并检查全部 DNS 答案，拒绝非公网 IP，通过 reqwest DNS override 固定地址，禁用代理与自动重定向，并复核实际 peer。DNS/连接/逐读/请求都有超时。
 - Live2D 文件夹先复制到包内 staging，源 symlink/junction 与特殊文件直接拒绝；全部 model3 引用经统一的便携 Normal-component 校验和 canonical containment，非 ASCII 资源只在 staging 内重命名。模型树、manifest 和最终 bundle 复核通过后才清理旧备份，提交错误会恢复旧目录与清单。
+- 对有效 `execute_tool`，runner 在事件/权限门前把外层参数解析为真实 deferred target；真实工具名成为规则、角色包 overlay、remember 和审计 identity，内层 args 驱动风险、summary、preview 与 affected paths。外层名称仅保留给模型 tool-call/result 配对与执行分发。
 - MCP 第一阶段仅支持本地 stdio server；server command/env 来自设置页，secret-like env 写入 keyring，`settings.json` 和备份只保留空值。
 - MCP 动态工具默认按 annotation 映射风险，执行前接入现有权限确认与审计；`mcp_read_resource` 按外部资源读取处理。
 - 子 Agent 只暴露 `SUBAGENT_READONLY_TOOL_NAMES` 中的只读/外部读取工具，不暴露 `shell`、`clipboard` 和写入类工具。

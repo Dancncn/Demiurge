@@ -120,6 +120,8 @@ pub async fn execute(state, name, args) -> Result<String, String> {
 
 `tool_search` 的打分（`tool_search.rs:17`）：名字命中 +5，整体 haystack（name+description+params）命中 +1，按分降序、同分按名字升序。`execute_tool` 的 match（`execute_tool.rs:20`）只接了 `open_path` + 5 个 `screen_*`，与 `DEFERRED_TOOL_NAMES` 完全对应。
 
+权限身份不使用 wrapper 名称。runner 在确认前通过 `authorization_target_for_state` 解析 `execute_tool`，再次要求 target 位于 deferred 白名单，然后把真实工具名与内层 args 用于 definition、规则/overlay、risk/default policy、summary/preview、affected paths、remember 和 audit。模型历史仍保留外层 `execute_tool` call/result 以满足协议配对。解析失败或试图代理 core/未知工具时不会降级到目标 metadata，而是保留外层 `Privileged + Ask`，执行分发表还会再次拒绝。因此对一个 deferred target 记住 Allow/Deny 不会扩散到其他 target。
+
 ## 3. 沙盒路径解析：词法校验 + canonicalize 双层防护
 
 这是整个文件工具体系的安全基石，位于 `resolve_in_sandbox`（`mod.rs:1211`）与辅助函数 `canonical_existing_ancestor`（`mod.rs:1254`）。所有文件类工具都调它把相对路径转成绝对路径。
