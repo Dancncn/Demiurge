@@ -7,6 +7,7 @@ use serde_json::{json, Value};
 use crate::agent::conversation::{FunctionCall, Message, ToolCall};
 use crate::store::Settings;
 
+use super::sse::{SseDecoder, SseEvent};
 use super::{
     merge_usage, normalize_finish_reason, require_api_key, AssistantTurn, ProviderAdapterKind,
     ProviderProfile, ReasoningEffortCapability, StreamDelta, StructuredOutputRequest, Usage,
@@ -41,32 +42,30 @@ pub async fn stream_completion_with_profile(
     }
 
     let mut stream = resp.bytes_stream();
-    let mut buf: Vec<u8> = Vec::new();
+    let mut decoder = SseDecoder::new();
     let mut state = OpenAiStreamState::default();
+    let mut stopped = false;
 
     'outer: while let Some(chunk) = stream.next().await {
         if cancel.load(Ordering::Relaxed) {
             state.finish = "interrupted".to_string();
+            stopped = true;
             break;
         }
         let bytes = chunk.map_err(|e| format!("读取流失败：{e}"))?;
-        buf.extend_from_slice(&bytes);
-
-        while let Some(pos) = buf.iter().position(|&b| b == b'\n') {
-            let line_bytes: Vec<u8> = buf.drain(..=pos).collect();
-            let line = String::from_utf8_lossy(&line_bytes);
-            let line = line.trim();
-            let Some(data) = line.strip_prefix("data:") else {
-                continue;
-            };
-            let data = data.trim();
-            if data.is_empty() {
-                continue;
-            }
-            if data == "[DONE]" {
+        for event in decoder.push(&bytes) {
+            if process_openai_sse_event(&event, &mut state, &mut on_delta)? {
+                stopped = true;
                 break 'outer;
             }
-            parse_openai_stream_data(data, &mut state, &mut on_delta);
+        }
+    }
+
+    if !stopped {
+        for event in decoder.finish() {
+            if process_openai_sse_event(&event, &mut state, &mut on_delta)? {
+                break;
+            }
         }
     }
 
@@ -178,16 +177,18 @@ fn parse_openai_stream_data(
     data: &str,
     state: &mut OpenAiStreamState,
     on_delta: &mut impl FnMut(StreamDelta<'_>),
-) {
-    let Ok(v) = serde_json::from_str::<Value>(data) else {
-        return;
-    };
+) -> Result<(), String> {
+    let v = serde_json::from_str::<Value>(data)
+        .map_err(|error| format!("Invalid OpenAI stream event: {error}; data={data}"))?;
+    if let Some(error) = openai_stream_error(&v) {
+        return Err(error);
+    }
     if let Some(usage) = parse_openai_usage(&v["usage"]) {
         merge_usage(&mut state.usage, usage);
     }
 
     let Some(choice) = v["choices"].get(0) else {
-        return;
+        return Ok(());
     };
 
     // 推理型模型（reasoning_content）会先于正文输出思维链；单独作为 Reasoning 推给前端，
@@ -225,6 +226,63 @@ fn parse_openai_stream_data(
             state.finish = fr.to_string();
         }
     }
+    Ok(())
+}
+
+fn process_openai_sse_event(
+    event: &SseEvent,
+    state: &mut OpenAiStreamState,
+    on_delta: &mut impl FnMut(StreamDelta<'_>),
+) -> Result<bool, String> {
+    let data = event.data.trim();
+    if data.is_empty() {
+        if event.event.as_deref() == Some("error") {
+            return Err("OpenAI stream error without details".to_string());
+        }
+        return Ok(false);
+    }
+    if event.event.as_deref() == Some("error") {
+        if let Ok(value) = serde_json::from_str::<Value>(data) {
+            if let Some(error) = openai_stream_error(&value) {
+                return Err(error);
+            }
+            return Err(format!("OpenAI stream error: {value}"));
+        }
+        return Err(format!("OpenAI stream error: {data}"));
+    }
+    if data == "[DONE]" {
+        return Ok(true);
+    }
+
+    parse_openai_stream_data(data, state, on_delta)?;
+    Ok(false)
+}
+
+fn openai_stream_error(value: &Value) -> Option<String> {
+    let error = value
+        .get("error")
+        .filter(|error| !error.is_null())
+        .or_else(|| (value["type"].as_str() == Some("error")).then_some(value))?;
+    let message = error["message"]
+        .as_str()
+        .or_else(|| value["message"].as_str());
+    let kind = error["type"].as_str().or_else(|| value["type"].as_str());
+    let code = error.get("code").filter(|code| !code.is_null());
+
+    let mut details = Vec::new();
+    if let Some(kind) = kind {
+        details.push(kind.to_string());
+    }
+    if let Some(code) = code {
+        details.push(format!("code={code}"));
+    }
+    if let Some(message) = message {
+        details.push(message.to_string());
+    }
+    if details.is_empty() {
+        details.push(error.to_string());
+    }
+    Some(format!("OpenAI stream error: {}", details.join(": ")))
 }
 
 fn parse_openai_usage(v: &Value) -> Option<Usage> {
@@ -356,7 +414,8 @@ mod tests {
             r#"{"choices":[{"delta":{"content":"hi"},"finish_reason":null}],"usage":{"prompt_tokens":12,"completion_tokens":3,"total_tokens":15}}"#,
             &mut state,
             &mut |_| {},
-        );
+        )
+        .unwrap();
         let turn = state.finish();
         assert_eq!(turn.usage.unwrap().input_tokens, Some(12));
         assert_eq!(turn.usage.unwrap().output_tokens, Some(3));
@@ -377,7 +436,8 @@ mod tests {
                 StreamDelta::Content(c) => content.push_str(c),
                 StreamDelta::Reasoning(r) => reasoning.push_str(r),
             },
-        );
+        )
+        .unwrap();
         parse_openai_stream_data(
             r#"{"choices":[{"delta":{"content":"答案"},"finish_reason":"stop"}]}"#,
             &mut state,
@@ -385,11 +445,103 @@ mod tests {
                 StreamDelta::Content(c) => content.push_str(c),
                 StreamDelta::Reasoning(r) => reasoning.push_str(r),
             },
-        );
+        )
+        .unwrap();
         assert_eq!(reasoning, "先想一下");
         assert_eq!(content, "答案");
         // 思维链不污染最终答复
         assert_eq!(state.finish().content, "答案");
+    }
+
+    #[test]
+    fn openai_stream_keeps_fragmented_tool_call_normalization() {
+        let mut state = OpenAiStreamState::default();
+        parse_openai_stream_data(
+            r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"read_","arguments":"{\"path\":"}}]},"finish_reason":null}]}"#,
+            &mut state,
+            &mut |_| {},
+        )
+        .unwrap();
+        parse_openai_stream_data(
+            r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"name":"file","arguments":"\"a.rs\"}"}}]},"finish_reason":"tool_calls"}]}"#,
+            &mut state,
+            &mut |_| {},
+        )
+        .unwrap();
+
+        let turn = state.finish();
+        assert_eq!(turn.finish_reason, "tool_calls");
+        assert_eq!(turn.tool_calls[0].id, "call_1");
+        assert_eq!(turn.tool_calls[0].function.name, "read_file");
+        assert_eq!(turn.tool_calls[0].function.arguments, r#"{"path":"a.rs"}"#);
+    }
+
+    #[test]
+    fn openai_sse_handles_byte_fragmentation_multiline_data_and_done_tail() {
+        let input = concat!(
+            ": keep-alive\r\n",
+            "data: {\"choices\":[{\"delta\":{\"content\":\"你\"},\r\n",
+            "data: \"finish_reason\":\"stop\"}]}\r\n\r\n",
+            "data: [DONE]"
+        );
+        let mut decoder = SseDecoder::new();
+        let mut state = OpenAiStreamState::default();
+        let mut rendered = String::new();
+        let mut stopped = false;
+
+        for byte in input.as_bytes() {
+            for event in decoder.push(std::slice::from_ref(byte)) {
+                stopped = process_openai_sse_event(&event, &mut state, &mut |delta| {
+                    if let StreamDelta::Content(text) = delta {
+                        rendered.push_str(text);
+                    }
+                })
+                .unwrap();
+                assert!(!stopped, "[DONE] has no event delimiter and belongs to EOF");
+            }
+        }
+        for event in decoder.finish() {
+            stopped = process_openai_sse_event(&event, &mut state, &mut |_| {}).unwrap();
+        }
+
+        assert!(stopped);
+        assert_eq!(rendered, "你");
+        let turn = state.finish();
+        assert_eq!(turn.content, "你");
+        assert_eq!(turn.finish_reason, "stop");
+    }
+
+    #[test]
+    fn openai_sse_returns_embedded_and_named_errors() {
+        let embedded = SseEvent {
+            event: None,
+            data:
+                r#"{"error":{"type":"rate_limit_error","code":"rate_limit","message":"slow down"}}"#
+                    .to_string(),
+        };
+        let named = SseEvent {
+            event: Some("error".to_string()),
+            data: "upstream disconnected".to_string(),
+        };
+
+        let embedded_error =
+            process_openai_sse_event(&embedded, &mut OpenAiStreamState::default(), &mut |_| {})
+                .unwrap_err();
+        let named_error =
+            process_openai_sse_event(&named, &mut OpenAiStreamState::default(), &mut |_| {})
+                .unwrap_err();
+
+        assert!(embedded_error.contains("rate_limit_error"));
+        assert!(embedded_error.contains("slow down"));
+        assert!(named_error.contains("upstream disconnected"));
+    }
+
+    #[test]
+    fn openai_stream_rejects_malformed_json_event() {
+        let error =
+            parse_openai_stream_data("{not-json}", &mut OpenAiStreamState::default(), &mut |_| {})
+                .unwrap_err();
+        assert!(error.contains("Invalid OpenAI stream event"));
     }
 
     #[test]

@@ -7,6 +7,7 @@ use serde_json::{json, Value};
 use crate::agent::conversation::{FunctionCall, Message, ToolCall};
 use crate::store::Settings;
 
+use super::sse::{SseDecoder, SseEvent};
 use super::{
     merge_usage, normalize_finish_reason, require_api_key, AssistantTurn, ProviderAdapterKind,
     ProviderProfile, StreamDelta, StructuredOutputRequest, Usage,
@@ -67,30 +68,29 @@ pub async fn stream_completion_with_profile(
     }
 
     let mut stream = resp.bytes_stream();
-    let mut buf = Vec::<u8>::new();
+    let mut decoder = SseDecoder::new();
     let mut state = AnthropicStreamState::default();
+    let mut stopped = false;
 
     'outer: while let Some(chunk) = stream.next().await {
         if cancel.load(Ordering::Relaxed) {
             state.finish = "interrupted".to_string();
+            stopped = true;
             break;
         }
         let bytes = chunk.map_err(|e| format!("读取 Anthropic 流失败：{e}"))?;
-        buf.extend_from_slice(&bytes);
-        while let Some(pos) = buf.iter().position(|&b| b == b'\n') {
-            let line_bytes: Vec<u8> = buf.drain(..=pos).collect();
-            let line = String::from_utf8_lossy(&line_bytes);
-            let line = line.trim();
-            let Some(data) = line.strip_prefix("data:") else {
-                continue;
-            };
-            let data = data.trim();
-            if data.is_empty() {
-                continue;
-            }
-            parse_anthropic_stream_data(data, &mut state, &mut on_delta);
-            if state.message_stopped {
+        for event in decoder.push(&bytes) {
+            if process_anthropic_sse_event(&event, &mut state, &mut on_delta)? {
+                stopped = true;
                 break 'outer;
+            }
+        }
+    }
+
+    if !stopped {
+        for event in decoder.finish() {
+            if process_anthropic_sse_event(&event, &mut state, &mut on_delta)? {
+                break;
             }
         }
     }
@@ -250,10 +250,12 @@ fn parse_anthropic_stream_data(
     data: &str,
     state: &mut AnthropicStreamState,
     on_delta: &mut impl FnMut(StreamDelta<'_>),
-) {
-    let Ok(v) = serde_json::from_str::<Value>(data) else {
-        return;
-    };
+) -> Result<(), String> {
+    let v = serde_json::from_str::<Value>(data)
+        .map_err(|error| format!("Invalid Anthropic stream event: {error}; data={data}"))?;
+    if let Some(error) = anthropic_stream_error(&v) {
+        return Err(error);
+    }
     match v["type"].as_str().unwrap_or_default() {
         "message_start" => {
             if let Some(usage) = parse_anthropic_usage(&v["message"]["usage"]) {
@@ -314,6 +316,63 @@ fn parse_anthropic_stream_data(
         "message_stop" => state.message_stopped = true,
         _ => {}
     }
+    Ok(())
+}
+
+fn process_anthropic_sse_event(
+    event: &SseEvent,
+    state: &mut AnthropicStreamState,
+    on_delta: &mut impl FnMut(StreamDelta<'_>),
+) -> Result<bool, String> {
+    let data = event.data.trim();
+    if data.is_empty() {
+        if event.event.as_deref() == Some("error") {
+            return Err("Anthropic stream error without details".to_string());
+        }
+        if event.event.as_deref() == Some("message_stop") {
+            state.message_stopped = true;
+            return Ok(true);
+        }
+        return Ok(false);
+    }
+    if event.event.as_deref() == Some("error") {
+        if let Ok(value) = serde_json::from_str::<Value>(data) {
+            if let Some(error) = anthropic_stream_error(&value) {
+                return Err(error);
+            }
+            return Err(format!("Anthropic stream error: {value}"));
+        }
+        return Err(format!("Anthropic stream error: {data}"));
+    }
+
+    parse_anthropic_stream_data(data, state, on_delta)?;
+    if event.event.as_deref() == Some("message_stop") {
+        state.message_stopped = true;
+    }
+    Ok(state.message_stopped)
+}
+
+fn anthropic_stream_error(value: &Value) -> Option<String> {
+    let error = value
+        .get("error")
+        .filter(|error| !error.is_null())
+        .or_else(|| (value["type"].as_str() == Some("error")).then_some(value))?;
+    let message = error["message"]
+        .as_str()
+        .or_else(|| value["message"].as_str());
+    let kind = error["type"].as_str().or_else(|| value["type"].as_str());
+
+    let mut details = Vec::new();
+    if let Some(kind) = kind {
+        details.push(kind.to_string());
+    }
+    if let Some(message) = message {
+        details.push(message.to_string());
+    }
+    if details.is_empty() {
+        details.push(error.to_string());
+    }
+    Some(format!("Anthropic stream error: {}", details.join(": ")))
 }
 
 fn parse_anthropic_usage(v: &Value) -> Option<Usage> {
@@ -428,27 +487,32 @@ mod tests {
                     deltas.push_str(s);
                 }
             },
-        );
+        )
+        .unwrap();
         parse_anthropic_stream_data(
             r#"{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"t1","name":"grep","input":{}}}"#,
             &mut state,
             &mut |_| {},
-        );
+        )
+        .unwrap();
         parse_anthropic_stream_data(
             r#"{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\"query\":"}}"#,
             &mut state,
             &mut |_| {},
-        );
+        )
+        .unwrap();
         parse_anthropic_stream_data(
             r#"{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"\"x\"}"}}"#,
             &mut state,
             &mut |_| {},
-        );
+        )
+        .unwrap();
         parse_anthropic_stream_data(
             r#"{"type":"message_delta","delta":{"stop_reason":"tool_use"}}"#,
             &mut state,
             &mut |_| {},
-        );
+        )
+        .unwrap();
         let turn = state.finish();
         assert_eq!(deltas, "hi");
         assert_eq!(turn.finish_reason, "tool_calls");
@@ -463,15 +527,120 @@ mod tests {
             r#"{"type":"message_start","message":{"usage":{"input_tokens":10,"cache_read_input_tokens":2,"cache_creation_input_tokens":3,"output_tokens":1}}}"#,
             &mut state,
             &mut |_| {},
-        );
+        )
+        .unwrap();
         parse_anthropic_stream_data(
             r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":7}}"#,
             &mut state,
             &mut |_| {},
-        );
+        )
+        .unwrap();
         let usage = state.finish().usage.unwrap();
         assert_eq!(usage.input_tokens, Some(15));
         assert_eq!(usage.output_tokens, Some(7));
         assert_eq!(usage.total_tokens, Some(22));
+    }
+
+    #[test]
+    fn anthropic_stream_routes_thinking_separately_from_content() {
+        let mut state = AnthropicStreamState::default();
+        let mut content = String::new();
+        let mut reasoning = String::new();
+        parse_anthropic_stream_data(
+            r#"{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"先分析"}}"#,
+            &mut state,
+            &mut |delta| match delta {
+                StreamDelta::Content(text) => content.push_str(text),
+                StreamDelta::Reasoning(text) => reasoning.push_str(text),
+            },
+        )
+        .unwrap();
+        parse_anthropic_stream_data(
+            r#"{"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"结论"}}"#,
+            &mut state,
+            &mut |delta| match delta {
+                StreamDelta::Content(text) => content.push_str(text),
+                StreamDelta::Reasoning(text) => reasoning.push_str(text),
+            },
+        )
+        .unwrap();
+
+        assert_eq!(reasoning, "先分析");
+        assert_eq!(content, "结论");
+        assert_eq!(state.finish().content, "结论");
+    }
+
+    #[test]
+    fn anthropic_sse_handles_fragmentation_multiline_data_and_message_stop_tail() {
+        let input = concat!(
+            ": ping\r\n",
+            "event: content_block_delta\r\n",
+            "data: {\"type\":\"content_block_delta\",\"index\":0,\r\n",
+            "data: \"delta\":{\"type\":\"text_delta\",\"text\":\"好\"}}\r\n\r\n",
+            "event: message_stop\r\n",
+            "data: {\"type\":\"message_stop\"}"
+        );
+        let mut decoder = SseDecoder::new();
+        let mut state = AnthropicStreamState::default();
+        let mut rendered = String::new();
+        let mut stopped = false;
+
+        for byte in input.as_bytes() {
+            for event in decoder.push(std::slice::from_ref(byte)) {
+                stopped = process_anthropic_sse_event(&event, &mut state, &mut |delta| {
+                    if let StreamDelta::Content(text) = delta {
+                        rendered.push_str(text);
+                    }
+                })
+                .unwrap();
+                assert!(!stopped, "message_stop has no delimiter and belongs to EOF");
+            }
+        }
+        for event in decoder.finish() {
+            stopped = process_anthropic_sse_event(&event, &mut state, &mut |_| {}).unwrap();
+        }
+
+        assert!(stopped);
+        assert!(state.message_stopped);
+        assert_eq!(rendered, "好");
+        assert_eq!(state.finish().content, "好");
+    }
+
+    #[test]
+    fn anthropic_sse_returns_embedded_and_named_errors() {
+        let embedded = SseEvent {
+            event: None,
+            data: r#"{"type":"error","error":{"type":"overloaded_error","message":"try later"}}"#
+                .to_string(),
+        };
+        let named = SseEvent {
+            event: Some("error".to_string()),
+            data: "connection reset".to_string(),
+        };
+
+        let embedded_error = process_anthropic_sse_event(
+            &embedded,
+            &mut AnthropicStreamState::default(),
+            &mut |_| {},
+        )
+        .unwrap_err();
+        let named_error =
+            process_anthropic_sse_event(&named, &mut AnthropicStreamState::default(), &mut |_| {})
+                .unwrap_err();
+
+        assert!(embedded_error.contains("overloaded_error"));
+        assert!(embedded_error.contains("try later"));
+        assert!(named_error.contains("connection reset"));
+    }
+
+    #[test]
+    fn anthropic_stream_rejects_malformed_json_event() {
+        let error = parse_anthropic_stream_data(
+            "not-json",
+            &mut AnthropicStreamState::default(),
+            &mut |_| {},
+        )
+        .unwrap_err();
+        assert!(error.contains("Invalid Anthropic stream event"));
     }
 }

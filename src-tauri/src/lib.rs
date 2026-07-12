@@ -15,11 +15,11 @@ mod startup;
 mod store;
 mod tools;
 mod voice;
+mod workspace;
 
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock, Mutex, OnceLock};
 use std::time::Duration;
@@ -217,15 +217,6 @@ struct WebDavBackupFile {
     size: u64,
 }
 
-#[derive(Serialize)]
-struct WorkspaceState {
-    path: String,
-    name: String,
-    is_git: bool,
-    branch: Option<String>,
-    dirty: bool,
-}
-
 fn memory_context(state: &AppState) -> (PathBuf, PathBuf, PathBuf, String, String) {
     let data_dir = state.data_dir.lock().unwrap().clone();
     let sandbox_dir = state.sandbox_dir.lock().unwrap().clone();
@@ -242,6 +233,11 @@ fn session_list(store: &SessionStore) -> SessionList {
         .map(|s| SessionMeta {
             id: s.id.clone(),
             title: s.title.clone(),
+            workspace_path: s.workspace_path.clone(),
+            workspace_name: Path::new(&s.workspace_path)
+                .file_name()
+                .and_then(|name| name.to_str())
+                .map(str::to_string),
             updated_at: s.updated_at,
         })
         .collect();
@@ -1510,9 +1506,16 @@ mod context_panel_tests {
 /// 新建会话并设为活动，返回新会话 id。
 #[tauri::command]
 fn new_session(state: State<'_, AppState>) -> String {
+    let workspace_path = state
+        .sandbox_dir
+        .lock()
+        .unwrap()
+        .to_string_lossy()
+        .replace('\\', "/");
     let id = {
         let mut store = state.sessions.lock().unwrap();
-        let sess = Session::new();
+        let mut sess = Session::new();
+        sess.workspace_path = workspace_path;
         let id = sess.id.clone();
         store.sessions.push(sess);
         store.active = id.clone();
@@ -1524,21 +1527,41 @@ fn new_session(state: State<'_, AppState>) -> String {
 
 /// 切换活动会话。
 #[tauri::command]
-fn select_session(state: State<'_, AppState>, id: String) {
+fn select_session(state: State<'_, AppState>, id: String) -> Result<(), String> {
+    let configured = {
+        let store = state.sessions.lock().unwrap();
+        store
+            .get(&id)
+            .map(|session| session.workspace_path.clone())
+            .ok_or_else(|| "会话不存在".to_string())?
+    };
+    workspace::ensure_session_workspace_switch_allowed(state.inner(), &configured)?;
     {
         let mut store = state.sessions.lock().unwrap();
-        if store.sessions.iter().any(|s| s.id == id) {
-            store.active = id;
-        }
+        store.active = id;
     }
+    workspace::sync_active_session_workspace(state.inner())?;
     state.persist_sessions();
+    Ok(())
 }
 
 /// 删除会话；若删的是活动会话，切到最近一个（或新建空会话）。返回新的活动会话 id。
 #[tauri::command]
-fn delete_session(state: State<'_, AppState>, id: String) -> String {
+fn delete_session(state: State<'_, AppState>, id: String) -> Result<String, String> {
+    let current_workspace = state
+        .sandbox_dir
+        .lock()
+        .unwrap()
+        .to_string_lossy()
+        .replace('\\', "/");
     let active = {
         let mut store = state.sessions.lock().unwrap();
+        if !store.sessions.iter().any(|session| session.id == id) {
+            return Err("会话不存在".to_string());
+        }
+        if store.active == id && state.busy.load(Ordering::Acquire) {
+            return Err("正在生成回复，暂时不能删除当前会话".to_string());
+        }
         store.sessions.retain(|s| s.id != id);
         if store.active == id {
             // 切到最近更新的会话
@@ -1549,11 +1572,19 @@ fn delete_session(state: State<'_, AppState>, id: String) -> String {
                 .map(|s| s.id.clone())
                 .unwrap_or_default();
         }
-        store.ensure_one();
+        if store.sessions.is_empty() {
+            let mut session = Session::new();
+            session.workspace_path = current_workspace;
+            store.active = session.id.clone();
+            store.sessions.push(session);
+        } else {
+            store.ensure_one();
+        }
         store.active.clone()
     };
+    workspace::sync_active_session_workspace(state.inner())?;
     state.persist_sessions();
-    active
+    Ok(active)
 }
 
 /// 重命名指定会话。返回清洗后的标题，方便前端保持一致展示。
@@ -1580,49 +1611,6 @@ fn rename_session(state: State<'_, AppState>, id: String, title: String) -> Resu
 fn open_sandbox(state: State<'_, AppState>) -> Result<(), String> {
     let dir = state.sandbox_dir.lock().unwrap().clone();
     tools::execute_open(&dir.to_string_lossy()).map(|_| ())
-}
-
-#[tauri::command]
-fn workspace_state(state: State<'_, AppState>) -> WorkspaceState {
-    let dir = state.sandbox_dir.lock().unwrap().clone();
-    let name = dir
-        .file_name()
-        .and_then(|value| value.to_str())
-        .unwrap_or("Workspace")
-        .to_string();
-
-    let branch_output = Command::new("git")
-        .args(["rev-parse", "--abbrev-ref", "HEAD"])
-        .current_dir(&dir)
-        .output();
-    let branch = branch_output.ok().and_then(|output| {
-        if !output.status.success() {
-            return None;
-        }
-        let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        if text.is_empty() {
-            None
-        } else {
-            Some(text)
-        }
-    });
-
-    let dirty = Command::new("git")
-        .args(["status", "--porcelain"])
-        .current_dir(&dir)
-        .output()
-        .ok()
-        .filter(|output| output.status.success())
-        .map(|output| !String::from_utf8_lossy(&output.stdout).trim().is_empty())
-        .unwrap_or(false);
-
-    WorkspaceState {
-        path: dir.to_string_lossy().to_string(),
-        name,
-        is_git: branch.is_some(),
-        branch,
-        dirty,
-    }
 }
 
 #[tauri::command]
@@ -2248,6 +2236,9 @@ pub fn run() {
             *state.packs_dir.lock().unwrap() = packs;
             *state.settings.lock().unwrap() = settings;
             *state.sessions.lock().unwrap() = sessions;
+            if let Err(e) = workspace::sync_active_session_workspace(state.inner()) {
+                eprintln!("Demiurge workspace restore warning: {e}");
+            }
             let settings_snapshot = state.settings.lock().unwrap().clone();
             if let Err(e) = sync_desktop_companion_window(app.handle(), &settings_snapshot) {
                 eprintln!("Demiurge desktop companion startup warning: {e}");
@@ -2328,7 +2319,13 @@ pub fn run() {
             delete_session,
             rename_session,
             open_sandbox,
-            workspace_state,
+            workspace::workspace_state,
+            workspace::select_workspace,
+            workspace::list_workspace_directory,
+            workspace::read_workspace_file,
+            workspace::git_branches,
+            workspace::switch_git_branch,
+            workspace::git_changed_files,
             ocr_image_bytes,
             media_generate_image,
             media_synthesize_speech,

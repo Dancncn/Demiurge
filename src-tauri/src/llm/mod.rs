@@ -3,6 +3,7 @@ mod anthropic;
 mod gemini;
 mod local;
 mod openai;
+mod sse;
 
 use std::sync::atomic::AtomicBool;
 

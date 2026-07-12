@@ -541,6 +541,10 @@ pub fn new_session_id() -> String {
 pub struct Session {
     pub id: String,
     pub title: String,
+    /// 与该多轮会话绑定的项目根目录。旧版 sessions.json 没有此字段时自动为空，
+    /// 启动/选中会话时再安全迁移到默认 sandbox。
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub workspace_path: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub summary: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -554,6 +558,7 @@ impl Session {
         Session {
             id: new_session_id(),
             title: "新对话".to_string(),
+            workspace_path: String::new(),
             summary: None,
             goal: None,
             messages: Vec::new(),
@@ -596,6 +601,10 @@ impl SessionStore {
 pub struct SessionMeta {
     pub id: String,
     pub title: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub workspace_path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub workspace_name: Option<String>,
     pub updated_at: u64,
 }
 
@@ -674,6 +683,21 @@ pub fn save_sessions(dir: &Path, store: &SessionStore) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn legacy_session_without_workspace_path_remains_compatible() {
+        let json = r#"{
+            "id": "legacy-session",
+            "title": "旧会话",
+            "messages": [],
+            "updated_at": 123
+        }"#;
+        let session = serde_json::from_str::<Session>(json).unwrap();
+        assert!(session.workspace_path.is_empty());
+
+        let encoded = serde_json::to_value(&session).unwrap();
+        assert!(encoded.get("workspace_path").is_none());
+    }
 
     #[test]
     fn settings_without_provider_defaults_to_deepseek() {
