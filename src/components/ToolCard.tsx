@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import type { ToolRisk, ToolSourceQuality } from "../lib/types";
+import { useI18n, type TFunction } from "../lib/i18n";
 import DiffPreview from "./DiffPreview";
-import { WrenchIcon } from "./Icons";
+import { ChevronDownIcon, FileIcon, WrenchIcon } from "./Icons";
 
 interface Props {
   name: string;
@@ -9,6 +10,7 @@ interface Props {
   status: "running" | "done" | "denied" | "failed";
   result?: string;
   preview?: string;
+  affected_paths?: string[];
   description?: string;
   risk?: ToolRisk;
   duration_ms?: number;
@@ -109,7 +111,25 @@ function qualityClass(level: ToolSourceQuality["level"]) {
   }
 }
 
-const editTools = new Set(["edit_file", "multi_edit", "apply_patch"]);
+const editTools = new Set(["write_file", "edit_file", "multi_edit", "apply_patch", "undo_edit"]);
+
+function basename(path: string) {
+  return path.replace(/\\/g, "/").split("/").filter(Boolean).pop() || path;
+}
+
+function editActivityLabel(status: Props["status"], paths: string[], t: TFunction) {
+  const target = paths.length === 1 ? basename(paths[0]) : t("tool.filesCount", { n: paths.length });
+  switch (status) {
+    case "running":
+      return t("tool.editing", { target });
+    case "failed":
+      return t("tool.editFailed", { target });
+    case "denied":
+      return t("tool.editCancelled", { target });
+    default:
+      return t("tool.edited", { target });
+  }
+}
 
 function rollbackHint(name: string, status: Props["status"], result?: string) {
   if (status !== "done" || !editTools.has(name) || !result) return null;
@@ -123,18 +143,23 @@ export default function ToolCard({
   status,
   result,
   preview,
+  affected_paths,
   description,
   risk,
   duration_ms,
   error_hint,
   source_quality,
 }: Props) {
+  const { t } = useI18n();
   const [open, setOpen] = useState(status === "failed");
   const b = badge(status);
   const riskText = riskLabel(risk);
   const progressText = progressSummary(name, status, args, result);
   const durationText = formatDuration(duration_ms);
   const undoHint = rollbackHint(name, status, result);
+  const filePaths = affected_paths?.filter((path) => path.trim()) ?? [];
+  const isFileActivity = editTools.has(name) && filePaths.length > 0;
+  const title = isFileActivity ? editActivityLabel(status, filePaths, t) : name;
   let argsText = "";
   try {
     argsText = JSON.stringify(args, null, 2);
@@ -153,8 +178,15 @@ export default function ToolCard({
         className="flex w-full items-center gap-2 px-4 py-3 text-left"
         onClick={() => setOpen((v) => !v)}
       >
-        <WrenchIcon size={16} className="shrink-0 text-[#0b57d0]" />
-        <span className="font-medium text-[#202124]">{name}</span>
+        {isFileActivity ? (
+          <FileIcon size={16} className={`shrink-0 ${status === "running" ? "text-[#0b57d0]" : "text-[#59616d]"}`} />
+        ) : (
+          <WrenchIcon size={16} className="shrink-0 text-[#0b57d0]" />
+        )}
+        <span className={`min-w-0 truncate font-medium text-[#202124] ${isFileActivity && status === "running" ? "cf-activity-label" : ""}`}>
+          {title}
+        </span>
+        {isFileActivity && <span className="hidden rounded-full bg-white px-2 py-0.5 font-mono text-[10px] text-[#7a8088] sm:inline">{name}</span>}
         <span className={`rounded-full px-2 py-0.5 text-xs ${b.cls}`}>{b.label}</span>
         {riskText && <span className="rounded-full bg-white px-2 py-0.5 text-xs text-[#6f7782]">{riskText}</span>}
         {durationText && <span className="rounded-full bg-white px-2 py-0.5 text-xs text-[#6f7782]">{durationText}</span>}
@@ -165,7 +197,10 @@ export default function ToolCard({
             <span />
           </span>
         )}
-        <span className="ml-auto text-xs text-[#8a9099]">{open ? "Hide" : "Details"}</span>
+        <ChevronDownIcon
+          size={14}
+          className={`ml-auto shrink-0 text-[#8a9099] transition-transform duration-200 ${open ? "rotate-180" : ""}`}
+        />
       </button>
 
       {progressText && (
@@ -202,6 +237,20 @@ export default function ToolCard({
 
       {open && (
         <div className="space-y-3 border-t border-[#eceff3] px-4 py-3">
+          {isFileActivity && (
+            <div>
+              <div className="mb-1.5 text-xs font-medium text-[#7a8088]">{t("tool.files")}</div>
+              <div className="overflow-hidden rounded-lg border border-[#eceff3] bg-white">
+                {filePaths.map((path) => (
+                  <div key={path} className="flex min-w-0 items-center gap-2 border-b border-[#f0f1f3] px-2.5 py-2 last:border-b-0">
+                    <FileIcon size={13} className="shrink-0 text-[#8a9099]" />
+                    <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-[#4f5661]" title={path}>{path}</span>
+                    {status === "running" && <span className="size-1.5 shrink-0 animate-pulse rounded-full bg-[#0b57d0]" />}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
           {description && <div className="text-xs leading-relaxed text-[#6f7782]">{description}</div>}
           {preview && (
             <div>

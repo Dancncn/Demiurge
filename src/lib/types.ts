@@ -412,6 +412,38 @@ export interface WorkspaceState {
   dirty: boolean;
 }
 
+/** A direct child of a workspace directory. Paths are always workspace-relative. */
+export interface WorkspaceEntry {
+  name: string;
+  path: string;
+  kind: "file" | "directory";
+  size: number;
+}
+
+/** Text preview returned by the desktop backend. Large files are intentionally capped. */
+export interface WorkspaceFilePreview {
+  path: string;
+  name: string;
+  content: string;
+  size: number;
+  truncated: boolean;
+  binary: boolean;
+}
+
+export interface GitBranch {
+  name: string;
+  current: boolean;
+  remote: boolean;
+  upstream?: string | null;
+}
+
+export interface GitChangedFile {
+  path: string;
+  status: string;
+  staged: boolean;
+  working_tree: boolean;
+}
+
 export type OcrModelSource = "modelscope" | "huggingface";
 
 export interface OcrModelFileStatus {
@@ -868,6 +900,8 @@ export interface SessionMeta {
   id: string;
   title: string;
   updated_at: number;
+  workspace_path?: string;
+  workspace_name?: string;
 }
 export interface SessionList {
   active: string;
@@ -1103,6 +1137,7 @@ export type DisplayItem =
       status: "running" | "done" | "denied" | "failed";
       result?: string;
       preview?: string;
+      affected_paths?: string[];
       description?: string;
       risk?: ToolRisk;
       permission_effect?: PermissionEffect;

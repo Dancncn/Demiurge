@@ -50,9 +50,13 @@ import type {
   SpeechSynthesisResult,
   ToolEndEvent,
   ToolStartEvent,
+  GitBranch,
+  GitChangedFile,
   WebDavBackupFile,
   WebDavConfig,
   VoiceStatus,
+  WorkspaceEntry,
+  WorkspaceFilePreview,
   WorkspaceState,
   WorkflowPanelState,
 } from "./types";
@@ -173,6 +177,16 @@ export const memoryMigrateNamespace = (fromNs: string, toNs: string) =>
   invoke<MemoryPanelState>("memory_migrate_namespace", { fromNs, toNs });
 export const openSandbox = () => invoke<void>("open_sandbox");
 export const workspaceState = () => invoke<WorkspaceState>("workspace_state");
+export const selectWorkspace = (path: string) =>
+  invoke<WorkspaceState>("select_workspace", { path });
+export const listWorkspaceDirectory = (relativePath?: string) =>
+  invoke<WorkspaceEntry[]>("list_workspace_directory", { relativePath: relativePath ?? null });
+export const readWorkspaceFile = (relativePath: string) =>
+  invoke<WorkspaceFilePreview>("read_workspace_file", { relativePath });
+export const gitBranches = () => invoke<GitBranch[]>("git_branches");
+export const switchGitBranch = (branch: string) =>
+  invoke<WorkspaceState>("switch_git_branch", { branch });
+export const gitChangedFiles = () => invoke<GitChangedFile[]>("git_changed_files");
 export const webdavCheckConnection = (config: WebDavConfig) =>
   invoke<string>("webdav_check_connection", { config });
 export const webdavBackupNow = (config: WebDavConfig) => invoke<string>("webdav_backup_now", { config });

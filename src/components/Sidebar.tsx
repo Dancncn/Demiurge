@@ -192,10 +192,15 @@ export function Sidebar({
                       }}
                       onDoubleClick={() => beginRename(s)}
                       disabled={busy}
-                      className="min-w-0 flex-1 truncate px-2.5 py-2 text-left text-[13px] text-[#202124] disabled:cursor-not-allowed disabled:opacity-60"
+                      className="min-w-0 flex-1 px-2.5 py-2 text-left text-[13px] text-[#202124] disabled:cursor-not-allowed disabled:opacity-60"
                       title={`${s.title}\n${t("sidebar.renameHint")}`}
                     >
-                      {s.title}
+                      <span className="block truncate">{s.title}</span>
+                      {s.workspace_name && (
+                        <span className="mt-0.5 flex items-center gap-1 truncate text-[10px] text-[#8a9099]" title={s.workspace_path}>
+                          {s.workspace_name}
+                        </span>
+                      )}
                     </button>
                   )}
                   {!editing && (

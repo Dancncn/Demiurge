@@ -181,6 +181,7 @@ export function MessageList({ items, thinking, greeting, onRetry, onOpenFortune 
                   status={item.status}
                   result={item.result}
                   preview={item.preview}
+                  affected_paths={item.affected_paths}
                   description={item.description}
                   risk={item.risk}
                   duration_ms={item.duration_ms}

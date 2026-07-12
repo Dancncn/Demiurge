@@ -1,5 +1,5 @@
-import { ComponentPropsWithoutRef, ReactNode, isValidElement } from "react";
-import ReactMarkdown from "react-markdown";
+import { Children, ComponentPropsWithoutRef, ReactNode, isValidElement, useMemo } from "react";
+import ReactMarkdown, { type Components } from "react-markdown";
 import rehypeKatex from "rehype-katex";
 import rehypeHighlight from "rehype-highlight";
 import remarkGfm from "remark-gfm";
@@ -84,22 +84,55 @@ function normalizeMath(content: string): string {
   return normalized.replace(new RegExp(`${prefix}(\\d+)__`, "g"), (_, i) => protectedBlocks[Number(i)] || "");
 }
 
+// Keep Markdown semantics while making only newly mounted word segments fade in.
+// Stable index keys let React preserve earlier words as more deltas arrive, so a
+// long answer does not replay its animation on every streaming frame.
+function streamingText(children: ReactNode, active: boolean): ReactNode {
+  if (!active) return children;
+  return Children.map(children, (child) => {
+    if (typeof child !== "string") return child;
+    const segments = child.match(/\S+\s*|\s+/g) ?? [child];
+    // Cap the extra DOM: old text collapses back into one stable text node,
+    // while only the recent tail keeps per-word spans for entry animation.
+    const animatedStart = Math.max(0, segments.length - 18);
+    const stablePrefix = segments.slice(0, animatedStart).join("");
+    const animatedTail = segments.slice(animatedStart).map((segment, index) => (
+      <span key={`stream-token-${animatedStart + index}`} className="cf-stream-token">
+        {segment}
+      </span>
+    ));
+    return stablePrefix ? [stablePrefix, ...animatedTail] : animatedTail;
+  });
+}
+
 export default function MarkdownRenderer({ text, streaming = false }: { text: string; streaming?: boolean }) {
   const prepared = normalizeMath(streaming ? closeUnclosedFence(text) : text);
+  const components = useMemo<Components>(
+    () => ({
+      pre: CodeBlock,
+      p: ({ children }) => <p>{streamingText(children, streaming)}</p>,
+      li: ({ children }) => <li>{streamingText(children, streaming)}</li>,
+      h1: ({ children }) => <h1>{streamingText(children, streaming)}</h1>,
+      h2: ({ children }) => <h2>{streamingText(children, streaming)}</h2>,
+      h3: ({ children }) => <h3>{streamingText(children, streaming)}</h3>,
+      blockquote: ({ children }) => <blockquote>{streamingText(children, streaming)}</blockquote>,
+      td: ({ children }) => <td>{streamingText(children, streaming)}</td>,
+      th: ({ children }) => <th>{streamingText(children, streaming)}</th>,
+      a: ({ href, children }) => (
+        <a href={href} target="_blank" rel="noreferrer">
+          {children}
+        </a>
+      ),
+    }),
+    [streaming],
+  );
   return (
     <div className={`markdown-body${streaming ? " is-streaming" : ""}`}>
       <ReactMarkdown
         remarkPlugins={[remarkGfm, remarkMath]}
         // detect:false —— 只高亮带语言标记的代码块，规避流式时自动探测语言来回切换导致的变色闪烁。
         rehypePlugins={[[rehypeHighlight, { detect: false, ignoreMissing: true }], rehypeKatex]}
-        components={{
-          pre: CodeBlock,
-          a: ({ href, children }) => (
-            <a href={href} target="_blank" rel="noreferrer">
-              {children}
-            </a>
-          ),
-        }}
+        components={components}
       >
         {prepared}
       </ReactMarkdown>

@@ -598,6 +598,25 @@ html[data-resolved-theme="dark"] .cf-menu-item.is-highlighted {
 .cf-dots > span:nth-child(2) { animation-delay: 0.16s; }
 .cf-dots > span:nth-child(3) { animation-delay: 0.32s; }
 
+@keyframes cf-stream-token-in {
+  from { opacity: 0; filter: blur(1.5px); transform: translateY(2px); }
+  to { opacity: 1; filter: blur(0); transform: none; }
+}
+
+.cf-stream-token {
+  display: inline;
+  animation: cf-stream-token-in 260ms ease-out both;
+}
+
+@keyframes cf-activity-shimmer {
+  0%, 100% { opacity: 0.72; }
+  50% { opacity: 1; }
+}
+
+.cf-activity-label {
+  animation: cf-activity-shimmer 1.35s ease-in-out infinite;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .cf-message-in,
   .cf-pop,
@@ -607,6 +626,10 @@ html[data-resolved-theme="dark"] .cf-menu-item.is-highlighted {
   .cf-fall,
   .cf-breathe,
   .cf-dots > span {
+    animation: none !important;
+  }
+  .cf-stream-token,
+  .cf-activity-label {
     animation: none !important;
   }
   .cf-lift:hover,

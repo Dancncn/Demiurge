@@ -24,6 +24,7 @@ import type {
 import { MessageList } from "./components/MessageList";
 import { Sidebar, type AppView } from "./components/Sidebar";
 import { Composer } from "./components/Composer";
+import { WorkspaceExplorer } from "./components/WorkspaceExplorer";
 import GoalBar, { type GoalAction } from "./components/GoalBar";
 import ConfirmDialog from "./components/ConfirmDialog";
 import SettingsDialog, { type SettingsTab } from "./components/SettingsDialog";
@@ -37,6 +38,7 @@ import {
   CheckIcon,
   ChevronDownIcon,
   CloseIcon,
+  FolderIcon,
   MaximizeIcon,
   MinimizeIcon,
   PanelLeftIcon,
@@ -158,6 +160,33 @@ function friendlyAssistantError(err: unknown, event?: AssistantErrorEvent) {
   return { title, message: raw.replace(/^Error:\s*/i, ""), hint, retryable: event?.retryable ?? true };
 }
 
+function affectedPathsFromTool(name: string, args: unknown): string[] {
+  if (!args || typeof args !== "object") return [];
+  const value = args as Record<string, unknown>;
+  if (name === "write_file" || name === "edit_file") {
+    return typeof value.path === "string" && value.path.trim() ? [value.path] : [];
+  }
+  if (name === "multi_edit" && Array.isArray(value.edits)) {
+    return Array.from(
+      new Set(
+        value.edits
+          .map((edit) => (edit && typeof edit === "object" ? (edit as Record<string, unknown>).path : null))
+          .filter((path): path is string => typeof path === "string" && Boolean(path.trim())),
+      ),
+    );
+  }
+  if (name === "apply_patch" && Array.isArray(value.hunks)) {
+    return Array.from(
+      new Set(
+        value.hunks
+          .map((hunk) => (hunk && typeof hunk === "object" ? (hunk as Record<string, unknown>).path : null))
+          .filter((path): path is string => typeof path === "string" && Boolean(path.trim())),
+      ),
+    );
+  }
+  return [];
+}
+
 function buildHistory(msgs: Message[]): DisplayItem[] {
   const out: DisplayItem[] = [];
   const results = new Map<string, string>();
@@ -189,6 +218,7 @@ function buildHistory(msgs: Message[]): DisplayItem[] {
           args,
           status: "done",
           result: results.get(tc.id),
+          affected_paths: affectedPathsFromTool(tc.function.name, args),
         });
       }
     }
@@ -279,6 +309,8 @@ export default function App() {
   const [packs, setPacks] = useState<PackManifest[]>([]);
   const [agentPanel, setAgentPanel] = useState<AgentPanelState>({ definitions: [], agents_dir: "" });
   const [workspace, setWorkspace] = useState<WorkspaceState | null>(null);
+  const [workspacePanelOpen, setWorkspacePanelOpen] = useState(false);
+  const [workspaceRefreshKey, setWorkspaceRefreshKey] = useState(0);
   const [goalPanel, setGoalPanel] = useState<GoalPanelState | null>(null);
   const [goalProgress, setGoalProgress] = useState<GoalProgressEvent | null>(null);
   const [sessionEngine, setSessionEngine] = useState<SessionEnginePanelState | null>(null);
@@ -486,6 +518,21 @@ export default function App() {
     }
   }
 
+  async function refreshWorkspaceState() {
+    try {
+      setWorkspace(await api.workspaceState());
+      setWorkspaceRefreshKey((value) => value + 1);
+    } catch (e) {
+      console.error("Failed to refresh workspace", e);
+    }
+  }
+
+  function handleWorkspaceChange(next: WorkspaceState) {
+    setWorkspace(next);
+    setWorkspaceRefreshKey((value) => value + 1);
+    void refreshSessions();
+  }
+
   async function refreshGoalPanel() {
     try {
       setGoalPanel(await api.goalPanelState());
@@ -621,6 +668,7 @@ export default function App() {
               args: e.args,
               status: "running",
               preview: e.preview,
+              affected_paths: e.affected_paths,
               description: e.description,
               risk: e.risk,
               permission_effect: e.permission_effect,
@@ -644,6 +692,9 @@ export default function App() {
                 : it,
             ),
           );
+          if (["write_file", "edit_file", "multi_edit", "apply_patch", "undo_edit"].includes(e.name)) {
+            void refreshWorkspaceState();
+          }
         },
         onConfirmRequest: (e) => setConfirmReq(e),
         onGoalProgress: (e) => {
@@ -845,6 +896,7 @@ export default function App() {
     setGoalProgress(null);
     await refreshSessions();
     await refreshGoalPanel();
+    await refreshWorkspaceState();
     requestAnimationFrame(() => textareaRef.current?.focus());
   }
 
@@ -866,6 +918,7 @@ export default function App() {
       setActiveId(id);
       setGoalProgress(null);
       await loadActiveHistory();
+      await refreshWorkspaceState();
     } catch (e) {
       console.error(e);
     }
@@ -889,6 +942,7 @@ export default function App() {
       await refreshSessions();
       await loadActiveHistory();
       setGoalProgress(null);
+      await refreshWorkspaceState();
     } catch (e) {
       console.error(e);
     }
@@ -1467,6 +1521,21 @@ export default function App() {
 
                   <button
                     type="button"
+                    onClick={() => setWorkspacePanelOpen((value) => !value)}
+                    disabled={!workspace}
+                    className={`grid h-8 w-8 place-items-center rounded-md transition ${
+                      workspacePanelOpen
+                        ? "bg-[#eef5ff] text-[#0b57d0]"
+                        : "text-[#59616d] hover:bg-[#eef1f5]"
+                    } disabled:cursor-not-allowed disabled:opacity-40`}
+                    aria-label={t("workspace.toggle")}
+                    title={workspace?.path || t("workspace.toggle")}
+                  >
+                    <FolderIcon size={17} />
+                  </button>
+
+                  <button
+                    type="button"
                     onClick={() => void toggleDesktopCompanion()}
                     disabled={!settings}
                     className={`grid h-8 w-8 place-items-center rounded-md transition ${
@@ -1610,38 +1679,53 @@ export default function App() {
                 onStopAudio={ttsQueue.stop}
               />
 
-              <MessageList
-                items={items}
-                thinking={thinking}
-                greeting={t("chat.greeting")}
-                onRetry={(text) => void handleSend(text)}
-                onOpenFortune={() => setFortuneOpen(true)}
-              />
+              <div className="flex min-h-0 min-w-0 flex-1">
+                <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+                  <MessageList
+                    items={items}
+                    thinking={thinking}
+                    greeting={t("chat.greeting")}
+                    onRetry={(text) => void handleSend(text)}
+                    onOpenFortune={() => setFortuneOpen(true)}
+                  />
 
-              <Composer
-                input={input}
-                canSend={canSend}
-                loading={appBusy}
-                permissionMode={settings?.permission_mode ?? "default"}
-                onSetPermissionMode={(m) => void handleSetPermissionMode(m)}
-                provider={settings?.provider ?? "deepseek"}
-                model={settings?.model ?? ""}
-                reasoningEffort={settings?.reasoning_effort ?? "auto"}
-                maxInputTokens={settings?.max_input_tokens ?? 0}
-                onSetModel={(m) => void handleSetModel(m)}
-                onSetEffort={(e) => void handleSetEffort(e)}
-                onOpenSettings={() => openSettings("context")}
-                workspace={workspace}
-                onOpenWorkspace={() => void api.openSandbox()}
-                textareaRef={textareaRef}
-                onSubmit={(attachments) => handleSend(undefined, attachments)}
-                onStop={() => {
-                  ttsQueue.stop();
-                  void api.interrupt();
-                  setConfirmReq(null);
-                }}
-                onInputChange={setInput}
-              />
+                  <Composer
+                    input={input}
+                    canSend={canSend}
+                    loading={appBusy}
+                    permissionMode={settings?.permission_mode ?? "default"}
+                    onSetPermissionMode={(m) => void handleSetPermissionMode(m)}
+                    provider={settings?.provider ?? "deepseek"}
+                    model={settings?.model ?? ""}
+                    reasoningEffort={settings?.reasoning_effort ?? "auto"}
+                    maxInputTokens={settings?.max_input_tokens ?? 0}
+                    onSetModel={(m) => void handleSetModel(m)}
+                    onSetEffort={(e) => void handleSetEffort(e)}
+                    onOpenSettings={() => openSettings("context")}
+                    workspace={workspace}
+                    onOpenWorkspace={() => setWorkspacePanelOpen(true)}
+                    onWorkspaceChange={handleWorkspaceChange}
+                    onRefreshWorkspace={() => setWorkspaceRefreshKey((value) => value + 1)}
+                    textareaRef={textareaRef}
+                    onSubmit={(attachments) => handleSend(undefined, attachments)}
+                    onStop={() => {
+                      ttsQueue.stop();
+                      void api.interrupt();
+                      setConfirmReq(null);
+                    }}
+                    onInputChange={setInput}
+                  />
+                </div>
+
+                <WorkspaceExplorer
+                  open={workspacePanelOpen}
+                  workspace={workspace}
+                  busy={appBusy}
+                  refreshKey={workspaceRefreshKey}
+                  onClose={() => setWorkspacePanelOpen(false)}
+                  onWorkspaceChange={handleWorkspaceChange}
+                />
+              </div>
             </>
           ) : activeView === "media" ? (
             <MediaStudio settings={settings} onOpenSettings={() => openSettings("media")} />

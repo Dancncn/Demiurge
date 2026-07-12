@@ -15,7 +15,6 @@ import {
   CloseIcon,
   FileIcon,
   FolderIcon,
-  GitBranchIcon,
   MicIcon,
   PaperclipIcon,
   StopIcon,
@@ -25,6 +24,7 @@ import { ContextMeter } from "./ContextMeter";
 import { findProvider, REASONING_EFFORTS } from "../lib/providers";
 import { useI18n } from "../lib/i18n";
 import type { PermissionMode, ProviderKind, ReasoningEffort, WorkspaceState } from "../lib/types";
+import { BranchSwitcher } from "./BranchSwitcher";
 
 const PERMISSION_MODE_LABELS: Record<PermissionMode, string> = {
   plan: "Plan",
@@ -80,6 +80,8 @@ type Props = {
   onOpenSettings: () => void;
   workspace?: WorkspaceState | null;
   onOpenWorkspace?: () => void;
+  onWorkspaceChange?: (workspace: WorkspaceState) => void;
+  onRefreshWorkspace?: () => void;
   textareaRef: RefObject<HTMLTextAreaElement>;
   onSubmit: (attachments: ProcessedAttachment[]) => Promise<boolean> | boolean;
   onStop: () => void;
@@ -105,6 +107,8 @@ export function Composer({
   onOpenSettings,
   workspace,
   onOpenWorkspace,
+  onWorkspaceChange,
+  onRefreshWorkspace,
   textareaRef,
   onSubmit,
   onStop,
@@ -467,15 +471,13 @@ export function Composer({
               <FolderIcon size={14} className="shrink-0 text-[#7a8088]" />
               <span className="truncate">{workspace.name || "Workspace"}</span>
             </button>
-            {workspace.is_git && workspace.branch && (
-              <span
-                className="inline-flex h-7 max-w-[180px] items-center gap-1.5 rounded-md border border-[#e2e5ea] bg-white px-2 text-[12px] text-[#4f5661] shadow-[0_1px_2px_rgba(15,23,42,0.04)]"
-                title={workspace.branch}
-              >
-                <GitBranchIcon size={14} className="shrink-0 text-[#7a8088]" />
-                <span className="truncate">{workspace.branch}</span>
-                {workspace.dirty && <span className="size-1.5 rounded-sm bg-[#c7ccd4]" title="worktree" />}
-              </span>
+            {workspace.is_git && onWorkspaceChange && onRefreshWorkspace && (
+              <BranchSwitcher
+                workspace={workspace}
+                busy={loading}
+                onWorkspaceChange={onWorkspaceChange}
+                onRefreshWorkspace={onRefreshWorkspace}
+              />
             )}
           </div>
         )}
