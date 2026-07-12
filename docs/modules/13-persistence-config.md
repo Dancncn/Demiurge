@@ -1,5 +1,7 @@
 # 持久化、凭据与连接测试
 
+> 审阅状态（2026-07-12）：`Session` 新增向后兼容的 `workspace_path`，`SessionMeta` 暴露项目路径与名称；会话加载后会校验目录并同步运行时项目根。固定行号请以符号名为准。
+
 > 存档级技术原理文档。读者为协作开发者。
 > 覆盖源文件：
 > - `src-tauri/src/store/mod.rs`（设置 / 会话的数据结构与落盘）
@@ -71,6 +73,7 @@
 pub struct Session {
     pub id: String,
     pub title: String,
+    pub workspace_path: String,           // 当前会话绑定项目；旧数据默认为空
     pub summary: Option<String>,            // rolling summary
     pub goal: Option<crate::agent::goal::GoalState>,  // goal state
     pub messages: Vec<Message>,
@@ -78,8 +81,9 @@ pub struct Session {
 }
 ```
 
-两个关键字段都用 `#[serde(default, skip_serializing_if = "Option::is_none")]`（`store/mod.rs:361`、`:363`）：
+`workspace_path` 使用 `#[serde(default, skip_serializing_if = "String::is_empty")]` 保持旧 `sessions.json` 兼容；`summary` 与 `goal` 使用 `#[serde(default, skip_serializing_if = "Option::is_none")]`：
 
+- `workspace_path`：当前会话绑定项目的规范化路径。选中会话时重新校验；空值、路径移除或不可访问会回退默认沙盒。
 - `summary`：**rolling summary**。历史被裁剪/压缩后由 LLM 生成的滚动摘要，随会话一起落盘。
 - `goal`：**goal state**，类型为 `agent::goal::GoalState`，承载目标、状态机、token 预算与计时，同样随会话落盘。
 
@@ -87,7 +91,7 @@ pub struct Session {
 
 `SessionStore::ensure_one()`（`store/mod.rs:391`）是健壮性闸门：保证至少有一个会话、且 `active` 始终指向存在的会话；任何加载路径都会过它一遍。
 
-`SessionMeta`（`store/mod.rs:412`）是给前端列表用的轻量投影（不含 `messages`），避免把整段对话推给侧边栏。
+`SessionMeta` 是给前端列表用的轻量投影（不含 `messages`），除 id/title/time 外还返回 `workspace_path` 与派生的 `workspace_name`。完整本地路径会进入前端内存并用于 title 提示；它不会发往模型，但截图、日志与前端诊断信息仍可能暴露路径，因此属于需要克制展示的本地隐私元数据。
 
 ### 入口函数一览
 

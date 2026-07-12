@@ -1,5 +1,7 @@
 # 架构总览
 
+> 审阅状态（2026-07-12）：当前项目根由活动会话的 `workspace_path` 决定，`workspace.rs` 负责目录/预览/Git 命令；未选择或路径失效时回退默认沙盒。下文固定行号仅作历史定位。
+
 > 存档级技术原理文档的入口篇。先在这里建立全局心智模型——分层结构、全局状态、命令/事件桥与一次回合的端到端数据流——再按需深入各子系统文档。
 
 ## 一、定位与基本取舍
@@ -9,7 +11,7 @@ Demiurge 是一个**本地优先**的桌面 Agent 引擎：
 - **Rust 内核 + React 外壳。** 全部 Agent 逻辑、工具执行、上下文工程、持久化、系统访问都在 Rust（Tauri 2）后端；前端只负责展示与交互，不承载业务逻辑。两者通过 Tauri 的命令（`invoke`）与事件（`listen`）通信，没有额外的 JS/Python sidecar，也不打包独立 JS 运行时。
 - **自带大脑。** 无托管后端、无中继。用户把引擎指向自己的 LLM 端点（在线 OpenAI 兼容、Anthropic、Gemini，或本地兼容网关）。
 - **角色与引擎分离。** 引擎通用；persona、记忆、头像/语音等素材由用户导入的角色包提供。
-- **可控安全。** 文件工具被物理限制在沙盒目录；写文件、shell、打开路径、截图/OCR、读剪贴板等敏感动作走确认门；密钥存系统凭据管理器而非明文配置。
+- **可控安全。** 文件工具被物理限制在会话绑定项目根（未选择时为默认沙盒）；写文件、shell、打开路径、截图/OCR、读剪贴板等敏感动作走确认门；密钥存系统凭据管理器而非明文配置。
 
 ## 二、分层结构
 
@@ -43,11 +45,24 @@ flowchart TD
 后端围绕一个全局 `AppState`（`src-tauri/src/lib.rs`）组织，由 Tauri 在启动时 `manage`，所有 `#[tauri::command]` 通过 `State<'_, AppState>` 共享访问。它持有的核心运行时状态大致包括：
 
 - 会话与设置：`SessionStore`、`Settings`（含运行时水合出的内存态 secret）。
+- 项目所有权：`sandbox_dir` 保存当前活动会话解析后的项目根；`Session.workspace_path` 是持久化来源。
 - 回合治理：`session_engine`（`active_turn`/`last_turn`）、`busy` / `cancel` 原子标记。
 - 编排与权限：workflow 运行时状态、Plan Mode 的 `plan_state`、权限规则与待确认项。
 - 外部连接：MCP Manager、provider/HTTP client 等。
 
 > 详见 [18-应用外壳、命令面与构建](18-app-shell-build.md)。
+
+会话与项目根的所有权链如下：
+
+```text
+Session.workspace_path
+  -> sync_active_session_workspace / select_workspace
+  -> canonicalize + 目录可读性检查
+  -> AppState.sandbox_dir
+  -> prompt / memory / skills / file tools / shell cwd / Git commands
+```
+
+后端在活动回合中禁止把 `sandbox_dir` 切到另一个项目，也禁止切 Git 分支。前端当前仍通过 `list_sessions`、`get_history`、`workspace_state`、Goal 状态等多个独立请求拼装页面快照；这些响应没有共同版本号，快速切换时可能交错。正确性修复应使用导航 epoch，或由后端原子返回带 `session_id` 的完整快照，详见 [代码审查报告](../CODE-REVIEW-2026-07-12.md)。
 
 ## 四、命令/事件桥
 
@@ -60,6 +75,7 @@ flowchart TD
 | 对话 | `send`、`send_with_agents`、`interrupt` |
 | 设置 / 连接测试 | `save_settings`、`provider_check_connection`、`web_search_check_connection`、`webdav_check_connection` |
 | 会话 | 列举 / 切换 / 重命名 / 删除会话 |
+| 项目 / Git | `select_workspace`、`workspace_state`、目录/预览、分支/更改枚举与 `switch_git_branch` |
 | 上下文 | `context_panel_state`、`session_engine_state` |
 | 工作流 | 列举定义、`run`/`stop`、resume |
 | 记忆 / 权限 / Plan | 记忆增删改查、权限规则与审计、`approve_plan` |
@@ -67,7 +83,7 @@ flowchart TD
 
 **事件（后端 → 前端 `emit`）**：
 
-- 统一信封 `agent-event`（带 turn context），以及为兼容而保留的 legacy `assistant-*` / `tool-*` 事件——两者**双发**。
+- 统一信封 `agent-event`（带 turn context），以及为兼容而保留的 legacy `assistant-*` / `tool-*` 事件——两者**双发**。当前主时间线仍消费无 session/turn 归属的 legacy 通道，这是多会话项目绑定后的正确性缺口。
 - 状态推送：`session-engine-updated`（busy/cancel）、`goal`、`workflow-updated`、`plan`、`confirm`（敏感操作确认往返）等。
 
 > 详见 [17-前端架构](17-frontend-architecture.md) 与 [02-Agent 主循环与 Session Engine](02-agent-loop-session-engine.md)。
@@ -124,7 +140,7 @@ app_data_dir/
 ├─ skills/*/SKILL.md             # global skills
 ├─ ocr-models/                   # 本地 OCR 模型
 ├─ packs/                        # 用户角色包（可含 pack memory / pack skills）
-└─ sandbox/                      # 文件工具唯一可访问的工作区
+└─ sandbox/                      # 未选择项目时的默认工作区；会话也可绑定外部项目根
    └─ .demiurge/
       ├─ memory.md               # project-scope 记忆
       ├─ session-memory/*.md     # session-scope 记忆

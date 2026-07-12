@@ -1,6 +1,8 @@
 # Workflow JSON DSL
 
-Demiurge supports a Rust-native workflow runtime for multi-agent orchestration. Put workflow files in the sandbox under:
+> Review status (2026-07-12): the DSL, journal, durable run snapshots and resume path were checked against the current runtime. Workflow paths are resolved from the project attached to the active session.
+
+Demiurge supports a Rust-native workflow runtime for multi-agent orchestration. Put workflow files in the active project under:
 
 ```text
 .demiurge/workflows/<name>.json

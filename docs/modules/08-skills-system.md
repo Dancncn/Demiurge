@@ -1,5 +1,7 @@
 # Skills 系统：Markdown 能力发现与注入
 
+> 审阅状态（2026-07-12）：global、当前项目与角色包三层 Skill 发现规则已复核；项目层目录随会话绑定项目切换。固定行号请以符号名为准。
+
 > 存档级技术原理文档
 > 主源文件：`src-tauri/src/agent/skills.rs`
 > 衔接点：`src-tauri/src/agent/prompt.rs:262`（`skills_section`）、`src-tauri/src/lib.rs:344`（slash 分流）、`src-tauri/src/lib.rs:1211`（`skill_panel_state` Tauri 命令）

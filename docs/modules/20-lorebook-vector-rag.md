@@ -1,5 +1,7 @@
 # Lorebook 向量召回与混合 RAG
 
+> 审阅状态（2026-07-12）：BM25、远程 embedding、RRF 融合、缓存失效与安全回落路径已按当前测试复核；本轮工作区改动只改变项目根来源，不改变召回算法。
+
 > 本篇描述 Demiurge Lorebook 检索的**稀疏 + 稠密混合召回**实现。面向已读过 [14-角色包系统](14-pack-system.md) 与 [03-上下文工程](03-context-engineering.md) 的协作者。
 
 ## 定位

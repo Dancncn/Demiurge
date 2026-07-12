@@ -1,5 +1,7 @@
 # TODO / 路线图
 
+> 文档状态：2026-07-12 已重新核对完成项与剩余项；本轮代码审查的证据和优先级见 [代码审查报告](./CODE-REVIEW-2026-07-12.md)。
+
 Demiurge 当前已经具备本地桌面 Agent 的主体能力：会话、工具、权限、上下文、记忆、工作流、角色卡和本地 Lorebook RAG。这个文档先记录已经完成的功能，再列出已有雏形但仍需要打磨的缺口，最后保留下一阶段的陪伴向路线。
 
 ## 已实现能力账本
@@ -9,6 +11,10 @@ Demiurge 当前已经具备本地桌面 Agent 的主体能力：会话、工具�
 - [x] **Tauri 桌面底座**：Rust 后端、React 前端、Vite 构建、Tauri dev/build 流程和桌面窗口集成。
 - [x] **会话 UI**：侧栏会话列表、消息流、输入框、工具卡片、设置弹窗、状态栏和基础错误展示。
 - [x] **会话持久化**：多会话保存、恢复、重命名、删除、活跃会话切换和基础统计。
+- [x] **会话级项目文件夹**：选择本地项目、随会话保存路径、切换会话恢复项目；生成回复期间禁止跨项目切换。
+- [x] **项目浏览器**：目录懒加载、重目录过滤、限长文本预览、二进制识别、未提交文件列表和手动刷新。
+- [x] **Git 分支入口**：查看/搜索本地与远程分支、显示当前分支和脏状态、切换前提示、冲突安全失败。
+- [x] **编辑活动与流式动效**：编辑工具显示受影响文件并可展开详情；流式文字按帧合并、尾部词片段淡入并尊重 reduced-motion。
 - [x] **Settings 面板**：Provider、Web Search、OCR、Memory、Context、WebDAV、Permission、Shell、MCP、Voice 等设置入口。
 - [x] **提交前门禁**：`cargo fmt --check`、Rust 单元测试、前端构建可以作为提交前验证基线。
 
@@ -81,6 +87,31 @@ Demiurge 当前已经具备本地桌面 Agent 的主体能力：会话、工具�
 - [x] **Lorebook 检索注入**：按当前用户输入进行短语匹配、中文 ngram 和 BM25 稀疏召回，注入 `Retrieved Lorebook`。
 - [x] **Lorebook UI**：Settings 中展示 lorebook 条目、添加目录模板、输入查询并预览真实召回片段。
 - [x] **默认角色包示例**：`packs/default` 展示 persona、manifest 2.0、lore 目录和 pack tone guard skill。
+
+## P0/P1 / 代码审查修复队列
+
+- [ ] **角色包权限只能收紧**：未受信 manifest 不得把 Ask/Deny 降为 Allow；若要放宽，必须独立展示权限差异并按包指纹取得显式用户授权。
+- [ ] **会话—工作区原子快照**：用 navigation epoch 或后端原子命令绑定 `session_id + history + workspace + goal`；所有慢响应和 legacy 事件必须验证 session/turn 归属。
+- [ ] **项目/会话权限真正隔离**：Project scope 按 canonical 项目根分桶；Session scope 按 session id 分桶并在切换后不串用。
+- [ ] **撤销记录绑定项目身份**：undo entry 保存 canonical workspace/root 与目标绝对身份，切换项目后只允许撤销同一根内记录。
+- [ ] **角色包 IPC 根目录校验**：所有 pack id 在 join 前验证；列表、读取、Live2D 与 lore 命令都必须确认解析结果仍在 `packs_dir`。
+- [ ] **Live2D 事务化安全导入**：不可信资源引用拒绝绝对路径和 `..`，重命名也做 containment；先在临时目录完整校验，再原子替换旧模型。
+- [ ] **公开 URL SSRF 防护**：拒绝 loopback、私网、链路本地、未指定/保留地址和凭据 URL；逐跳解析 DNS 并复核重定向目标。
+- [ ] **Windows 系统打开去除命令解释器**：避免 `cmd /C start` 处理不可信目标；至少拒绝/正确封装 shell 元字符，并为 URL/路径添加注入回归测试。
+- [ ] **deferred 工具按目标授权**：`execute_tool` 的记忆规则包含实际 tool name，或在 wrapper 内再次走目标工具权限门。
+- [ ] **MCP 注解只作提示**：外部 server 自报 read-only 不能让 Auto 自动放行；动态工具风险下限保持 External/Privileged。
+- [ ] **分支命令验证 expected workspace**：列表缓存按项目失效，loading 时不可点击；后端切换时比较调用方看到的项目根。
+
+## P2/P3 / 正确性、协议、体验与门禁修复队列
+
+- [ ] **恢复 Rust 格式门禁**：修正 `src-tauri/src/pack/live2d.rs:303` 的 rustfmt 差异，确保全仓 `cargo fmt -- --check` 通过。
+- [ ] **历史工具状态结构化**：持久化 ok/denied/failed、错误、耗时和受影响路径；未知状态不显示为绿色成功。
+- [ ] **第三种供应商 SSE 对齐**：复用公共解码器，处理无换行流尾、多行 data、命名/内嵌错误，并拒绝静默 JSON 丢弃。
+- [ ] **完整流终止校验与解码上限**：缺少协议终止事件的 clean EOF 不能归一为 stop；为单行、单事件和累计缓冲设置字节上限。
+- [ ] **canonical done 与统一事件信封**：最终完整正文修复漏 delta；主时间线按 session/turn reducer 消费统一事件。
+- [ ] **流式渲染性能**：历史 Markdown/ToolCard 保持稳定 memo，自动滚动尊重用户位置，Mermaid 只在流完成后渲染一次。
+- [ ] **工作区组件竞态与响应式/无障碍**：目录、changes、preview 使用 generation；Git→非 Git 回到 Files；项目面板在窄窗口改为 drawer，并补键盘/ARIA。
+- [ ] **前端测试基线**：增加组件、延迟竞态、跨会话事件、流式 fixture、性能、980/1280/1811px 布局和可访问性回归。
 
 ## 已有雏形但需要优化
 
@@ -202,6 +233,8 @@ Demiurge 当前已经具备本地桌面 Agent 的主体能力：会话、工具�
 - [ ] **本地数据导出**：导出设置、记忆、番茄钟记录、Goal/Workflow 历史、角色包索引状态，便于迁移和协作排查。
 - [ ] **异常可恢复**：后台任务、番茄钟、会话保存和 Workflow 在应用重启后尽量恢复到可解释状态。
 - [ ] **打包与模型资产策略**：OCR、后续 TTS/embedding 模型保持可选下载，避免默认包体过大。
+- [ ] **前端重包继续拆分**：生产构建已通过，但 Live2D vendor chunk 仍约 1.1 MB 并触发非阻断体积警告。
+- [ ] **真实端点契约回归**：离线解析测试已覆盖两类流式协议的正文、思考、工具、usage、流尾和错误；发布前补充真实网络下的限流、取消、代理分片与断流回归。
 
 ## 暂不做
 
@@ -213,5 +246,6 @@ Demiurge 当前已经具备本地桌面 Agent 的主体能力：会话、工具�
 ## 维护提示
 
 - 架构结构见 [IMPLEMENTATION.md](./IMPLEMENTATION.md)。
+- 当前审查结论见 [CODE-REVIEW-2026-07-12.md](./CODE-REVIEW-2026-07-12.md)。
 - 设计背景见 [demiurge-mvp-design.md](./demiurge-mvp-design.md)。
-- 提交前至少运行 `npm run build`、`cargo fmt --manifest-path src-tauri/Cargo.toml -- --check` 和 `cargo test --manifest-path src-tauri/Cargo.toml`。
+- 提交前至少运行 `npm run build`、`cargo fmt --manifest-path src-tauri/Cargo.toml -- --check` 和 `cargo test --manifest-path src-tauri/Cargo.toml`；2026-07-12 基线为 Rust 215 项测试通过。

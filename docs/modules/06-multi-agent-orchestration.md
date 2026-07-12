@@ -1,5 +1,7 @@
 # 多 Agent 编排：子 Agent、Ultracode 与自定义 Agent
 
+> 审阅状态（2026-07-12）：只读子 Agent 工具白名单、上下文修复和预算边界仍与当前源码一致；本轮没有放宽子 Agent 的写入或递归派生权限。固定行号请以符号名为准。
+
 > 存档级技术原理文档。读者：协作开发者。
 > 覆盖源文件：
 > - `src-tauri/src/agent/subagent.rs`（只读子 Agent 运行时）

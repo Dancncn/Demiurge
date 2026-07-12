@@ -21,14 +21,16 @@
 
 ---
 
+> 文档状态：2026-07-12 已按当前工作区、会话绑定、Git、编辑活动与流式渲染实现复核。发布前验证基线为前端生产构建通过、Rust 215 项测试通过。
+
 ## 这是什么
 
 Demiurge 是一个桌面伴侣 Agent 的“空引擎”。它不绑定具体角色，也不托管你的数据；你提供角色包和 LLM 端点，它负责把对话、工具、记忆、安全边界和本地桌面能力串起来。
 
-- **本地优先**：Tauri + Rust 后端，设置、会话、角色包、记忆都保存在本机。
+- **本地优先**：Tauri + Rust 后端，设置、会话、角色包、记忆都保存在本机；每个会话可绑定一个独立项目文件夹。
 - **角色与引擎分离**：角色包用 manifest 2.0 描述 persona、结构化 Character Card（身份/背景/人格/说话风格/示例对话/OOC 规则）、Runtime 策略（技能绑定、memory namespace、voice、permission 偏好）与 Lorebook 知识库；引擎保持通用。
-- **会动手**：可读写沙盒文件、编辑代码、跑 shell、联网搜索、截图/OCR、派生子 Agent、运行 workflow。
-- **可控安全**：写文件、shell、打开路径、截图/OCR 等敏感操作走确认门；文件工具被限制在沙盒目录；角色卡可声明 permission 偏好，在用户规则与工具默认之间形成可配置 overlay。
+- **会动手**：可读写当前会话项目中的文件、编辑代码、跑 shell、联网搜索、截图/OCR、派生子 Agent、运行 workflow。
+- **可控安全**：写文件、shell、打开路径、截图/OCR 等敏感操作走确认门；文件工具被限制在当前会话项目根；角色卡可声明 permission 偏好，在用户规则与工具默认之间形成可配置 overlay。
 - **可持续推进**：`/goal` 可以设置长期目标，普通回合结束后继续自动驱动，直到完成、暂停、阻塞或预算耗尽。
 - **Lorebook 向量召回**：本地 BM25 稀疏检索 + 远程 embedding 稠密检索 + RRF 混合融合，chunk 向量按 provider+维度缓存；`/recall` 与设置面板可视化命中关键词、score、索引状态。
 - **Live2D 面板**：角色包可挂载 Cubism 4/5 模型（`untitled-pixi-live2d-engine` + PixiJS v8），在应用内渲染带 idle 物理/眨眼/呼吸的 Live2D 面板，支持缩放与拖拽。需先运行 `npm run fetch:cubism-core` 取回 Live2D Cubism Core（私有运行时，不入库），再在设置 > 人物包导入模型文件夹。
@@ -43,6 +45,14 @@ Demiurge 是一个桌面伴侣 Agent 的“空引擎”。它不绑定具体角�
 - 统一工具 schema，按 provider 方言输出。
 - 多会话持久化、角色包切换、设置持久化。
 - LLM API Key 使用系统凭据管理器保存。
+
+### 项目工作区与对话
+
+- 从输入区或项目面板选择本地文件夹；选择结果随当前会话持久化，切换会话时恢复对应项目。
+- 项目树按目录懒加载，默认过滤依赖、构建产物与版本控制内部目录；文本预览限制为 256 KiB，并识别二进制文件。
+- Git 面板展示当前分支、本地/远程分支与未提交文件；切换分支前提示脏工作区，冲突时由 Git 安全拒绝。
+- 文件编辑工具在消息流中显示“正在编辑/已编辑”的文件活动卡片，可展开查看受影响路径、参数、结果与差异预览。
+- 流式回复先在后端归一化供应商事件，再由前端按动画帧合并增量；Markdown、代码块、公式与文字淡入共用同一渲染路径。
 
 ### Context Engineering
 
@@ -82,9 +92,9 @@ Demiurge 是一个桌面伴侣 Agent 的“空引擎”。它不绑定具体角�
 - **Memory namespace**：角色卡 `runtime.memory.namespace` 把 user/project 记忆隔离到带后缀文件（`user.{ns}.md` / `memory.{ns}.md`），default 走 legacy；`memory_migrate_namespace` 迁移旧记忆；`/dream` 与自动抽取写 namespaced 路径。
 - **Permission overlay**：角色卡 `runtime.permissions` 解析为 `CardOverlay` 决策，插入 user 规则与 tool 默认之间；`ask_once` 自动 session-remember，`ask_every_time` 禁止持久化；面板暴露 `card_preference`。
 
-### Reserved Interfaces
+### Voice 与素材接口
 
-- Voice：语音输入（STT/ASR）已接入云端转写后端（DashScope `qwen3-asr-flash`、OpenAI 兼容 Whisper，由 `voice_stt_backend` 选择）；语音输出（TTS）已接通双后端——DashScope（默认音色 Cherry、模型 `qwen3-tts-flash`，返回音频 URL）与 GPT-SoVITS（默认 base `http://127.0.0.1:9880`，返回 base64 data URI），由 `voice_tts_backend` 选择。流式合成、播放队列、打断、语速/情感参数等待办。
+- Voice：语音输入（STT/ASR）已接入云端转写后端；语音输出支持云端与本地服务、语速/情感/streaming 请求参数、连接测试、失败降级，以及按句切分的播放队列、静音和打断。默认安装包不分发本地语音模型权重。
 - 角色包素材字段：avatar、Live2D（已实现，经 Tauri asset 协议加载）、voice（预留）等。
 
 ## 快速开始
@@ -160,8 +170,8 @@ assets/          # 头像、语音、Live2D 等本地素材
 
 ```text
 React UI
-  ├─ invoke: send / settings / sessions / workflow commands
-  └─ listen: assistant/tool/confirm/workflow events
+  ├─ invoke: send / settings / sessions / workspace / Git / workflow commands
+  └─ listen: assistant/tool/confirm/workspace/workflow events
         │
         ▼
 Rust AppState
@@ -191,6 +201,7 @@ Demiurge/
 │  ├─ src/permission/            # Confirmation and permission gate
 │  ├─ src/store/                 # Settings/session persistence
 │  ├─ src/pack/                  # Character pack loading
+│  ├─ src/workspace.rs           # Project tree, preview, Git status/branch commands
 │  ├─ src/credentials.rs         # Keyring integration
 │  ├─ src/connection_tests.rs    # Provider/Web Search/WebDAV connection tests
 │  ├─ src/ocr.rs                 # OCR model and inference entry
@@ -208,8 +219,11 @@ Demiurge/
 
 ## Security Model
 
-- 文件工具只能访问应用数据目录下的 `sandbox/`。
+> 注意：2026-07-12 审查确认了若干尚未修复的高优先级边界，包括角色包可声明放宽工具权限、记忆权限的项目/会话隔离、跨项目撤销、角色包路径、公开 URL 私网访问、Windows 系统打开命令、deferred/MCP 工具授权粒度，以及前端会话—工作区竞态。在这些修复完成前，不要把 Auto/Bypass、未受信角色包或未受信 MCP server 视为强隔离环境；详情见 [代码审查报告](docs/CODE-REVIEW-2026-07-12.md)。
+
+- 文件与 shell 工具只能访问当前会话绑定的项目根；未选择项目时回退到应用数据目录下的 `sandbox/`。
 - 路径先做词法校验，再做 canonicalize 校验，防止 `..`、符号链接和 junction 逃逸。
+- 回复生成期间禁止切换到另一个项目或切换 Git 分支，避免运行中的工具根目录发生漂移。
 - 写文件、shell、open_path、截图/OCR 等操作会先请求确认。
 - shell 限制 cwd、timeout 和 output cap。
 - 子 Agent 默认只读，不允许写文件、跑 shell 或递归派生。
@@ -246,6 +260,8 @@ npm run tauri build
 
 - [模块技术原理文档（存档）](docs/modules/README.md) — 逐子系统的深度技术文档，从[架构总览](docs/modules/01-architecture-overview.md)开始
 - [实现说明](docs/IMPLEMENTATION.md)
+- [代码审查报告（2026-07-12）](docs/CODE-REVIEW-2026-07-12.md)
+- [流式输出协议评估](docs/streaming-protocol-assessment.md)
 - [TODO / 路线图](docs/TODO.md)
 - [Goal 持续驱动](docs/goal-continuous-driving.md)
 - [Ultracode 多 Agent 编排](docs/ultracode-agent-orchestration.md)

@@ -1,5 +1,7 @@
 # 应用外壳、命令面与构建
 
+> 审阅状态（2026-07-12）：命令面新增工作区目录/预览、Git 分支/更改与分支切换；生产构建通过但仍有 Live2D vendor 大分包警告。固定行号请以符号名为准。
+
 > 存档级技术原理文档。读者为协作开发者。
 > 覆盖源文件：
 > - `src-tauri/src/lib.rs`（全局状态 `AppState`、所有 `#[tauri::command]` 命令面、`run()` 构建器与 `setup`、WebDAV/上下文聚合等辅助逻辑）
@@ -281,7 +283,7 @@ context_panel_state:
 
 ## ⑥ 已知限制与扩展点
 
-- **TTS 双后端已接通，缺流式/队列/打断**。`voice_synthesize`（`voice.rs:193-249`）按 `voice_tts_backend` 分派：dashscope 分支复用 `media::synthesize_speech`（默认音色 Cherry、模型 `qwen3-tts-flash`，返回音频 URL），gpt-sovits 分支走 `synthesize_with_gpt_sovits`（默认 base `http://127.0.0.1:9880`，返回 base64 data URI）；未实现流式合成、播放队列、打断、语速/情感参数、连接测试与失败降级。STT（`voice_transcribe`）已接通云端 Whisper 形态接口（DashScope `qwen3-asr-flash` 或当前 provider 的 OpenAI 兼容 `whisper-1`）。
+- **语音链路已形成文本驱动播放队列**。`voice_synthesize` 按设置分派云端与本地服务，支持语速、情感、streaming 请求参数、连接测试和失败降级；前端 `useStreamingTtsQueue` 将助手文字增量按句切分并支持静音/打断。仍未实现的是单次合成响应的音频字节流播放、全局唤醒词，以及 Live2D 口型/动作联动。
 - **WebDAV 无恢复命令**。只有备份/列举/删除，缺 `restore`（见 3.5）。
 - **token 预算为估算**，非真实 tokenizer，面板数值仅供参考（见 3.6）。`context_panel_state` 里 `history_over_budget_tokens` 仅作展示，**裁剪/硬约束**的实际生效逻辑在 `agent::budget`/agent 循环侧，本壳层只读不裁。
 - **窗口尺寸双写**。conf 逻辑像素与 `setup` 物理像素并存（见 3.1），改默认尺寸需同时改常量与 conf。

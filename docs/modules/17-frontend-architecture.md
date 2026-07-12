@@ -1,5 +1,7 @@
 # 前端架构（React + Tauri 绑定）
 
+> 审阅状态（2026-07-12）：新增 `WorkspaceExplorer`、`BranchSwitcher`、会话项目徽标、编辑文件活动卡片和流式词片段动画；工作区/历史异步竞态的审查结论另见 [项目代码审查报告](../CODE-REVIEW-2026-07-12.md)。固定行号请以符号名为准。
+
 > 适用版本：`src/` 当前实现。本文聚焦数据流与事件契约，不逐行解释样式。
 > 引用约定：所有路径相对仓库根；行号形如 `src/App.tsx:159`，随代码演进可能漂移，请以符号名为准。
 
@@ -256,15 +258,31 @@ handleSend(text?, attachments=[])
 - **API key 存储**：Settings 文案声明密钥"安全保存在 settings.json 之外"（系统 keyring），前端类型里虽有 `api_key` 字段但其持久化由后端凭据层负责。
 - **Mermaid `securityLevel: "strict"`**、Markdown 链接统一 `target=_blank rel=noreferrer`，降低渲染注入风险。`dangerouslySetInnerHTML` 仅用于 Mermaid 渲染出的受控 SVG。
 
+### 9.1 会话工作区与异步归属
+
+`WorkspaceExplorer` 通过目录、预览和 Git changes 命令按需读取当前后端项目；`BranchSwitcher` 获取分支后只把分支名提交给后端；`SessionMeta` 在侧栏显示项目名称。后端拥有活动会话和项目根真值，前端的 `activeId`、`items` 与 `workspace` 都只是投影。
+
+当前投影由多个独立异步请求更新，尚无 request epoch、expected workspace path 或原子 session snapshot。目录、预览、changes、分支列表和 tool-end 刷新也没有响应失效令牌。因此“最后一次用户选择获胜”目前不是代码强制不变量；慢请求可能覆盖新状态。修复时应同时满足：
+
+1. 会话导航期间互斥，并只提交最新 epoch 的响应；
+2. 后端快照携带 `session_id`，分支切换验证 expected workspace path；
+3. 项目树/预览/分支请求绑定 `workspace.path` 与 generation；
+4. 时间线改用带 `turn.session_id` 的统一事件信封，丢弃非当前会话事件。
+
 ## 十、已知限制与扩展点
 
 1. **`WorkflowsPanel.tsx` 未接入 UI**。经全仓检索，除其自身与 `docs/IMPLEMENTATION.md` 外，没有任何源文件 `import` 它；工作流目前只能通过 Composer 的 `/workflows`、`/workflow resume <run_id>` slash 命令交由后端处理。该组件（含 `workflow-updated` 实时订阅、run 详情/重试/恢复 UI）是已完成但未挂载的扩展点。
 2. **统一事件信封未消费**。`agent-event` / `AgentEventEnvelope` / `listenUnifiedAgentEvents` 已在 `api.ts` 定义，但 `App.tsx` 实际消费的是 legacy 命名事件（`assistant-*`/`tool-*`/`goal-progress`）。迁移到统一信封是预留方向。
-3. **语音 STT/TTS 已接通但缺流式/队列**。`voice_transcribe`/`voice_synthesize`/`voice_status` 三命令后端已实现（STT：DashScope `qwen3-asr-flash` / OpenAI 兼容 Whisper；TTS：dashscope + gpt-sovits 双后端）。Composer 的录音 UI 完整可用，转写在选定具体后端后即可产出文本；未实现的是 TTS 流式合成、播放队列、打断、语速/情感参数与连接测试。
+3. **语音文字流与音频流需要区分**。`useStreamingTtsQueue` 已把助手文字增量按句切分，支持队列、静音、打断、语速/情感参数与连接测试；单次后端合成仍返回完整音频，不是逐字节音频流。VoiceCallPanel 提供按键说话、简单 VAD 与本地半双工打断。
 4. **上下文窗口表是前端硬编码**。`MODEL_CONTEXT_WINDOWS` 需随模型迭代手工维护，且与后端 provider 档案的实际上限是两套来源；不一致时以后端为准（前端仅用于自动建议输入预算数值）。
 5. **附件上限/截断**：单次最多 8 个文件、每文件 28000 字符、PDF 前 80 页——超限静默截断并加提示，没有 UI 让用户调整这些上限。
 6. **i18n 覆盖不完整**：聊天区与若干对话框仍有硬编码英文（见第六节提示），是最直接的可扩展点。
 7. **DisplayItem 不可编辑/重发**：除错误气泡的"重试"外，时间线没有消息编辑、分支或单条删除能力。
+8. **会话/工作区快照非事务化**：快速点击会话或慢目录 I/O 可让 `activeId`、历史与项目投影交错；这是优先级最高的正确性缺口。
+9. **历史工具状态失真**：`buildHistory` 把所有调用标为 done，失败/拒绝编辑会被显示成“已编辑”。
+10. **流式长会话性能**：不稳定的 retry handler 使历史 Markdown 重新渲染；每帧 smooth scroll 会强制回到底部；流式 Mermaid 会重复启动不可取消的解析/渲染。
+11. **最终正文未作为权威值**：`assistant-done` 仅在累计正文为空时回填，漏掉中间 delta 时无法自愈。
+12. **前端测试空白**：当前只有 TypeScript/生产构建，没有组件、竞态、性能、可访问性或端到端测试。
 
 ---
 

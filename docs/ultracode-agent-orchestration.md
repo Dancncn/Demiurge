@@ -1,5 +1,7 @@
 # Ultracode Multi-Agent Orchestration
 
+> 文档状态（2026-07-12）：已复核只读工具白名单、fork/recent/brief 上下文、evidence packet、reviewer 与 workflow 衔接；本轮未扩大子 Agent 的写权限。
+
 Demiurge 的 Ultracode 集成采用渐进式落地：先提供可运行的只读子 Agent 编排，再扩展到可恢复 workflow、React live panel 和隔离工作区。
 
 ## 已实现

@@ -1,5 +1,7 @@
 # Workflow JSON DSL 运行时与持久化恢复
 
+> 审阅状态（2026-07-12）：journal、durable snapshot、启动水合和恢复 overlay 的语义已复核；workflow 定义仍位于当前项目的 `.demiurge/workflows`。固定行号请以符号名为准。
+
 > 存档级技术原理文档。读者为协作开发者。本文聚焦“为什么这样设计”与“数据如何流动”，所有结论均以真实源码为依据。
 >
 > 主要源文件：

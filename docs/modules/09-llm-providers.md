@@ -1,5 +1,7 @@
 # LLM Provider 适配层与能力画像
 
+> 审阅状态（2026-07-12）：两类 SSE 适配路径现共享字节级解码器，统一处理任意分片、CR/LF、多行 data、无换行流尾与命名错误事件；前端继续只消费统一增量。固定行号请以符号名为准。
+
 > 存档级技术原理文档。读者：Demiurge 协作开发者。
 > 覆盖代码：`src-tauri/src/llm/mod.rs`、`openai.rs`、`anthropic.rs`、`gemini.rs`、`local.rs`、`src-tauri/src/connection_tests.rs`。
 > 约定：行号形如 `src-tauri/src/llm/mod.rs:225` 指向撰写本文时的源码状态。
@@ -92,30 +94,22 @@ pub struct AssistantTurn {
 
 ## 3. 核心数据流与算法
 
-### 3.1 流式解析的统一骨架（SSE 行缓冲状态机）
+### 3.1 流式解析骨架与当前一致性边界
 
-三个 adapter 的 `stream_completion_with_profile` 共享同一套**字节流 → 按 `\n` 切行 → 取 `data:` 前缀 → 喂解析器**的骨架（`openai.rs:43-73`、`anthropic.rs:69-98`、`gemini.rs:67-93`）：
+OpenAI-compatible 与 Anthropic 适配器现共享 `llm/sse.rs::SseDecoder`。解码器按字节缓存，在空行事件边界才派发，支持 LF/CRLF/CR、注释心跳、多行 `data:`、同一网络块多个事件，以及 EOF 无换行的最后事件；适配器再分别识别 `[DONE]` / `message_stop`、流内错误、正文、思考、工具参数和 usage。
 
-```
-loop over bytes_stream():
-    if cancel.load(Relaxed):           # 用户中断
-        state.finish = "interrupted"; break
-    buf.extend(chunk)
-    while buf 含有 '\n':
-        line = buf.drain(..=pos)       # 取出一整行（含换行）
-        line = line.trim()
-        data = line.strip_prefix("data:")?  # 非 data 行跳过
-        if data.is_empty(): continue
-        parse_*_stream_data(data, &mut state, &mut on_delta)
+```text
+reqwest bytes_stream
+  -> SseDecoder.push / finish
+  -> SseEvent { event, data }
+  -> provider parser
+  -> StreamDelta::Content | Reasoning
+  -> assistant-delta / assistant-reasoning
 ```
 
-差异点（终止条件）：
+Gemini 适配器尚未接入公共解码器，仍自行按 LF 拆 `data:` 行。因此 EOF 无 LF 的尾事件、多行 data、命名 error 事件与 data 内错误对象没有同等保障，格式错误也会被静默跳过。这是已确认的 P2 协议一致性缺口，不应把“三个适配器已完全统一”作为当前事实。
 
-- **OpenAI**：遇到 `data: [DONE]` 时 `break 'outer`（openai.rs:66）。
-- **Anthropic**：解析到 `message_stop` 事件后置 `state.message_stopped = true`，外层 `break 'outer`（anthropic.rs:92、anthropic.rs:306）。
-- **Gemini**：无显式终止哨兵，靠 `streamGenerateContent?alt=sse` 流自然结束（gemini.rs:71 的 `while let Some`）。
-
-`on_delta` 回调在每段可见正文增量上触发，用于把 token 实时推送到前端（cancel 检查在每个 chunk 边界做，保证中断的最长延迟是一个网络块）。
+`on_delta` 回调在每段可见正文/思考增量上触发；cancel 检查位于网络 chunk 边界。供应商解析归一化并不自动解决前端事件归属：主时间线仍消费不带 session/turn 的 legacy 事件，且 `assistant-done` 的完整正文未始终作为权威值覆盖累计增量。
 
 ### 3.2 中断（cancel）语义
 
@@ -332,5 +326,7 @@ let kind = ProviderTestKind::from_adapter(profile.adapter_kind()); // 复用 ada
 | **`supports_streaming`** | 所有 profile 恒 `true`；`build_*_body` 仍按字段读取，为将来非流式探测留口。 |
 | **OpenAI 兼容厂商无窗口 clamp** | `max_input_tokens = None` 是有意为之（兼容厂商窗口差异巨大），代价是窗口正确性依赖用户/设置而非代码兜底。 |
 | **新模型识别滞后** | reasoning effort 模型匹配是硬编码字符串前缀/包含（mod.rs:468-513），新模型上线需改码或用 `*_ALWAYS_ENABLE_EFFORT` 环境变量临时强开。 |
+| **Gemini SSE 仍是独立解析器** | 未复用 `SseDecoder`，会丢无换行流尾，不能处理多行 data/命名错误，格式错误被静默跳过；应对齐公共事件层并增加契约测试。 |
+| **前端事件归属与完整正文** | legacy 增量不带 session/turn；`assistant-done` 不总是覆盖累计正文。供应商后端归一化不能替代前端 canonical done 与跨会话过滤。 |
 
 **扩展新 provider 的标准路径**：① 在 `ProviderKind` 增枚举值（store/mod.rs:122）；② 若是 OpenAI 兼容厂商，仅在 `for_kind` 兼容分支挂上，并在 `provider_label`（connection_tests.rs:508）补显示名；③ 若是全新方言，新增 `ProviderAdapterKind`/`ToolSchemaDialect` 变体、对应 `build_*_body` 与流式解析、`normalize_finish_reason` 分支，并在 `stream_completion` 的 match 加路由。能力画像作为单一入口，使②类扩展几乎零成本。

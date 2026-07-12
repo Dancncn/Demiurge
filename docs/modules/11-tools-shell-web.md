@@ -1,5 +1,7 @@
 # 执行类与联网类工具
 
+> 审阅状态（2026-07-12）：shell 和项目文件类辅助工具的 cwd 现随活动会话项目同步；strict/sandboxed 策略、网络边界与输出截断语义不变。固定行号请以符号名为准。
+
 > 存档级技术原理文档。读者为协作开发者。
 > 覆盖源文件：
 > `src-tauri/src/tools/shell.rs`、`web_search.rs`、`web_fetch.rs`、`web_common.rs`、`http_get.rs`、`package_scripts.rs`、`open_path.rs`、`clipboard.rs`、`system_info.rs`、`tool_search.rs`、`execute_tool.rs`。
@@ -345,6 +347,8 @@ adapter = Adapter::parse(source 或 settings.web_search_provider 或 WEB_SEARCH_
 ---
 
 ## 5. 安全与权限边界（汇总）
+
+> 审查缺口：`http_get` / direct `web_fetch` 目前只校验 http/https scheme，却按“公开 URL”默认放行；没有拒绝 loopback/私网/链路本地，也没有逐跳复核重定向，存在 SSRF。Windows `open_path` 经 `cmd /C start` 传递目标且未拒绝 shell 元字符，存在命令拼接风险。以下表格应与这些未修复边界一起阅读。
 
 | 边界 | 实现位置 | 机制 |
 | --- | --- | --- |

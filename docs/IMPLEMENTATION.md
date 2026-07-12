@@ -1,5 +1,7 @@
 # 实现说明
 
+> 文档状态：2026-07-12 已按当前源码复核；本轮新增的项目文件夹、Git 分支、会话绑定、文件编辑活动与统一 SSE 解码均已纳入。审查结论见 [代码审查报告](./CODE-REVIEW-2026-07-12.md)。
+
 本文面向协作者，说明 Demiurge 的项目结构、核心数据流、后端模块、前端模块、安全边界和扩展方式。逐子系统的深度技术原理见 [modules/](./modules/README.md)（从[架构总览](./modules/01-architecture-overview.md)开始），路线图见 [TODO.md](./TODO.md)，设计背景见 [demiurge-mvp-design.md](./demiurge-mvp-design.md)。
 
 ## 总览
@@ -8,8 +10,8 @@ Demiurge 是一个 Tauri 桌面应用。前端负责展示和交互，Rust 后�
 
 ```text
 React UI
-  ├─ invoke: send / settings / connection tests / sessions / workflow / memory / permission / plan / MCP / WebDAV / OCR / voice / desktop companion commands
-  └─ listen: assistant/tool/agent-event/session-engine/confirm/goal/workflow/plan events
+  ├─ invoke: send / settings / sessions / workspace / Git / workflow / memory / permission / plan / MCP / WebDAV / OCR / voice / desktop companion commands
+  └─ listen: assistant/tool/agent-event/session-engine/workspace/confirm/goal/workflow/plan events
         │
         ▼
 Rust AppState
@@ -53,6 +55,7 @@ Demiurge/
 │  ├─ main.tsx
 │  ├─ style.css
 │  ├─ components/
+│  │  ├─ BranchSwitcher.tsx
 │  │  ├─ Composer.tsx
 │  │  ├─ ConfirmDialog.tsx
 │  │  ├─ DesktopCompanionShell.tsx
@@ -62,6 +65,7 @@ Demiurge/
 │  │  ├─ SettingsDialog.tsx
 │  │  ├─ Sidebar.tsx
 │  │  ├─ ToolCard.tsx
+│  │  ├─ WorkspaceExplorer.tsx
 │  │  ├─ VoiceCallPanel.tsx
 │  │  └─ WorkflowsPanel.tsx
 │  └─ lib/
@@ -79,6 +83,7 @@ Demiurge/
 │     ├─ voice.rs
 │     ├─ pomodoro.rs
 │     ├─ companion.rs
+│     ├─ workspace.rs
 │     ├─ embed/
 │     ├─ startup.rs
 │     ├─ agent/
@@ -104,7 +109,8 @@ Demiurge/
 
 | 模块 | 职责 | 关键入口 |
 |---|---|---|
-| `lib.rs` | Tauri command 注册、全局 `AppState`、应用初始化、`send` 分发、上下文面板聚合和桌面陪伴壳窗口同步 | `run()` / `send()` / `context_panel_state()` / `desktop_companion_show_main()` |
+| `lib.rs` | Tauri command 注册、全局 `AppState`、应用初始化、`send` 分发、上下文面板聚合、项目工作区同步和桌面陪伴壳窗口同步 | `run()` / `send()` / `context_panel_state()` / `desktop_companion_show_main()` |
+| `workspace.rs` | 会话级项目文件夹绑定、懒加载目录树、限长文本预览、Git 状态/分支枚举与受保护的分支切换 | `select_workspace()` / `list_workspace_directory()` / `read_workspace_file()` / `switch_git_branch()` |
 | `connection_tests.rs` | Settings 连接测试；用当前表单设置验证 LLM Provider、Web Search 和 WebDAV 以外的网络 key，不要求先保存密钥 | `test_provider()` / `test_web_search()` |
 | `credentials.rs` | keyring 凭据读写，避免 LLM/Web Search/WebDAV/MCP env 密钥落入 settings 明文 | `hydrate_or_migrate_settings()` / `save_mcp_env_secrets()` |
 | `ocr.rs` | OCR 模型路径、ModelScope/Hugging Face 源、下载进度事件、缺模型检查、手动安装提示和 OCR 推理入口 | `model_status()` / `download_models()` / `recognize_rgba()` |
@@ -128,7 +134,7 @@ Demiurge/
 | `agent/ultracode.rs` | `/ultracode` 临时编排 overlay | `overlay()` |
 | `agent/workflow_journal.rs` | workflow JSONL journal 和 resume overlay | `append()` / `resume_overlay()` |
 | `agent/workflow_runtime.rs` | JSON workflow DSL 执行、live panel 状态、durable run snapshot 写入和启动水合 | `launch()` / `run_launched()` / `hydrate_persisted_runs()` |
-| `llm/*` | OpenAI-compatible/local/Anthropic/Gemini provider adapters；profile adapter routing、schema dialect、token clamp、usage 和 finish reason 归一化 | `stream_completion()` / `ProviderProfile::for_kind()` |
+| `llm/*` | OpenAI-compatible/local/Anthropic/Gemini provider adapters；公共 `SseDecoder` 处理任意字节分片、CR/LF、流尾与多行 data；适配器归一化正文、思考、工具、usage、错误和 finish reason | `stream_completion()` / `ProviderProfile::for_kind()` / `SseDecoder` |
 | `mcp/mod.rs` | stdio MCP Manager、server lifecycle、tool/resource discovery、resource read、动态 tool definition 与调用分发 | `ensure_initialized()` / `call_tool()` / `read_resource()` |
 | `tools/mod.rs` | 工具注册表、schema 输出、权限 metadata、统一执行入口 | `registry()` / `execute()` |
 | `tools/list_dir.rs` | 沙盒目录直接子项枚举，按 dir/file/other 排序，默认隐藏 dotfile 并支持数量截断 | `run()` |
@@ -145,20 +151,22 @@ Demiurge/
 
 | 模块 | 职责 |
 |---|---|
-| `src/App.tsx` | 主状态编排，订阅后端事件，维护消息流、设置、会话、Agent 选择、Plan Mode 控制、backend-driven busy/cancel 状态、workflow panel、语音通话入口和桌面陪伴壳开关 |
-| `src/lib/api.ts` | Tauri invoke/event 的 typed wrapper，包含 `session_engine_state`、`session-engine-updated` 和统一 `agent-event` |
+| `src/App.tsx` | 主状态编排，订阅后端事件，维护消息流、设置、会话、会话级工作区、Agent 选择、Plan Mode、busy/cancel、workflow、语音和桌面陪伴状态 |
+| `src/lib/api.ts` | Tauri invoke/event 的 typed wrapper，包含 session engine、工作区/Git 和统一 `agent-event` 契约 |
 | `src/lib/types.ts` | 前后端共享 TypeScript 类型 |
 | `src/lib/fileProcessing.ts` | 附件读取与提示词拼接辅助；PDF.js 与 JSZip 仅在处理对应附件时按需导入 |
 | `src/lib/useStreamingTtsQueue.ts` | 把 assistant 流式文本按句切分成 TTS 播放队列，支持停止、静音、队列状态和语速/情感/streaming 参数透传 |
-| `components/Sidebar.tsx` | 会话列表、会话重命名/删除、角色包选择、基础入口 |
-| `components/Composer.tsx` | 输入框、中断/发送状态 |
+| `components/Sidebar.tsx` | 会话列表、会话重命名/删除、会话绑定项目名称、角色包选择和基础入口 |
+| `components/Composer.tsx` | 输入框、中断/发送状态、项目选择和分支切换入口 |
+| `components/BranchSwitcher.tsx` | 当前/远程分支搜索、脏工作区提示、切换确认与错误反馈 |
+| `components/WorkspaceExplorer.tsx` | 项目文件树懒加载、文件预览、Git 更改列表、项目刷新与重新选择 |
 | `components/MessageList.tsx` | 用户消息、助手消息、工具卡片渲染 |
 | `components/PomodoroCard.tsx` | 聊天页番茄钟控制面板，支持任务绑定、暂停/继续/跳过、中断原因、桌面通知和节奏摘要 |
 | `components/VoiceCallPanel.tsx` | 第一阶段语音通话面板：接通/挂断、静音、时长、按键说话、简单 VAD 端点检测、STT → LLM → 流式 TTS 和本地半双工打断 |
 | `components/DesktopCompanionShell.tsx` | 独立透明桌面陪伴壳窗口：展示头像、陪伴状态、天气/建议、置顶、点击穿透、收起/展开和权限边界状态 |
 | `components/Markdown.tsx` | 轻量 Markdown 入口，通过 `React.lazy` 延迟加载完整渲染器 |
-| `components/MarkdownRenderer.tsx` | GFM、代码块、highlight.js、KaTeX 与 Mermaid 渲染；KaTeX/highlight 样式随渲染器加载 |
-| `components/ToolCard.tsx` | tool-start/tool-end 展示，包含 MCP tool/resource 进度摘要 |
+| `components/MarkdownRenderer.tsx` | GFM、代码块、highlight.js、KaTeX 与 Mermaid 渲染；流式尾部词片段淡入并尊重 reduced-motion |
+| `components/ToolCard.tsx` | tool-start/tool-end 展示；编辑工具显示受影响文件活动、可展开详情、差异与回滚提示 |
 | `components/ConfirmDialog.tsx` | 敏感工具确认，支持 once/session/project scope |
 | `components/SettingsDialog.tsx` | provider、Persona Pack zip 导入、Web Search、MCP server、OCR 模型源/下载进度/缺模型引导、语音、WebDAV、权限、Companion/Weather、分层记忆维护和 Context 可视化设置，以及 Provider/Web Search/WebDAV 连接测试 |
 | `components/WorkflowsPanel.tsx` | workflow 定义、run/stop、agent、phase、log 的 live 状态 |
@@ -170,17 +178,17 @@ Demiurge/
 ```text
 app_data_dir/
 ├─ settings.json                 # 非密钥设置
-├─ sessions.json                 # 多会话、active session、rolling summary、goal state
+├─ sessions.json                 # 多会话、active session、workspace_path、rolling summary、goal state
 ├─ permissions.json              # 项目级权限规则
 ├─ permission_audit.jsonl        # 轻量权限审计
 ├─ companion-memory-queue.json   # 陪伴记忆待确认队列
 ├─ pomodoro.json                 # 番茄钟当前状态、任务绑定和节奏记忆
 ├─ memory/user.md                # user-scope 手动记忆
 ├─ skills/*/SKILL.md             # global skills
-├─ sandbox/                      # 文件工具可访问的工作区
+├─ sandbox/                      # 未选择项目时的默认工作区
 ├─ packs/                        # 用户角色包；可包含 pack memory 和 pack skills
 ├─ ocr-models/                   # OCR 模型
-└─ sandbox/.demiurge/
+└─ <当前会话项目>/.demiurge/
    ├─ memory.md                  # project-scope 分层记忆
    ├─ session-memory/*.md        # session-scope 分层记忆
    ├─ skills/*/SKILL.md          # project skills
@@ -193,6 +201,14 @@ app_data_dir/
 ```
 
 API Key、WebDAV 密码和 MCP secret env/token 存在系统凭据管理器中，不写入 `settings.json` 或 WebDAV 备份。兼容迁移会读取旧 settings 明文字段并转存到 keyring；运行时 `Settings` 会被水合出内存态 secret，供 provider adapter 和 MCP stdio server 启动使用。
+
+## 项目工作区、Git 与会话绑定
+
+`Session.workspace_path` 是项目选择的持久化真值；`SessionMeta` 同时返回 `workspace_path` 与派生的 `workspace_name`，供侧栏展示。选择或切换会话时，后端先 canonicalize 目标目录，再同步 `AppState.sandbox_dir`。旧会话、空路径或已移除目录会安全回退到应用数据目录的默认 `sandbox/`。
+
+项目浏览命令只接受相对路径，拒绝绝对路径、`..`、空字节和被忽略目录；访问现有文件前再次 canonicalize 并验证仍位于项目根内。目录按层懒加载，预览最多读取 256 KiB，二进制或非 UTF-8 内容不作为文本返回。
+
+Git 调用使用固定参数数组与 `current_dir`，不经过 shell。分支只能从枚举结果中选择；生成回复期间禁止改变项目或分支。脏工作区的确认是前端防误触提示，真正冲突仍由 `git switch` 失败并原样返回错误，不会自动丢弃改动。
 
 ## Agent 循环
 
@@ -335,10 +351,13 @@ MCP 工具是运行时动态注册的：`agent::runner` 在生成工具 schema �
 
 ## 安全模型
 
+> 当前限制：以下机制描述设计目标，不代表所有边界已闭环。2026-07-12 审查确认角色包可自行放宽工具权限、Project/Session 记忆权限隔离、跨项目 undo、pack/Live2D 路径、HTTP SSRF、Windows open_path、deferred/MCP 授权粒度和前端工作区竞态仍需修复；部署或处理未受信输入前请先阅读 [代码审查报告](./CODE-REVIEW-2026-07-12.md)。
+
 - `PermissionMode` 支持 `plan` / `default` / `auto` / `bypass`：`default` 走工具默认策略与用户规则；`auto` 自动允许只读工具；`bypass` 跳过确认但仍审计；`plan` 未批准前只允许只读工具和受限 `write_plan`。
 - Plan Mode 的计划状态在 `AppState.plan_state` 中维护；`write_plan` 只能写入沙盒 `.demiurge/plans/`，前端通过 `approve_plan` 批准后自动回到 `default` 执行模式。
-- 文件工具只能访问沙盒目录。
+- 文件与 shell 工具只能访问当前会话项目根；未选择项目时使用默认沙盒。
 - 路径先做词法校验，再对最近存在祖先做 canonicalize，防止符号链接和 junction 逃逸。
+- 回复生成期间禁止切换到其他项目或 Git 分支，避免工具执行根目录在回合中途改变。
 - 写入、shell、open_path、截图/OCR 等操作走确认门。
 - 屏幕感知工具受 `computer_use_enabled` 统一开关和逐次确认门控；关闭时 `screen_list_windows`、截图和 OCR 入口会拒绝执行，Settings 的 OCR 区域展示当前边界。
 - 桌面陪伴壳只是透明状态窗口，不默认读取屏幕、麦克风或精确位置；小窗和 Settings 会展示屏幕工具、语音与位置/天气状态。麦克风只由录音按钮或应用聚焦快捷键触发，天气只按设置中的手动城市或粗略城市模式查询。
@@ -470,13 +489,15 @@ npm run tauri dev
 npm run build
 ```
 
-前端体积治理集中在 `vite.config.ts` 和重模块入口：`manualChunks` 将 Mermaid diagram chunks、Mermaid parser、Cytoscape/D3/graph layout、Markdown/KaTeX/highlight、PDF.js 和 JSZip 分离；`components/Markdown.tsx` 只保留轻量 Suspense 入口，完整渲染器在消息区域需要时加载；PDF/ZIP 解析也在处理对应附件时动态导入。Mermaid 上游 parser 当前是单个约 691 KB 的异步 vendor chunk，因此 Vite warning limit 设为 700 KB；主入口、Markdown、PDF、highlight 和图布局等常规 chunks 均低于 500 KB，前端构建不再出现大 chunk 警告。
+前端体积治理集中在 `vite.config.ts` 和重模块入口：`manualChunks` 将 Mermaid diagram chunks、Mermaid parser、Cytoscape/D3/graph layout、Markdown/KaTeX/highlight、PDF.js 和 JSZip 分离；`components/Markdown.tsx` 只保留轻量 Suspense 入口，完整渲染器在消息区域需要时加载；PDF/ZIP 解析也按需导入。2026-07-12 的生产构建通过，但仍对约 1.1 MB 的 Live2D vendor chunk 给出非阻断体积警告；这属于已知性能优化项，不应描述为零 warning。
 
 Rust 测试：
 
 ```bash
 cargo test --manifest-path src-tauri/Cargo.toml
 ```
+
+2026-07-12 验证结果：215 项 Rust 单元测试全部通过；供应商专项只覆盖离线解析与请求体契约，发布前仍应执行真实端点网络契约测试。
 
 Tauri 打包：
 

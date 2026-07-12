@@ -1,5 +1,7 @@
 # Goal 持续驱动
 
+> 审阅状态（2026-07-12）：目标状态机、预算记账与三次同因阻塞阈值已按当前测试复核；本轮工作区功能没有改变 Goal 终止语义。固定行号请以符号名为准。
+
 > 存档级技术原理文档。读者为协作开发者。
 > 主要源码：`src-tauri/src/agent/goal.rs`、`src-tauri/src/tools/goal_tool.rs`。
 > 关联源码：`src-tauri/src/lib.rs`(slash/命令入口与续跑挂载)、`src-tauri/src/agent/runner.rs`(回合执行与 token 记账)、`src-tauri/src/agent/budget.rs`(token 估算)、`src-tauri/src/agent/prompt.rs`(目标上下文注入)、`src-tauri/src/tools/mod.rs`(goal 工具注册)、`src/App.tsx`(前端历史过滤)。

@@ -1,5 +1,9 @@
 # 角色包系统
 
+> 审阅状态（2026-07-12）：角色包清单、zip 导入、persona、memory 与 skill 作用域已按当前源码复核；本轮项目工作区改动不改变角色包路径校验。固定行号请以符号名为准。
+
+> 安全复核更正：角色包 `runtime.permissions` 当前可以直接把 shell/系统工具设为 Allow；包同时控制 persona，因此未受信包可以自放行后再诱导模型调用工具。若干直接 IPC 命令在 `packs_dir.join(id)` 前也没有验证 pack id，列表/读取的后续 containment 会错误地以攻击者指定目录为根；Live2D 文件夹导入的资源重命名路径未复用安全相对路径解析，并且先删除旧模型再验证新模型。zip 导入自身的 zip-slip 校验不能覆盖这些独立入口。
+
 > 存档级技术原理文档。覆盖角色包的清单校验、persona 注入、头像 data URL 生成、zip 导入安全校验、默认包落地，以及角色包作为 memory / skills 作用域载体的衔接逻辑。
 >
 > 主要源文件：
@@ -237,7 +241,7 @@ extract_archive(prefix → temp)                           pack/mod.rs:141 / 289
 ## 6. 已知限制与扩展点
 
 - **清单是 MVP 文本版，部分「成长字段」已落地**。`live2d`（指向 `.model3.json` 的相对路径，经 Tauri asset 协议加载，非 data URL）已在 `PackManifest` 中落地并通过 `import_live2d_folder` / `resolve_pack_live2d_path` / `remove_live2d` 命令暴露。源码注释列出的清单级 TTS / 表情等**字段**仍是预留方向（角色包 manifest 的 voice 偏好字段），但 voice 模块的 TTS **后端**已接通（见本节上一条），请勿把"清单字段未落地"误写成"TTS 后端未接通"。
-- **语音后端已接通**。角色包 manifest 的 `runtime.voice` 作为 system prompt hint 渲染（角色偏好音色/语气），不承载后端逻辑；`voice.rs` 的 STT/TTS 三命令（`voice_transcribe`/`voice_synthesize`/`voice_status`）已实现——TTS 走 dashscope + gpt-sovits 双后端（`voice.rs:193-249`）。角色包 voice 偏好与实际播放队列/打断/流式合成的衔接是未来扩展点。
+- **语音后端与播放队列已接通**。角色包 manifest 的 `runtime.voice` 作为 system prompt hint 渲染（角色偏好音色/语气），后端支持 STT、云端/本地 TTS、连接测试、失败降级和语速/情感参数；前端按模型文字增量分句排队并支持静音/打断。角色包 voice 偏好与 Live2D 口型/动作联动仍是扩展点。
 - **头像无大小上限**。`MAX_IMPORT_BYTES` 只约束 zip 导入；对一个已落地包，`avatar_data_url` 会把整张图 base64 进内存/panel 状态，超大头像可能放大 IPC 负载。
 - **`manifest.id` 与目录名强绑定**。导入后 id 不可改名（改名等于新包），且大小写/同名冲突依赖文件系统语义。
 - **`Pack.manifest` 字段当前未被消费**（`#[allow(dead_code)]`，`pack/mod.rs:29`），上游只取 `persona_text`；将来若 prompt 要用 `name`/`avatar` 需打通这条路径。

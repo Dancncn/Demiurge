@@ -1,5 +1,7 @@
 # Demiurge — 设计与技术路线
 
+> 文档复核：2026-07-12。本文继续作为早期设计快照保留；当前实现已增加会话级项目文件夹、目录/文件预览、Git 分支与更改面板、编辑文件活动展示，以及统一 SSE 解码和流式文字动画。
+
 > 本文是 Demiurge 的设计文档 / 技术路线。MVP 已按此实现，实现细节见
 > [IMPLEMENTATION.md](./IMPLEMENTATION.md)，后续计划见 [TODO.md](./TODO.md)。
 > 标注 ✅ 的为已落地，🔜 为已设计待实现。
@@ -51,7 +53,7 @@ Owner 标记：**[R]** Rust 内核 · **[F]** 前端。
 6. **工具执行** [R] —— 真实触碰系统 / 文件；输出与错误原样回写为 tool_result。未实现或失败即报错，不吞、不 mock。
 7. **权限门** [R + F] —— 工具分自动执行 / 需确认；不可逆操作（删、覆盖、发送、网络写）执行前先弹确认框。
 8. **上下文管理** [R] —— 历史超阈值时：先砍老工具输出，再折叠更老的回合。全天聊天 → 这直接决定 API 账单，非可选。
-9. **持久化** [R] —— 会话落盘，下次启动恢复。这就是 MVP 的全部「记忆」——不做向量 RAG。
+9. **持久化** [R] —— 会话落盘，下次启动恢复。这是早期 MVP 的记忆范围；当前版本已实现分层记忆与 Lorebook 混合向量召回。
 10. **流式 + 中断** [R 发流 · F 显示 + 中断] —— 逐 token 推到 UI，用户可中断。让它「活」起来，也为后续逐句 TTS 铺路。
 
 ## MVP 工具集
@@ -98,7 +100,7 @@ Owner 标记：**[R]** Rust 内核 · **[F]** 前端。
 - 屏幕感知 ✅ **已实现**（deferred 的 `screen_list_windows` / 区域·窗口截图 / 区域·窗口 OCR）；桌宠视觉外壳的透明置顶窗口、Live2D、点击穿透、主动说话仍 🔜。
 
 不需要——**不要**搭：
-- 向量 RAG：仍不做向量检索；但**结构化长期记忆已实现**（user/project/session/pack 四层 Markdown 记忆 + 自动提取，非向量 RAG）。
+- 向量 RAG：早期方案暂不做；**当前已实现** user/project/session/pack 四层 Markdown 记忆、Lorebook BM25 + dense + RRF 混合召回与向量缓存，详见 [modules/20](./modules/20-lorebook-vector-rag.md)。
 - ~~完整工作流运行时~~ → 现状：**已落地**，含 JSON DSL、journal、worktree、live panel 与可恢复的 durable run（见 [modules/07](./modules/07-workflow-runtime.md)）。仍不做的是 JavaScript workflow DSL。
 
 ## 仓库结构（现状）

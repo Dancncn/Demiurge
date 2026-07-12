@@ -1,5 +1,9 @@
 # MCP 集成（stdio 第一阶段）
 
+> 审阅状态（2026-07-12）：stdio 生命周期、动态工具/资源、secret env 与权限映射已按当前源码复核；当前仍未扩展到网络传输。固定行号请以符号名为准。
+
+> 授权边界更正：外部 server 的 `readOnlyHint` 当前会映射为 `ToolRisk::ReadOnly`，Auto 模式据此无确认放行，即使动态工具默认策略原本是 Ask。协议注解是不可信提示，不应成为降低权限的事实来源；修复前不要在 Auto 模式连接未受信 server。
+
 > 主源文件：`src-tauri/src/mcp/mod.rs`
 > 关联文件：`src-tauri/src/tools/mod.rs`、`src-tauri/src/agent/runner.rs`、`src-tauri/src/permission/mod.rs`、`src-tauri/src/credentials.rs`、`src-tauri/src/store/mod.rs`、`src-tauri/src/lib.rs`
 

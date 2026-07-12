@@ -1,5 +1,7 @@
 # 工具注册表与文件/编辑工具
 
+> 审阅状态（2026-07-12）：本文所称“沙盒”现在是当前会话绑定的项目根；未选择项目时才是应用数据目录默认沙盒。路径 containment 与权限门仍适用，固定行号请以符号名为准。
+
 > 存档级技术原理文档。读者为协作开发者。
 > 覆盖源文件：`src-tauri/src/tools/mod.rs`、`args.rs`、`read_file.rs`、`write_file.rs`、`edit_file.rs`、`glob.rs`、`grep.rs`、`list_dir.rs`、`git_status.rs`、`write_plan.rs`。
 
@@ -393,6 +395,8 @@ runner.rs ──tool_calls──► tools::execute ─┬─► read/write/edit/
    └─ permission gate      ──► permission::decide_for_mode（用 ToolDefinition.permission/risk）
 ```
 
+编辑工具开始事件中的 `affected_paths` 由工具参数解析得到，前端实时 `ToolCard` 据此显示“正在编辑/已编辑”标题和可展开文件列表。这个字段目前只存在于事件/UI 投影；会话持久化只保存 tool call 与文本 result，没有 `ok`、`denied`、`duration_ms` 或结构化错误。因此重开会话时 `buildHistory` 无法可靠恢复真实执行状态，当前实现会把所有历史工具标为 done。安全修复应持久化结构化执行元数据；不能长期依赖错误字符串推断。
+
 - **与 runner / session_engine**：runner 顺序遍历 tool_calls，每个工具先发 `ToolStartEvent`（`runner.rs:459`），该事件携带 `risk`/`permission_effect`/`concurrency`/`output_policy`/`preview`/`affected_paths`（`session_engine.rs:95`–`100`）。这些元数据**透传到前端**用于展示与决策。
 - **与 permission 模块**：`permission_policy_for_state`（`mod.rs:855`）给出默认策略，`permission::decide_for_mode`（`runner.rs:486`）结合当前模式（如 Plan/strict）得出最终 Allow/Deny/Ask。未知工具默认 `ask`（`mod.rs:852`）——fail-safe。
 - **与 mcp 模块**：MCP 工具名通过 `is_mcp_tool_name` 识别并改走 MCP 客户端；MCP 工具的定义也并入注册表（`registry_for_state`），统一参与 schema 生成与权限展示。
@@ -417,6 +421,10 @@ runner.rs ──tool_calls──► tools::execute ─┬─► read/write/edit/
 | 未知工具默认 ask | `mod.rs:852` | fail-safe 权限 |
 
 ## 10. 已知限制与扩展点
+
+- `undo_edit` 没有路径参数，活动文件标题无法从调用参数得知，只能在结果或未来结构化元数据中恢复。
+- undo 栈属于全局 `AppState`，entry 只保存相对路径与 before/after；切到另一个项目后若同名文件内容恰好等于 after，当前安全检查仍可能把旧项目的 before 写入新项目。entry 必须绑定 canonical workspace identity。
+- 历史工具执行状态未结构化持久化，被拒绝/失败的编辑在重开会话后可能被错误展示为成功；详见 [代码审查报告](../CODE-REVIEW-2026-07-12.md)。
 
 1. **`concurrency` 当前是元数据，不是调度器**。runner 用 `for tc in &turn.tool_calls` **顺序执行**所有工具（`runner.rs:440`），`ToolConcurrency::ParallelSafe` 仅作为透传给前端的标签（`runner.rs:466` → `session_engine.rs:97`），后端并未据此并行执行同一回合内的多个工具。provider 侧的 `parallel_tool_calls`（`llm/openai.rs:113`）控制的是模型一次能否返回多个 tool_call，与后端是否并行执行无关。若未来要并行，需要在 runner 引入按 `concurrency` 分组的调度。
 

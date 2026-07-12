@@ -1,5 +1,7 @@
 # 多模态与 Computer Use 底层能力
 
+> 审阅状态（2026-07-12）：OCR、屏幕工具、STT/TTS 与媒体生成的职责边界已复核；本轮流式文字渲染不改变语音/屏幕权限门。固定行号请以符号名为准。
+
 > 存档级技术原理文档。覆盖本地 OCR（PP-OCRv5 mobile + oar-ocr 推理）、屏幕感知工具（窗口列表 / 截图 / 区域或窗口 OCR）、语音（云端 ASR + TTS 均已接通）以及云端多模态生成（图像 / TTS）四块底层能力。
 >
 > 主要源文件：
@@ -263,7 +265,7 @@ voice_synthesize(text, voice_id?, state)
         └─ other → Err（未知后端，仅支持 dashscope / gpt-sovits）
 ```
 
-dashscope 分支复用 §5 的 `media::synthesize_speech`，模型默认 `qwen3-tts-flash`、音色默认 `Cherry`；gpt-sovits 分支走本地/外部 HTTP 服务，返回 base64 data URI，可直接喂给前端 `<audio>`。流式合成、播放队列、打断、语速/情感参数、连接测试与失败降级尚未实现（见 `docs/TODO.md`）。
+dashscope 分支复用 §5 的 `media::synthesize_speech`，模型默认 `qwen3-tts-flash`、音色默认 `Cherry`；gpt-sovits/cosyvoice 分支走本地或外部 HTTP 服务。语速、情感、streaming 请求参数、连接测试和本地失败后云端降级已接通；前端 `useStreamingTtsQueue` 把模型文字增量按句切分，顺序播放并支持静音/打断。当前“流式”是文本驱动的分句队列，不等同于单次音频响应的逐字节播放。
 
 > 两个 TTS 入口的分工：`voice::voice_synthesize` 是 voice 模块面向 Composer/角色包 voice 偏好的统一入口，dashscope 分支复用 `media::synthesize_speech`；`media::synthesize_speech`（§5）则是 media 面板独立调用 DashScope 云端 TTS 的薄封装。两者 dashscope 路径同源。
 
@@ -334,8 +336,8 @@ dashscope 分支复用 §5 的 `media::synthesize_speech`，模型默认 `qwen3-
 
 ## 八、已知限制与扩展点
 
-- **voice TTS 仍缺流式/队列/打断**：`voice::voice_synthesize` 已接通 dashscope + gpt-sovits 双后端（`voice.rs:193-249`）；尚未实现的是流式合成、播放队列、打断、语速/情感参数、连接测试与失败降级（`docs/TODO.md`）。
-- **ASR 无流式/无热键**：当前是"录完整段再上传转写"的一次性请求，尚无流式转写或热键触发（`docs/TODO.md:87`）。
+- **TTS 音频仍是整段响应**：模型文字已经按句进入可中断播放队列，但每个 `voice_synthesize` 调用仍等待对应后端返回一段完整音频；若要更低首包延迟，需要增加音频字节流协议与增量播放器。
+- **ASR 无逐字流式转写**：当前按 VAD/按键结束一段录音后上传转写；应用聚焦快捷键已实现，全局唤醒词与持续转写仍未实现。
 - **窗口匹配为精确相等**：`find_window` 不支持模糊/包含匹配；窗口标题动态变化（如带页码、未读数）时需先 `list_windows` 取准确标题。
 - **截图不跨屏**：单次截图只能落在一块显示器内。
 - **OCR 单语言/单模型**：当前仅 PP-OCRv5 mobile 中文三件套；HF 源也是 chinese rec/dict。多语言需扩展 `source_files` 与字典。
