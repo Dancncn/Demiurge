@@ -2,7 +2,7 @@
 
 > 审阅状态（2026-07-12）：项目选择和分支切换是用户直接触发的 Tauri 命令，不走模型工具权限门；分支枚举/切换会验证 canonical expected workspace，脏工作区由 UI 二次确认，活动回合期间由后端拒绝。文件 containment 以会话项目根为边界；权限规则归属则由不可变 session/workspace identity 强制。固定行号请以符号名为准。
 
-> 修复进度：角色包自放行、Project/Session scope 隔离和 `execute_tool` 目标级授权已修复——manifest 权限只收紧；Session/Project 按不可变身份分桶；deferred 调用按真实 target 决策、记忆和审计。MCP read-only 注解信任仍待独立提交。
+> 修复进度：角色包自放行、Project/Session scope 隔离、`execute_tool` 目标级授权和动态外部工具风险下限均已修复——manifest 权限只收紧；Session/Project 按不可变身份分桶；deferred 调用按真实 target 决策、记忆和审计；外部 annotation 不能降低本地风险，Auto 不能覆盖本地 Ask/Deny。
 
 > 存档级技术原理文档。读者：协作开发者。
 > 主要源文件：
@@ -20,10 +20,11 @@
 
 权限子系统是 Demiurge 的「执行门」：在 Agent 决定调用某个工具、但**尚未真正执行**之前，对该调用做一次裁决，得出三种结果之一——直接放行、直接拒绝、或弹出前端确认对话框等待用户裁决。它的核心目标是确保**有副作用的操作（写文件、shell、外部发布、系统能力）在执行前获得用户许可**，而只读探索尽量不打扰用户（`src-tauri/src/permission/mod.rs:1-2` 的模块注释即点明此意图）。
 
-它的设计有两条贯穿始终的安全原则：
+它的设计有三条贯穿始终的安全原则：
 
 1. **作用域是结构性强制的，而非提示词约束。** 文件类工具被物理限制在沙盒目录内（`src-tauri/src/tools/mod.rs:3` 注释明确写道：「作用域是结构性强制的（文件工具被物理限制在沙盒目录），不靠提示词」）。即便模型被诱导尝试越界，`resolve_in_sandbox` 也会在文件系统层面拒绝。
 2. **权限审计不落敏感参数。** 审计记录工具名、裁决结果、来源与理由，但不写入工具入参的完整内容（详见第五节）。
+3. **外部自报元数据不是授权事实。** 动态工具的 annotation 可用于展示和调度提示，但本地授权风险始终施加 `External`/`Privileged` 下限，且默认保持 `Ask/Once`。
 
 这一子系统与上游的「工具注册表」（提供默认策略与风险等级）和「Agent 运行循环」（在每次工具调用前调用本模块）紧密耦合，但本身不执行任何工具——它只产出 `PermissionDecision`。
 
@@ -117,8 +118,7 @@ else                       → tools::execute(...)               // 真正执行
                        │            decide_for_mode(risk)             │
                        └─────────────────────────────────────────────┘
    mode = Default ─────► decide()  // 规则链 + 默认策略，原样返回
-   mode = Auto    ─────► risk == ReadOnly ? Allow(Once)
-                                          : decide()
+   mode = Auto    ─────► decide()  // 同样尊重规则链与工具默认策略
    mode = Bypass  ─────► 永远 Allow(Once)，source = UserOverride
    mode = Plan    ─────► plan.approved          ? decide()
                          risk == ReadOnly        ? Allow(Once)  // 允许只读探索
@@ -131,7 +131,7 @@ else                       → tools::execute(...)               // 真正执行
 各模式的设计意图：
 
 - **Default**：最常规的「按规矩办事」。完全委托给 `decide()`，即工具的注册表默认策略叠加用户已记住的规则。
-- **Auto**：「自动驾驶但不鲁莽」。只对 `ReadOnly` 工具无条件放行，其余工具仍回到 `decide()` 走正常确认。这样模型可以自由探索（读文件、grep、list_dir）而不打扰用户，但任何有副作用的操作仍受控。
+- **Auto**：「自动驾驶但不越权」。先执行完整 `decide()` 规则链；本地默认 Allow 的只读工具仍会自动运行，但默认或显式 `Ask`/`Deny` 不会被风险分类覆盖。动态外部工具默认 Ask，因此即使自报 read-only 也不会静默执行。
 - **Bypass**：「完全信任」。无条件放行一切，来源标为 `UserOverride`、理由写明「Bypass 模式已开启」。这是最危险的模式，但**仍然会被审计**（`runner.rs:487` 的 `audit` 在所有模式下都执行）。
 - **Plan**：见第四节专述。
 
@@ -151,7 +151,7 @@ else                       → tools::execute(...)               // 真正执行
 
 Project/User 读取、解析或 Project 版本校验失败时，`decide` 返回 `Deny(Once)`，不会继续回落到更宽的 User Allow 或工具默认 Allow。权限面板会把同一错误展示在 `notices` 中，而不是伪装成「当前没有规则」。
 
-> 安全关注点：`decide_for_mode` 的 **Auto 模式对 `ReadOnly` 工具是「无条件 Allow」，绕过了 `decide()`**（`:189-196`）。也就是说，如果用户曾对某个只读工具设置了 `Deny` 规则，在 Auto 模式下该规则会被忽略。同理 Plan 模式未批准前的只读放行（`:211-218`）也绕过规则链。这是「模式优先于规则」的有意取舍，但实现者需要意识到：用户级 `Deny` 规则并非在所有模式下都生效。
+> 安全关注点：Auto 已改为先执行 `decide()`，会保留 Session/Project/User/角色包和工具默认的 `Ask`/`Deny`。Plan 未批准前对**本地** `ReadOnly` 工具的探索放行仍直接由模式分支决定，不经过规则链；动态外部工具因风险下限为 `External`/`Privileged`，不会进入该只读分支。
 
 ### 3.4 confirm 前后端往返与超时（`permission/mod.rs:306-344`）
 
@@ -334,7 +334,7 @@ Tauri v2 的能力（capability）系统决定前端 WebView 能调用哪些核�
 | deferred wrapper `tools/execute_tool.rs` | 只负责白名单解析与真实能力分发；授权 metadata 由 runner 按 target 提前解析 | `parse_invocation` / `authorization_target_for_state` |
 | 设置/会话存储 `store/mod.rs` | 提供 `PermissionMode`、`now_millis`、持久化 settings | `state.settings.permission_mode` |
 | Tauri 命令层 `lib.rs` | 回执 `respond_confirm`、中断 `interrupt`、计划 `approve_plan`/`reject_plan`/`set_permission_mode` | 见第三、四节 |
-| MCP 动态工具 `mcp` | 为 MCP 工具提供权限摘要；MCP 工具按 annotation 映射风险后接入同一权限门 | `permission_summary_for_state` 内的 `crate::mcp::permission_summary`（`tools/mod.rs:1103-1108`） |
+| MCP 动态工具 `mcp` | 为动态工具提供权限摘要；原始 annotation 只作提示，本地 `authorization_risk` 施加 External/Privileged 下限后接入同一权限门 | `permission_summary_for_state` 内的 `crate::mcp::permission_summary`（`tools/mod.rs:1103-1108`） |
 | 前端 | 监听 `tool-confirm-request` / `plan-updated` / `permission-mode-updated` 事件，渲染弹窗与权限面板 | `app.emit(...)` |
 
 权限面板把当前 Session 桶、当前 canonical Project 桶、User 规则、最近 80 条审计、全部工具默认策略与存储/迁移告警一并返回。每条 Session/Project 规则都携带自己的 `session_id` 或 `workspace_identity`；前端编辑、清除时原样回传，后端与当前上下文比对。界面在请求后切换会话或项目时，晚到操作会报 stale identity，而不会作用到新上下文中的同名规则。`upsert_rule` 仍会校验工具存在并拒绝 `Once` scope，因为 Once 只对单次确认回执有效。
@@ -343,7 +343,7 @@ Tauri v2 的能力（capability）系统决定前端 WebView 能调用哪些核�
 
 ## 七、已知限制与扩展点
 
-1. **模式优先于用户规则的非对称性**（见 3.3 安全关注点）：Auto 模式对只读工具、Plan 未批准前对只读工具，都是无条件 `Allow`，会绕过用户设置的 `Deny` 规则。当前没有「即便 Auto/Plan 也尊重显式 Deny」的逃生通道，若未来需要支持「永久禁用某只读工具」需改造 `decide_for_mode`。
+1. **Plan 未批准时仍存在模式优先的非对称性**（见 3.3 安全关注点）：本地 `ReadOnly` 工具由 Plan 分支直接 `Allow`，会绕过用户设置的 `Deny` 规则。Auto 已改为完整执行规则链；动态外部工具也不会被归类为本地 `ReadOnly`。若未来需要在 Plan 中永久禁用某个本地只读工具，仍需调整该分支的优先级。
 
 2. **审计仅追加、无轮转**：`permission_audit.jsonl` 只追加不轮转（`append_audit`），长期运行会无限增长。读取端虽只取最近 80 条，但文件本身不会被裁剪。
 

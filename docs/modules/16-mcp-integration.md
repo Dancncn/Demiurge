@@ -2,7 +2,7 @@
 
 > 审阅状态（2026-07-12）：stdio 生命周期、动态工具/资源、secret env 与权限映射已按当前源码复核；当前仍未扩展到网络传输。固定行号请以符号名为准。
 
-> 授权边界更正：外部 server 的 `readOnlyHint` 当前会映射为 `ToolRisk::ReadOnly`，Auto 模式据此无确认放行，即使动态工具默认策略原本是 Ask。协议注解是不可信提示，不应成为降低权限的事实来源；修复前不要在 Auto 模式连接未受信 server。
+> 授权边界：外部 server 的 annotation 是不可信提示，只用于 UI 展示与并发提示。本地 `authorization_risk` 保证动态工具只能落入 `External`/`Privileged`，默认权限固定为 `Ask/Once`；Auto 会先尊重完整本地规则链。
 
 > 主源文件：`src-tauri/src/mcp/mod.rs`
 > 关联文件：`src-tauri/src/tools/mod.rs`、`src-tauri/src/agent/runner.rs`、`src-tauri/src/permission/mod.rs`、`src-tauri/src/credentials.rs`、`src-tauri/src/store/mod.rs`、`src-tauri/src/lib.rs`
@@ -18,7 +18,7 @@ MCP 集成在整个 Agent 引擎中承担“**外部能力适配层**”的角�
 - **协议适配**：实现 MCP 的 JSON-RPC 2.0 over stdio 子集——`initialize` 握手、`tools/list`、`tools/call`、`resources/list`、`resources/read`，以及对 server 反向请求（`roots/list`、`ping`）的应答。
 - **生命周期管理**：以 `McpManager` 为核心，按配置启动/停止子进程、跟踪连接状态、提供刷新与健康可视化（stderr 尾部）。
 - **动态工具发现与注册**：把 server 报告的工具映射成形如 `mcp__server__tool` 的 Demiurge 工具名，并生成与原生工具同构的 `ToolDefinition`，让它们无缝进入 runner 的调度与权限循环。
-- **风险分级**：把 MCP 工具的 annotation（`readOnlyHint`/`destructiveHint`/`openWorldHint`）翻译为 Demiurge 的 `ToolRisk` 等级，从而决定并发策略与权限确认行为。
+- **提示与授权分离**：保留 MCP 工具的 annotation（`readOnlyHint`/`destructiveHint`/`openWorldHint`）用于展示与并发提示，同时独立计算带 `External`/`Privileged` 下限的本地授权风险。
 - **密钥治理**：与 `credentials` 模块协作，把标记为 `secret` 的环境变量存入操作系统 keyring，并在落盘配置时脱敏。
 
 第一阶段的边界由 `connect_stdio_server` 强制（`src-tauri/src/mcp/mod.rs:472-474`）：`transport` 只接受 `Stdio`，其它枚举值在代码层面尚未定义——`McpTransportKind` 当前**仅有 `Stdio` 一个变体**（`src-tauri/src/mcp/mod.rs:44-48`）。因此“第一阶段”不是临时开关，而是类型系统层面的真实约束；HTTP/SSE 等远程传输属于**预留扩展点，尚未实现**。
@@ -178,9 +178,9 @@ MCP 集成在整个 Agent 引擎中承担“**外部能力适配层**”的角�
 `tool_definitions`（`mcp/mod.rs:273-280`）只导出 **`Connected`** 状态 server 的工具。每个工具经 `tool_definition`（`mcp/mod.rs:831-862`）转成与原生工具同构的 `ToolDefinition`：
 
 - `name`：用 `Box::leak` 把暴露名泄漏成 `&'static str`。这是因为 `ToolDefinition.name` 字段是 `&'static str`（`tools/mod.rs:107`），而原生工具都是编译期常量字符串。**这意味着每次 `tool_definitions()` 被调用都会泄漏一份字符串内存**——见第六节“已知限制”。`description` 同样被 leak。
-- `risk`：由 `risk_for_annotations` 决定（见 3.6）。
+- `risk`：由本地 `authorization_risk` 决定，不直接信任 annotation（见 3.6）。
 - `concurrency`：`read_only` 的工具标 `ParallelSafe`，否则 `SerialOnly`（`mcp/mod.rs:853-857`）。
-- `permission`：固定为 `Ask`/`Once`，reason 为“MCP 工具由外部 server 提供，执行前需要确认。”（`mcp/mod.rs:833-837`）。即 **MCP 工具默认永远走确认弹窗**。
+- `permission`：固定为 `Ask`/`Once`，reason 为“MCP 工具由外部 server 提供，执行前需要确认。”（`mcp/mod.rs:833-837`）。记住的本地规则或显式 Bypass 仍可改变最终裁决，但服务端 annotation 不能改变该默认值。
 - `output_policy`：`TruncateForUi`。
 - `parameters`：直接用发现到的 `input_schema`。
 
@@ -196,18 +196,18 @@ pub fn registry_for_state(state: &crate::AppState) -> Vec<ToolDefinition> {
 
 由此，MCP 工具对 runner、对模型的 schema 导出、对权限查询全部透明——它们就是普通工具，只是 `name` 带 `mcp__` 前缀。
 
-### 3.6 风险分级：annotation → ToolRisk
+### 3.6 不可信 annotation 与本地授权风险下限
 
-`risk_for_annotations`（`mcp/mod.rs:887-897`）的优先级（按从高到低短路判定）：
+`authorization_risk` 把服务端 annotation 视为提示，并施加本地授权下限：
 
-| annotation 命中 | 映射 ToolRisk | 含义 |
-|-----------------|---------------|------|
-| `destructiveHint=true` | `Mutating` | 破坏性/可变更，最高优先级 |
-| `openWorldHint=true` | `External` | 访问外部世界（网络等） |
-| `readOnlyHint=true` | `ReadOnly` | 只读 |
-| 都未命中 | `Privileged` | **默认按特权处理**（保守兜底） |
+| annotation 命中 | 本地有效 ToolRisk | 本地解释 |
+|-----------------|-------------------|----------|
+| `destructiveHint=true` | `Privileged` | 可能产生高影响副作用，保持特权风险 |
+| `openWorldHint=true` | `External` | 涉及外部世界，保持外部风险 |
+| `readOnlyHint=true` | `External` | 只读是服务端自报事实，仍按外部能力授权 |
+| 都未命中 | `Privileged` | 未知能力按特权处理（保守兜底） |
 
-`parse_annotations`（`mcp/mod.rs:899-915`）对缺失字段一律按 `false`，因此一个未声明任何 hint 的工具会落入 `Privileged`——这是**安全默认**：宁可过度确认，不可放行未知风险。单测 `maps_annotations_to_risk`（`mcp/mod.rs:1162-1182`）覆盖了 ReadOnly/Mutating 两条。
+`parse_annotations` 对缺失字段一律按 `false`，因此未声明任何 hint 的工具落入 `Privileged`。`readOnlyHint` 仍可让 `tool_definition` 标记 `ParallelSafe`，也会原样出现在 `McpToolView`；但任何 annotation 组合都不会产生本地 `ReadOnly` 或 `Mutating` 风险。单测 `untrusted_annotations_cannot_lower_dynamic_tool_authorization_risk` 与 `read_only_hint_affects_presentation_and_concurrency_not_permission` 分别覆盖风险下限和“展示/并发可用、授权不可降级”。
 
 ### 3.7 工具调用分发：`call_tool`
 
@@ -279,11 +279,11 @@ tools 模块是 MCP 与 runner 之间的“接缝”：
 | 模式 | 对 MCP 工具的效果 |
 |------|-------------------|
 | `Default` | 走 `decide`（结合用户记住的规则），通常 `Ask`。 |
-| `Auto` | 仅 `ReadOnly` 风险自动放行（permission/mod.rs:189）；其余仍 `Ask`。 |
+| `Auto` | 先走完整 `decide` 规则链；默认或显式 `Ask`/`Deny` 不会被风险分类覆盖。 |
 | `Bypass` | 一律放行。 |
-| `Plan`（未批准） | 仅 `ReadOnly` 放行探索；其余 `Deny`（permission/mod.rs:208-235）。 |
+| `Plan`（未批准） | 动态工具有效风险为 `External`/`Privileged`，因此拒绝执行；本地 `ReadOnly` 工具仍可探索。 |
 
-因此 3.6 的风险分级**直接决定了** Auto/Plan 模式下哪些 MCP 工具能免确认：声明 `readOnlyHint` 的工具在 Auto 模式可静默执行，而 `Privileged`（无 annotation）工具永远需要确认。`permission_summary`（mcp/mod.rs:417-433）生成的中文摘要会带上 server 名、原始工具名、风险等级与截断到 400 字符的描述，呈现在确认弹窗里供用户判断。
+因此服务端无法通过 `readOnlyHint` 降低本地授权：动态工具默认 `Ask/Once` 在 Default/Auto 中继续请求确认，未批准 Plan 会直接拒绝；只有本地已记住的 Allow、批准后的规则裁决或用户显式选择 Bypass 才能放行。`permission_summary` 会同时展示 server 名、原始工具名、本地有效风险、三个原始 hints 与截断到 400 字符的描述，明确区分本地决策和服务端声明。
 
 ### 4.4 与 lib.rs 命令层
 
@@ -320,9 +320,9 @@ Tauri 命令 `mcp_panel_state`（lib.rs:735-737）、`mcp_refresh`（lib.rs:744-
 
 回应 `roots/list` 时只声明 `sandbox_dir`（mcp/mod.rs:743-748），与 Demiurge 文件工具被物理限制在沙盒目录的整体安全模型一致（参见 `tools/mod.rs:1-3` 注释强调“作用域是结构性强制的”）。不过需注意：roots 只是**对 server 的声明**，stdio server 作为本地子进程实际能访问的文件系统并不受此限制——roots 是协作约定而非强制隔离。
 
-### 5.4 默认按特权确认
+### 5.4 本地授权风险下限
 
-如 3.6 所述，无 annotation 的工具落入 `Privileged`，叠加 `tool_definition` 固定的 `Ask` 策略，构成“**默认拒绝放行、强制确认**”的保守姿态。外部 server 必须显式声明 `readOnlyHint` 才能在 Auto/Plan 模式下获得免确认待遇。
+如 3.6 所述，无 annotation 或 destructive 工具落入 `Privileged`，read-only/open-world 工具落入 `External`；两类都叠加 `tool_definition` 固定的 `Ask/Once` 默认策略。annotation 只影响 UI 与并发提示，不能获得 Auto/Plan 的免确认待遇。服务端配置本身会启动一个具有当前用户权限的本地子进程，因此仍只应连接受信命令与参数。
 
 ---
 

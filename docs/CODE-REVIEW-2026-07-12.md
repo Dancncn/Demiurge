@@ -2,18 +2,18 @@
 
 > 审查日期：2026-07-12
 > 范围：React/TypeScript 前端、Rust/Tauri 后端、工作区与 Git、权限、工具、角色包、持久化、LLM 流式适配，以及仓库内全部 Markdown
-> 状态：审查底稿已完成；P1 修复正按独立提交落地，本文同步记录每项验证结果
+> 状态：审查底稿已完成；12 项 P1 均已修复并按独立提交落地，本文同步记录每项验证结果
 
 ## 1. 结论摘要
 
-本轮没有发现需要按 P0 处理的立即性故障，但确认了 **12 项 P1、12 项 P2、3 项 P3**。前端生产构建和 Rust 215 项测试全部通过，说明当前代码可编译、既有测试稳定；这些结果不能否定本报告中的跨作用域、并发、故障注入和对抗性输入问题，因为现有测试没有覆盖相应触发路径。
+本轮没有发现需要按 P0 处理的立即性故障，共确认 **12 项 P1、12 项 P2、3 项 P3**。12 项 P1 现已全部修复；前端生产构建和 Rust 255 项测试通过，专项回归覆盖了相应的跨作用域、并发、故障注入和对抗性输入路径。P2/P3 仍按后续队列处理。
 
 优先级最高的风险集中在两条所有权链：
 
-1. **权限所有权**：角色包权限升级、Session/Project 规则跨边界复用与 deferred wrapper 共用身份已经修复；MCP 动态工具仍存在风险下限降级。
+1. **权限所有权**：角色包权限升级、Session/Project 规则跨边界复用、deferred wrapper 共用身份与动态外部工具风险下限降级均已修复。
 2. **项目所有权**：undo、分支操作、后端 turn 与前端导航快照均已绑定不可变的 workspace/session identity。
 
-建议在发布或处理未受信角色包、外部工具服务、网页内容前，完成剩余 P1 队列。角色包权限自放行与权限作用域隔离已经修复；Auto/Bypass、外部工具 read-only 注解和其他尚未关闭的边界仍不能当成强隔离。
+P1 发布阻断队列已经关闭。显式 Bypass 模式、stdio 子进程本身不受 roots 强隔离以及报告中的 P2/P3 仍不能被误解为强安全边界；处理未受信内容或外部服务时仍应遵循最小权限。
 
 | 级别 | 数量 | 含义 |
 |---|---:|---|
@@ -29,8 +29,8 @@
 - 对三种流式适配路径检查网络分片、事件边界、流尾、错误、usage、工具参数和终止语义。
 - 逐份更新仓库内 Markdown，并检查相对链接、陈旧能力描述和测试基线。
 - 执行 `npm run build`：通过；Vite 对约 1.1 MB Live2D vendor chunk 给出非阻断体积警告。
-- 执行 `cargo test --manifest-path src-tauri/Cargo.toml`：215 passed，0 failed。
-- 执行 `cargo fmt --manifest-path src-tauri/Cargo.toml -- --check`：未通过；只报告 `src-tauri/src/pack/live2d.rs:303` 一处换行格式差异，本轮按“只审查、不改业务代码”的边界保留。
+- 执行 `cargo test --manifest-path src-tauri/Cargo.toml --no-fail-fast`：255 passed，0 failed。
+- 执行 `cargo fmt --manifest-path src-tauri/Cargo.toml -- --check`：通过。
 - Markdown 覆盖核验：35/35 文件均出现在工作区变更列表。
 - 禁用名称大小写不敏感全量扫描：0 命中。
 - Markdown 相对链接检查：0 个失效目标；`git diff --check` 通过。
@@ -220,7 +220,9 @@
 
 **建议**：把 begin_turn 捕获的 session id 显式传给 runner；整个 turn 不再从全局 active 推断目标；用可控初始化延迟增加并发回归。
 
-### P1-12 外部工具 read-only 注解可覆盖 Ask
+### P1-12 外部工具 read-only 注解可覆盖 Ask（已修复）
+
+**修复状态**：协议 annotation 与本地授权风险已经分离。动态外部工具只能映射到 `External`/`Privileged`，`readOnlyHint` 仅保留给 UI 展示和并发提示；工具默认权限继续固定为 `Ask/Once`，确认摘要同时展示本地有效风险与服务端原始 hints。Auto 现在先执行完整本地规则链，不再以 `ReadOnly` 分类覆盖默认或显式 `Ask`/`Deny`；未批准 Plan 也不会把动态外部工具当作本地只读能力。新增风险映射、工具定义/视图和 Auto 会话/项目/用户规则优先级回归测试。
 
 **触发条件**：外部工具服务恶意或错误地自报 `readOnlyHint=true`，用户处于 Auto 模式。
 
@@ -392,7 +394,7 @@
 
 **修复状态**：P1-06 对 `live2d.rs` 的业务修改已统一经过 rustfmt，原换行差异自然消失；`cargo fmt --manifest-path src-tauri/Cargo.toml -- --check` 已恢复通过。
 
-`cargo fmt --manifest-path src-tauri/Cargo.toml -- --check` 在 `src-tauri/src/pack/live2d.rs:303` 报告一处纯换行格式差异。该问题不影响编译或 215 项测试，但会阻断把 rustfmt 作为强制门禁的流水线。本轮没有运行写入式格式化，以免超出“代码审查 + Markdown 更新”的授权范围。
+初始审查时，`cargo fmt --manifest-path src-tauri/Cargo.toml -- --check` 曾在 `src-tauri/src/pack/live2d.rs` 报告一处纯换行格式差异。P1-06 的业务修改统一经过 rustfmt 后，该差异自然消失；当前全仓格式门禁已通过，本项关闭。
 
 ## 6. 流式协议与渲染专项结论
 

@@ -1,6 +1,6 @@
 # TODO / 路线图
 
-> 文档状态：2026-07-12 已重新核对完成项与剩余项；本轮代码审查的证据和优先级见 [代码审查报告](./CODE-REVIEW-2026-07-12.md)。
+> 文档状态：2026-07-12 已重新核对完成项与剩余项；代码审查列出的 12 项 P1 已全部关闭，证据和优先级见 [代码审查报告](./CODE-REVIEW-2026-07-12.md)。
 
 Demiurge 当前已经具备本地桌面 Agent 的主体能力：会话、工具、权限、上下文、记忆、工作流、角色卡和本地 Lorebook RAG。这个文档先记录已经完成的功能，再列出已有雏形但仍需要打磨的缺口，最后保留下一阶段的陪伴向路线。
 
@@ -100,7 +100,7 @@ Demiurge 当前已经具备本地桌面 Agent 的主体能力：会话、工具�
 - [x] **公开 URL SSRF 防护**：direct HTTP 工具拒绝 credentials、loopback、私网、链路本地、CGNAT、未指定/保留/组播地址；每跳校验全部 DNS 答案、固定已验证 IP、禁用代理/自动重定向并复核 peer。
 - [x] **Windows 系统打开去除命令解释器**：Windows 直接调用 `ShellExecuteW`，目标作为独立 UTF-16 参数传入并拒绝内部 NUL；元字符、引号、空格、URL query 与本地路径已有回归覆盖。
 - [x] **deferred 工具按目标授权**：runner 在权限门前解析并校验 wrapper，规则/overlay/风险/确认/affected paths/remember/审计均使用真实 target 与内层 args；非法 target 保持外层 Privileged/Ask 并在执行层拒绝。
-- [ ] **MCP 注解只作提示**：外部 server 自报 read-only 不能让 Auto 自动放行；动态工具风险下限保持 External/Privileged。
+- [x] **MCP 注解只作提示**：外部 server 自报 read-only 只影响展示与并发提示；动态工具风险下限保持 External/Privileged、默认保持 Ask/Once，Auto 先尊重本地 Ask/Deny/Allow 裁决。
 - [x] **分支命令验证 expected workspace**：列表缓存按项目与 generation 失效，loading 时不展示旧项；枚举和切换均由后端比较 canonical expected/current workspace，并在切换期间锁定工作区。
 
 ## P2/P3 / 正确性、协议、体验与门禁修复队列
@@ -249,4 +249,4 @@ Demiurge 当前已经具备本地桌面 Agent 的主体能力：会话、工具�
 - 架构结构见 [IMPLEMENTATION.md](./IMPLEMENTATION.md)。
 - 当前审查结论见 [CODE-REVIEW-2026-07-12.md](./CODE-REVIEW-2026-07-12.md)。
 - 设计背景见 [demiurge-mvp-design.md](./demiurge-mvp-design.md)。
-- 提交前至少运行 `npm run build`、`cargo fmt --manifest-path src-tauri/Cargo.toml -- --check` 和 `cargo test --manifest-path src-tauri/Cargo.toml`；2026-07-12 基线为 Rust 215 项测试通过。
+- 提交前至少运行 `npm run build`、`cargo fmt --manifest-path src-tauri/Cargo.toml -- --check` 和 `cargo test --manifest-path src-tauri/Cargo.toml --no-fail-fast`；2026-07-12 基线为 Rust 255 项测试通过。

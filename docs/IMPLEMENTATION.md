@@ -1,6 +1,6 @@
 # 实现说明
 
-> 文档状态：2026-07-12 已按当前源码复核；本轮新增的项目文件夹、Git 分支、会话绑定、文件编辑活动与统一 SSE 解码均已纳入。审查结论见 [代码审查报告](./CODE-REVIEW-2026-07-12.md)。
+> 文档状态：2026-07-12 已按当前源码复核；项目文件夹、Git 分支、会话绑定、文件编辑活动、统一 SSE 解码与动态外部工具授权下限均已纳入，代码审查列出的 12 项 P1 已全部关闭。审查结论见 [代码审查报告](./CODE-REVIEW-2026-07-12.md)。
 
 本文面向协作者，说明 Demiurge 的项目结构、核心数据流、后端模块、前端模块、安全边界和扩展方式。逐子系统的深度技术原理见 [modules/](./modules/README.md)（从[架构总览](./modules/01-architecture-overview.md)开始），路线图见 [TODO.md](./TODO.md)，设计背景见 [demiurge-mvp-design.md](./demiurge-mvp-design.md)。
 
@@ -335,7 +335,7 @@ Settings 的 Context 页通过 `context_panel_state` 展示当前上下文预算
 
 主 schema 只放 core tools。截图、OCR、open_path 等低频工具留在 deferred pool，通过 `tool_search` 发现，再由 `execute_tool` 代理执行。这样可以减少固定 tools JSON 对上下文的占用。
 
-MCP 工具是运行时动态注册的：`agent::runner` 在生成工具 schema 前调用 `mcp::ensure_initialized`，随后 `tools::registry_for_state` 把已连接 server 的 `tools/list` 结果追加为 `mcp__server__tool`。模型调用这些动态工具时，`tools::execute` 直接分发到 `mcp::call_tool`。MCP resources 通过 Settings 面板展示，并通过 core tool `mcp_read_resource` 调用 `resources/read`。
+MCP 工具是运行时动态注册的：`agent::runner` 在生成工具 schema 前调用 `mcp::ensure_initialized`，随后 `tools::registry_for_state` 把已连接 server 的 `tools/list` 结果追加为 `mcp__server__tool`。模型调用这些动态工具时，`tools::execute` 直接分发到 `mcp::call_tool`。服务端 annotation 只保留为 UI/并发提示，本地授权风险由 `authorization_risk` 施加 `External`/`Privileged` 下限，动态工具默认权限固定为 `Ask/Once`。MCP resources 通过 Settings 面板展示，并通过 core tool `mcp_read_resource` 调用 `resources/read`。
 
 当前核心工具：
 
@@ -355,9 +355,9 @@ MCP 工具是运行时动态注册的：`agent::runner` 在生成工具 schema �
 
 ## 安全模型
 
-> 当前限制：以下机制描述设计目标，不代表所有边界已闭环。角色包权限升级与 IPC 信任根、Project/Session 权限串用、跨项目 undo、Windows open_path 命令注入、direct HTTP SSRF、Live2D 内部引用/事务导入、deferred 目标授权、会话导航事务、分支跨项目竞态与 turn 写入归属已修复；MCP 动态工具风险下限仍需修复，目录/预览等组件级竞态留在 P2 队列。详情见 [代码审查报告](./CODE-REVIEW-2026-07-12.md)。
+> 当前限制：以下机制描述设计目标，不代表所有边界已闭环。代码审查列出的 12 项 P1 已全部修复，包括角色包/IPC 信任根、权限作用域、跨项目 undo、系统打开、direct HTTP SSRF、Live2D 导入、deferred 授权、导航事务、分支/回合归属和动态外部工具风险下限；目录/预览等组件级竞态仍在 P2 队列。详情见 [代码审查报告](./CODE-REVIEW-2026-07-12.md)。
 
-- `PermissionMode` 支持 `plan` / `default` / `auto` / `bypass`：`default` 走工具默认策略与用户规则；`auto` 自动允许只读工具；`bypass` 跳过确认但仍审计；`plan` 未批准前只允许只读工具和受限 `write_plan`。
+- `PermissionMode` 支持 `plan` / `default` / `auto` / `bypass`：`default` 与 `auto` 都先走本地规则链和工具默认策略，只有有效裁决为 Allow 才自动执行；`bypass` 显式跳过确认但仍审计；`plan` 未批准前只允许本地 `ReadOnly` 工具和受限 `write_plan`。动态外部工具不会被归类为本地 `ReadOnly`。
 - Plan Mode 的计划状态在 `AppState.plan_state` 中维护；`write_plan` 只能写入沙盒 `.demiurge/plans/`，前端通过 `approve_plan` 批准后自动回到 `default` 执行模式。
 - 文件与 shell 工具只能访问当前会话项目根；未选择项目时使用默认沙盒。
 - 路径先做词法校验，再对最近存在祖先做 canonicalize，防止符号链接和 junction 逃逸。
@@ -367,6 +367,7 @@ MCP 工具是运行时动态注册的：`agent::runner` 在生成工具 schema �
 - Session 规则按 session id 存在内存独立桶中并随会话删除；Project 规则以 canonical workspace identity 为键持久化，User 规则才是全局规则。
 - runner 在异步初始化前捕获 turn-owned 权限上下文，整个回合的规则查找、审计和确认记忆不再依赖可变 active session；设置面板更新/清除也校验界面携带的具体身份。
 - `project_permissions.json` 与 `user_permissions.json` 受同一存储锁保护并以同目录临时文件原子替换；边界或存储错误按 `Deny(Once)` 处理。旧 `permissions.json` 不自动应用，避免把无项目身份的历史授权扩散到任意项目。
+- 动态外部工具始终保留 `Ask/Once` 默认权限；服务端自报的 read-only/destructive/open-world annotation 只影响展示与并发提示，本地有效风险不会低于 `External`/`Privileged`。Auto 不会以风险分类覆盖规则链中的 `Ask` 或 `Deny`。
 - 写入、shell、open_path、截图/OCR 等操作走确认门。
 - 屏幕感知工具受 `computer_use_enabled` 统一开关和逐次确认门控；关闭时 `screen_list_windows`、截图和 OCR 入口会拒绝执行，Settings 的 OCR 区域展示当前边界。
 - 桌面陪伴壳只是透明状态窗口，不默认读取屏幕、麦克风或精确位置；小窗和 Settings 会展示屏幕工具、语音与位置/天气状态。麦克风只由录音按钮或应用聚焦快捷键触发，天气只按设置中的手动城市或粗略城市模式查询。
@@ -510,7 +511,7 @@ Rust 测试：
 cargo test --manifest-path src-tauri/Cargo.toml
 ```
 
-2026-07-12 验证结果：215 项 Rust 单元测试全部通过；供应商专项只覆盖离线解析与请求体契约，发布前仍应执行真实端点网络契约测试。
+2026-07-12 验证结果：255 项 Rust 单元测试全部通过；供应商专项只覆盖离线解析与请求体契约，发布前仍应执行真实端点网络契约测试。
 
 Tauri 打包：
 

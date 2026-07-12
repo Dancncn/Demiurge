@@ -325,19 +325,10 @@ pub fn decide_for_mode(
     }
     let mut decision = match mode {
         PermissionMode::Default => decide(state, context, tool, default_policy),
-        PermissionMode::Auto => {
-            if risk == ToolRisk::ReadOnly {
-                PermissionDecision {
-                    effect: PermissionEffect::Allow,
-                    scope: PermissionScope::Once,
-                    reason: "Auto 模式自动允许只读工具。".to_string(),
-                    source: PermissionDecisionSource::ToolDefault,
-                    mode: None,
-                }
-            } else {
-                decide(state, context, tool, default_policy)
-            }
-        }
+        // Auto may streamline tools whose effective local policy already
+        // allows execution, but it must not override an explicit/default Ask
+        // or Deny merely because a tool is classified as read-only.
+        PermissionMode::Auto => decide(state, context, tool, default_policy),
         PermissionMode::Bypass => PermissionDecision {
             effect: PermissionEffect::Allow,
             scope: PermissionScope::Once,
@@ -1224,6 +1215,136 @@ mod tests {
             card_preference_effect(CardPreference::AskEveryTime, PermissionEffect::Deny),
             None
         );
+    }
+
+    #[test]
+    fn auto_mode_respects_explicit_rules_and_tool_defaults() {
+        let root = temp_dir("auto_policy_precedence");
+        let data_dir = root.join("data");
+        let workspace = root.join("workspace");
+        std::fs::create_dir_all(&data_dir).unwrap();
+        std::fs::create_dir_all(&workspace).unwrap();
+        let state = test_state(
+            &data_dir,
+            &workspace,
+            vec![session_with("session-a", &workspace)],
+        );
+        state.settings.lock().unwrap().permission_mode = PermissionMode::Auto;
+        let context = active_context(&state);
+
+        let default_ask = decide_for_mode(
+            &state,
+            &context,
+            "default_ask",
+            PermissionPolicy::ask("local confirmation required"),
+            ToolRisk::ReadOnly,
+        );
+        assert_eq!(default_ask.effect, PermissionEffect::Ask);
+        assert_eq!(default_ask.mode, Some(PermissionMode::Auto));
+
+        let default_allow = decide_for_mode(
+            &state,
+            &context,
+            "default_allow",
+            PermissionPolicy::allow("locally trusted read"),
+            ToolRisk::ReadOnly,
+        );
+        assert_eq!(default_allow.effect, PermissionEffect::Allow);
+
+        state
+            .session_permission_rules
+            .lock()
+            .unwrap()
+            .entry("session-a".to_string())
+            .or_default()
+            .insert(
+                "session_denied".to_string(),
+                PermissionRule {
+                    tool: "session_denied".to_string(),
+                    effect: PermissionEffect::Deny,
+                    scope: PermissionScope::Session,
+                    reason: "session deny".to_string(),
+                    updated_at: 1,
+                },
+            );
+        assert_eq!(
+            decide_for_mode(
+                &state,
+                &context,
+                "session_denied",
+                PermissionPolicy::allow("broad default"),
+                ToolRisk::ReadOnly,
+            )
+            .effect,
+            PermissionEffect::Deny
+        );
+
+        save_project_rules(
+            &data_dir,
+            context.workspace_identity.as_deref().unwrap(),
+            HashMap::from([(
+                "project_denied".to_string(),
+                PermissionRule {
+                    tool: "project_denied".to_string(),
+                    effect: PermissionEffect::Deny,
+                    scope: PermissionScope::Project,
+                    reason: "project deny".to_string(),
+                    updated_at: 2,
+                },
+            )]),
+        )
+        .unwrap();
+        assert_eq!(
+            decide_for_mode(
+                &state,
+                &context,
+                "project_denied",
+                PermissionPolicy::allow("broad default"),
+                ToolRisk::ReadOnly,
+            )
+            .effect,
+            PermissionEffect::Deny
+        );
+
+        save_user_rules(
+            &data_dir,
+            &HashMap::from([(
+                "user_asked".to_string(),
+                PermissionRule {
+                    tool: "user_asked".to_string(),
+                    effect: PermissionEffect::Ask,
+                    scope: PermissionScope::User,
+                    reason: "user ask".to_string(),
+                    updated_at: 3,
+                },
+            )]),
+        )
+        .unwrap();
+        assert_eq!(
+            decide_for_mode(
+                &state,
+                &context,
+                "user_asked",
+                PermissionPolicy::allow("broad default"),
+                ToolRisk::ReadOnly,
+            )
+            .effect,
+            PermissionEffect::Ask
+        );
+
+        assert_eq!(
+            decide_for_mode(
+                &state,
+                &context,
+                "external_default_ask",
+                PermissionPolicy::ask("external confirmation required"),
+                ToolRisk::External,
+            )
+            .effect,
+            PermissionEffect::Ask
+        );
+
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

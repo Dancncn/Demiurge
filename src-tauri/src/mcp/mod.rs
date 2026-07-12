@@ -422,16 +422,23 @@ pub fn permission_summary(state: &crate::AppState, name: &str) -> Option<String>
         let Some(tool) = server.tools.iter().find(|tool| tool.exposed_name == name) else {
             continue;
         };
-        let risk = risk_for_annotations(&tool.annotations);
-        return Some(format!(
-            "将调用 MCP server `{}` 的工具 `{}`。风险：{:?}；描述：{}",
-            tool.server_name,
-            tool.original_name,
-            risk,
-            cap_chars(tool.description.trim(), 400)
-        ));
+        return Some(permission_summary_for_tool(tool));
     }
     None
+}
+
+fn permission_summary_for_tool(tool: &McpTool) -> String {
+    let risk = authorization_risk(&tool.annotations);
+    format!(
+        "将调用 MCP server `{}` 的工具 `{}`。本地授权风险：{:?}；外部服务注解：readOnlyHint={}、destructiveHint={}、openWorldHint={}；描述：{}",
+        tool.server_name,
+        tool.original_name,
+        risk,
+        tool.annotations.read_only,
+        tool.annotations.destructive,
+        tool.annotations.open_world,
+        cap_chars(tool.description.trim(), 400)
+    )
 }
 
 pub async fn call_tool(
@@ -831,7 +838,7 @@ fn reject_all_pending(handle: &McpClientHandle, error: String) {
 }
 
 fn tool_definition(tool: &McpTool) -> ToolDefinition {
-    let risk = risk_for_annotations(&tool.annotations);
+    let risk = authorization_risk(&tool.annotations);
     let permission = PermissionPolicy {
         effect: PermissionEffect::Ask,
         scope: PermissionScope::Once,
@@ -870,7 +877,7 @@ fn tool_view(tool: &McpTool) -> McpToolView {
         original_name: tool.original_name.clone(),
         title: tool.annotations.title.clone(),
         description: tool.description.clone(),
-        risk: risk_for_annotations(&tool.annotations),
+        risk: authorization_risk(&tool.annotations),
         read_only: tool.annotations.read_only,
         destructive: tool.annotations.destructive,
         open_world: tool.annotations.open_world,
@@ -886,13 +893,17 @@ fn resource_view(resource: &McpResource) -> McpResourceView {
     }
 }
 
-fn risk_for_annotations(annotations: &McpAnnotations) -> ToolRisk {
+/// Computes the local authorization risk for a dynamically discovered tool.
+///
+/// Protocol annotations come from an external process and are hints, not
+/// trusted authorization facts. They may affect presentation and concurrency,
+/// but they must never lower a dynamic tool to the locally trusted ReadOnly or
+/// Mutating classes that receive mode-specific treatment.
+fn authorization_risk(annotations: &McpAnnotations) -> ToolRisk {
     if annotations.destructive {
-        ToolRisk::Mutating
-    } else if annotations.open_world {
+        ToolRisk::Privileged
+    } else if annotations.open_world || annotations.read_only {
         ToolRisk::External
-    } else if annotations.read_only {
-        ToolRisk::ReadOnly
     } else {
         ToolRisk::Privileged
     }
@@ -1162,25 +1173,65 @@ mod tests {
     }
 
     #[test]
-    fn maps_annotations_to_risk() {
-        assert_eq!(
-            risk_for_annotations(&McpAnnotations {
-                title: None,
+    fn untrusted_annotations_cannot_lower_dynamic_tool_authorization_risk() {
+        for read_only in [false, true] {
+            for destructive in [false, true] {
+                for open_world in [false, true] {
+                    let annotations = McpAnnotations {
+                        title: None,
+                        read_only,
+                        destructive,
+                        open_world,
+                    };
+                    let expected = if destructive {
+                        ToolRisk::Privileged
+                    } else if read_only || open_world {
+                        ToolRisk::External
+                    } else {
+                        ToolRisk::Privileged
+                    };
+                    let risk = authorization_risk(&annotations);
+                    assert_eq!(risk, expected);
+                    assert_ne!(risk, ToolRisk::ReadOnly);
+                    assert_ne!(risk, ToolRisk::Mutating);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn read_only_hint_affects_presentation_and_concurrency_not_permission() {
+        let tool = McpTool {
+            exposed_name: "mcp__test__read".to_string(),
+            server_name: "test".to_string(),
+            original_name: "read".to_string(),
+            description: "Read from an external service.".to_string(),
+            input_schema: json!({"type": "object"}),
+            annotations: McpAnnotations {
+                title: Some("External read".to_string()),
                 read_only: true,
                 destructive: false,
                 open_world: false,
-            }),
-            ToolRisk::ReadOnly
-        );
-        assert_eq!(
-            risk_for_annotations(&McpAnnotations {
-                title: None,
-                read_only: false,
-                destructive: true,
-                open_world: false,
-            }),
-            ToolRisk::Mutating
-        );
+            },
+        };
+
+        let definition = tool_definition(&tool);
+        assert_eq!(definition.risk, ToolRisk::External);
+        assert_eq!(definition.permission.effect, PermissionEffect::Ask);
+        assert_eq!(definition.permission.scope, PermissionScope::Once);
+        assert_eq!(definition.concurrency, ToolConcurrency::ParallelSafe);
+
+        let view = tool_view(&tool);
+        assert_eq!(view.risk, ToolRisk::External);
+        assert!(view.read_only);
+        assert!(!view.destructive);
+        assert!(!view.open_world);
+
+        let summary = permission_summary_for_tool(&tool);
+        assert!(summary.contains("本地授权风险：External"));
+        assert!(summary.contains("readOnlyHint=true"));
+        assert!(summary.contains("destructiveHint=false"));
+        assert!(summary.contains("openWorldHint=false"));
     }
 
     #[test]

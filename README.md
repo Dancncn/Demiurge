@@ -21,7 +21,7 @@
 
 ---
 
-> 文档状态：2026-07-12 已按当前工作区、会话绑定、Git、编辑活动与流式渲染实现复核。发布前验证基线为前端生产构建通过、Rust 215 项测试通过。
+> 文档状态：2026-07-12 已按当前工作区、会话绑定、Git、编辑活动、流式渲染与权限边界实现复核。代码审查列出的 12 项 P1 已全部关闭；发布前验证基线为前端生产构建通过、Rust 255 项测试通过。
 
 ## 这是什么
 
@@ -219,7 +219,7 @@ Demiurge/
 
 ## Security Model
 
-> 注意：2026-07-12 审查确认了若干高优先级边界。角色包权限升级与路径越界、权限规则跨会话/项目扩散、跨项目撤销、Windows 系统打开命令注入、direct 网页读取访问私网、deferred wrapper 共用授权、会话导航快照、分支缓存跨项目复用和运行中回合写错会话已修复；MCP 动态工具风险下限仍待修复。详情见 [代码审查报告](docs/CODE-REVIEW-2026-07-12.md)。
+> 注意：2026-07-12 代码审查列出的 12 项 P1 已全部修复，包括角色包与路径边界、权限作用域、跨项目撤销、系统打开、direct 网页读取、deferred 目标授权、导航事务、分支/回合归属以及动态外部工具授权下限。P2/P3 与显式 Bypass 模式等剩余边界仍应按 [代码审查报告](docs/CODE-REVIEW-2026-07-12.md) 理解。
 
 - 文件与 shell 工具只能访问当前会话绑定的项目根；未选择项目时回退到应用数据目录下的 `sandbox/`。
 - 路径先做词法校验，再做 canonicalize 校验，防止 `..`、符号链接和 junction 逃逸。
@@ -233,6 +233,7 @@ Demiurge/
 - Live2D 导入只复制普通文件，拒绝源链接/特殊文件；model3 的 Moc、纹理、物理、Pose、DisplayInfo、UserData、表情、动作和声音引用统一拒绝绝对路径、盘符、`.`/`..` 与链接逃逸。候选目录完整验证后以备份/rename 提交，任何提交错误都会尝试恢复旧目录和 manifest。
 - 角色包 id 只允许最长 128 字节的 ASCII 字母、数字、`-` 与 `_`；所有读取、修改、打开、Live2D、lore、memory 和 skills 入口都先 canonicalize `packs` 根与目标，要求目标是非链接的直接子目录。设置保存也拒绝无效或不存在的当前包。
 - `execute_tool` 只负责 deferred 分发；权限规则、角色包收紧策略、风险、确认内容、affected paths 与审计都绑定内层真实 target。允许 `open_path` 不会自动允许截图/OCR，旧的宽泛 wrapper Allow 也不再命中有效 target。
+- 动态外部工具的 `readOnlyHint`、`destructiveHint`、`openWorldHint` 只作为服务端提示保留；本地有效风险始终至少为 `External`/`Privileged`，默认权限保持 `Ask/Once`。Auto 会先执行本地规则链，不能用只读分类覆盖显式或默认 `Ask`/`Deny`。
 - 写文件、shell、open_path、截图/OCR 等操作会先请求确认。
 - shell 限制 cwd、timeout 和 output cap。
 - 子 Agent 默认只读，不允许写文件、跑 shell 或递归派生。
