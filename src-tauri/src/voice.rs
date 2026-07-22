@@ -8,6 +8,7 @@
 //! TTS can route to the DashScope media adapter or a user-managed GPT-SoVITS
 //! HTTP service for one-shot synthesis.
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine};
+use futures_util::StreamExt;
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::time::{Duration, Instant};
@@ -20,6 +21,10 @@ use crate::store::Settings;
 const VOICE_CONNECTION_TEST_TIMEOUT_SECS: u64 = 20;
 const VOICE_TTS_TIMEOUT_SECS: u64 = 90;
 const VOICE_CONNECTION_TEST_TEXT: &str = "Demiurge voice test.";
+const MAX_STT_AUDIO_BYTES: usize = 25 * 1024 * 1024;
+const MAX_STT_RESPONSE_BYTES: usize = 1024 * 1024;
+const MAX_TTS_JSON_RESPONSE_BYTES: usize = 1024 * 1024;
+const MAX_TTS_AUDIO_RESPONSE_BYTES: usize = 32 * 1024 * 1024;
 
 #[derive(Clone, Debug, Serialize)]
 pub struct VoiceStatus {
@@ -96,7 +101,12 @@ fn tts_ready(settings: &Settings) -> (bool, String) {
             }
         }
         "gpt-sovits" => {
-            if resolve_voice_id(settings, None).is_some() {
+            if let Err(reason) = validate_local_tts_url(settings) {
+                (false, reason)
+            } else if resolve_voice_id(settings, None)
+                .or_else(|| env_value("DEMIURGE_GPT_SOVITS_REF_AUDIO"))
+                .is_some()
+            {
                 (true, "GPT-SoVITS 本地 TTS 已配置参考音频。".to_string())
             } else {
                 (
@@ -106,10 +116,13 @@ fn tts_ready(settings: &Settings) -> (bool, String) {
                 )
             }
         }
-        "cosyvoice" => (
-            true,
-            "CosyVoice 本地 TTS 将通过本地 HTTP 服务测试。".to_string(),
-        ),
+        "cosyvoice" => match validate_local_tts_url(settings) {
+            Ok(()) => (
+                true,
+                "CosyVoice 本地 TTS 地址配置有效，可进行连接测试。".to_string(),
+            ),
+            Err(reason) => (false, reason),
+        },
         "none" | "" => (false, "未选择 TTS 后端。".to_string()),
         other => (
             false,
@@ -155,6 +168,7 @@ pub async fn voice_transcribe(
     if audio.is_empty() {
         return Err("没有可转写的音频。".to_string());
     }
+    validate_stt_audio_size(audio.len())?;
     let mime = mime_type
         .as_deref()
         .map(str::trim)
@@ -234,12 +248,13 @@ async fn transcribe_multipart(
         .await
         .map_err(|e| format!("STT 请求失败：{e}"))?;
     let status = resp.status();
-    let text = resp.text().await.unwrap_or_default();
+    let body = read_response_limited(resp, MAX_STT_RESPONSE_BYTES, "STT").await?;
+    let text = String::from_utf8_lossy(&body);
     if !status.is_success() {
         return Err(format!("STT 返回 HTTP {status}：{text}"));
     }
     let value: serde_json::Value =
-        serde_json::from_str(&text).map_err(|e| format!("STT 返回的 JSON 无法解析：{e}"))?;
+        serde_json::from_slice(&body).map_err(|e| format!("STT 返回的 JSON 无法解析：{e}"))?;
     value["text"]
         .as_str()
         .map(|s| s.trim().to_string())
@@ -426,11 +441,12 @@ async fn synthesize_with_dashscope(
         .await
         .map_err(|e| format!("DashScope TTS request failed: {e}"))?;
     let status = resp.status();
-    let text = resp.text().await.unwrap_or_default();
+    let body = read_response_limited(resp, MAX_TTS_JSON_RESPONSE_BYTES, "DashScope TTS").await?;
+    let text = String::from_utf8_lossy(&body);
     if !status.is_success() {
         return Err(format!("DashScope TTS returned HTTP {status}: {text}"));
     }
-    let value: Value = serde_json::from_str(&text)
+    let value: Value = serde_json::from_slice(&body)
         .map_err(|e| format!("DashScope TTS returned invalid JSON: {e}"))?;
     value["output"]["audio"]["url"]
         .as_str()
@@ -500,6 +516,16 @@ fn gpt_sovits_base_url(settings: &Settings) -> String {
         "http://127.0.0.1:9880".to_string()
     } else {
         value.to_string()
+    }
+}
+
+fn validate_local_tts_url(settings: &Settings) -> Result<(), String> {
+    let value = gpt_sovits_base_url(settings);
+    let url = reqwest::Url::parse(&value).map_err(|e| format!("本地 TTS 地址无效：{e}"))?;
+    if matches!(url.scheme(), "http" | "https") {
+        Ok(())
+    } else {
+        Err("本地 TTS 地址必须使用 http 或 https。".to_string())
     }
 }
 
@@ -595,10 +621,7 @@ async fn decode_audio_response(resp: reqwest::Response, label: &str) -> Result<S
         .unwrap_or("audio/wav")
         .trim()
         .to_string();
-    let bytes = resp
-        .bytes()
-        .await
-        .map_err(|e| format!("{label} response read failed: {e}"))?;
+    let bytes = read_response_limited(resp, MAX_TTS_AUDIO_RESPONSE_BYTES, label).await?;
     if !status.is_success() {
         let detail = String::from_utf8_lossy(&bytes);
         return Err(format!("{label} returned HTTP {status}: {detail}"));
@@ -637,6 +660,55 @@ async fn decode_audio_response(resp: reqwest::Response, label: &str) -> Result<S
         content_type,
         BASE64_STANDARD.encode(bytes)
     ))
+}
+
+fn validate_stt_audio_size(size: usize) -> Result<(), String> {
+    if size <= MAX_STT_AUDIO_BYTES {
+        Ok(())
+    } else {
+        Err(format!(
+            "STT audio is too large: {size} bytes (maximum {MAX_STT_AUDIO_BYTES} bytes)."
+        ))
+    }
+}
+
+fn append_limited_chunk(
+    output: &mut Vec<u8>,
+    chunk: &[u8],
+    limit: usize,
+    label: &str,
+) -> Result<(), String> {
+    if chunk.len() > limit.saturating_sub(output.len()) {
+        return Err(format!(
+            "{label} response exceeded the {limit}-byte safety limit."
+        ));
+    }
+    output.extend_from_slice(chunk);
+    Ok(())
+}
+
+async fn read_response_limited(
+    response: reqwest::Response,
+    limit: usize,
+    label: &str,
+) -> Result<Vec<u8>, String> {
+    if response
+        .content_length()
+        .map(|length| length > limit as u64)
+        .unwrap_or(false)
+    {
+        return Err(format!(
+            "{label} response exceeded the {limit}-byte safety limit."
+        ));
+    }
+
+    let mut output = Vec::new();
+    let mut stream = response.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|e| format!("{label} response read failed: {e}"))?;
+        append_limited_chunk(&mut output, &chunk, limit, label)?;
+    }
+    Ok(output)
 }
 
 #[cfg(test)]
@@ -679,5 +751,20 @@ mod tests {
         assert_eq!(options.emotion, "happy");
         assert!(options.streaming);
         assert!(options.allow_fallback);
+    }
+
+    #[test]
+    fn rejects_oversized_stt_audio_before_network_io() {
+        assert!(validate_stt_audio_size(MAX_STT_AUDIO_BYTES).is_ok());
+        let error = validate_stt_audio_size(MAX_STT_AUDIO_BYTES + 1).unwrap_err();
+        assert!(error.contains("too large"));
+    }
+
+    #[test]
+    fn bounded_response_buffer_rejects_chunk_crossing_limit() {
+        let mut body = vec![1, 2, 3];
+        let error = append_limited_chunk(&mut body, &[4, 5], 4, "TTS").unwrap_err();
+        assert!(error.contains("exceeded"));
+        assert_eq!(body, vec![1, 2, 3]);
     }
 }
