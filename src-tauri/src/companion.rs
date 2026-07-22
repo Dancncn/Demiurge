@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 use serde::{Deserialize, Serialize};
@@ -163,8 +163,12 @@ struct CachedLocation {
 
 static WEATHER_CACHE: OnceLock<Mutex<HashMap<String, CachedWeather>>> = OnceLock::new();
 static LOCATION_CACHE: OnceLock<Mutex<Option<CachedLocation>>> = OnceLock::new();
+static WEATHER_GENERATION: AtomicU64 = AtomicU64::new(1);
+static SKIP_NEXT_PANEL_WEATHER_FETCH: AtomicBool = AtomicBool::new(false);
 
 pub fn clear_weather_cache() -> usize {
+    WEATHER_GENERATION.fetch_add(1, Ordering::AcqRel);
+    SKIP_NEXT_PANEL_WEATHER_FETCH.store(true, Ordering::Release);
     let mut cache = WEATHER_CACHE
         .get_or_init(|| Mutex::new(HashMap::new()))
         .lock()
@@ -648,6 +652,11 @@ fn cached_weather_for_city(city: &str) -> Option<WeatherCard> {
 
 pub async fn panel_state(state: &AppState) -> CompanionPanelState {
     let settings = state.settings.lock().unwrap().clone();
+    let weather_generation = if SKIP_NEXT_PANEL_WEATHER_FETCH.swap(false, Ordering::AcqRel) {
+        None
+    } else {
+        Some(WEATHER_GENERATION.load(Ordering::Acquire))
+    };
     let recent_interaction_at = {
         let sessions = state.sessions.lock().unwrap();
         sessions
@@ -655,12 +664,14 @@ pub async fn panel_state(state: &AppState) -> CompanionPanelState {
             .map(|session| session.updated_at)
             .unwrap_or_default()
     };
-    let (weather, weather_error) = if settings.companion_enabled
-        && settings.weather_enabled
-        && settings.weather_location_mode != "off"
-    {
-        match fetch_weather(state, &settings).await {
+    let (weather, weather_error) = if let Some(generation) = weather_generation.filter(|_| {
+        settings.companion_enabled
+            && settings.weather_enabled
+            && settings.weather_location_mode != "off"
+    }) {
+        match fetch_weather_at_generation(state, &settings, generation).await {
             Ok(card) => (Some(card), None),
+            Err(err) if err == weather_superseded_error() => (None, None),
             Err(err) => (None, Some(err)),
         }
     } else {
@@ -699,8 +710,20 @@ pub async fn panel_state(state: &AppState) -> CompanionPanelState {
     }
 }
 
+#[cfg(test)]
 async fn fetch_weather(state: &AppState, settings: &Settings) -> Result<WeatherCard, String> {
-    let city = resolve_weather_city(&state.http, settings).await?;
+    let generation = WEATHER_GENERATION.load(Ordering::Acquire);
+    fetch_weather_at_generation(state, settings, generation).await
+}
+
+async fn fetch_weather_at_generation(
+    state: &AppState,
+    settings: &Settings,
+    generation: u64,
+) -> Result<WeatherCard, String> {
+    ensure_weather_generation(generation)?;
+    let city = resolve_weather_city(&state.http, settings, generation).await?;
+    ensure_weather_generation(generation)?;
     let city = city.trim();
     if city.is_empty() {
         return Err("Weather city is empty.".to_string());
@@ -716,6 +739,7 @@ async fn fetch_weather(state: &AppState, settings: &Settings) -> Result<WeatherC
         .cloned()
     {
         if cached.expires_at > now {
+            ensure_weather_generation(generation)?;
             let mut card = cached.card;
             card.cached = true;
             return Ok(card);
@@ -723,20 +747,38 @@ async fn fetch_weather(state: &AppState, settings: &Settings) -> Result<WeatherC
     }
 
     let place = provider.geocode(&state.http, city).await?;
+    ensure_weather_generation(generation)?;
     let mut card = provider.forecast(&state.http, &place).await?;
+    ensure_weather_generation(generation)?;
     card.advice = weather_advice(&card);
-    WEATHER_CACHE
-        .get_or_init(|| Mutex::new(HashMap::new()))
-        .lock()
-        .unwrap()
-        .insert(
+    {
+        let mut cache = WEATHER_CACHE
+            .get_or_init(|| Mutex::new(HashMap::new()))
+            .lock()
+            .unwrap();
+        ensure_weather_generation(generation)?;
+        cache.insert(
             cache_key,
             CachedWeather {
                 card: card.clone(),
-                expires_at: now + WEATHER_CACHE_TTL_MS,
+                expires_at: now_millis() + WEATHER_CACHE_TTL_MS,
             },
         );
+    }
+    ensure_weather_generation(generation)?;
     Ok(card)
+}
+
+fn weather_superseded_error() -> &'static str {
+    "Weather request superseded by a cache clear or refresh."
+}
+
+fn ensure_weather_generation(generation: u64) -> Result<(), String> {
+    if WEATHER_GENERATION.load(Ordering::Acquire) == generation {
+        Ok(())
+    } else {
+        Err(weather_superseded_error().to_string())
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -779,9 +821,10 @@ fn weather_provider_label(value: &str) -> &'static str {
 async fn resolve_weather_city(
     client: &reqwest::Client,
     settings: &Settings,
+    generation: u64,
 ) -> Result<String, String> {
     if settings.weather_location_mode == "auto" && settings.weather_city.trim().is_empty() {
-        return coarse_location_city(client).await;
+        return coarse_location_city(client, generation).await;
     }
     Ok(settings.weather_city.trim().to_string())
 }
@@ -796,7 +839,8 @@ struct IpLocationResponse {
     country_name: String,
 }
 
-async fn coarse_location_city(client: &reqwest::Client) -> Result<String, String> {
+async fn coarse_location_city(client: &reqwest::Client, generation: u64) -> Result<String, String> {
+    ensure_weather_generation(generation)?;
     let now = now_millis();
     if let Some(cached) = LOCATION_CACHE
         .get_or_init(|| Mutex::new(None))
@@ -805,6 +849,7 @@ async fn coarse_location_city(client: &reqwest::Client) -> Result<String, String
         .clone()
     {
         if cached.expires_at > now {
+            ensure_weather_generation(generation)?;
             return Ok(cached.city);
         }
     }
@@ -823,6 +868,7 @@ async fn coarse_location_city(client: &reqwest::Client) -> Result<String, String
         .json::<IpLocationResponse>()
         .await
         .map_err(|e| format!("Coarse weather location parse failed: {e}"))?;
+    ensure_weather_generation(generation)?;
     let city = if body.city.trim().is_empty() {
         return Err("Coarse weather location did not return a city.".to_string());
     } else if body.region.trim().is_empty() {
@@ -830,13 +876,18 @@ async fn coarse_location_city(client: &reqwest::Client) -> Result<String, String
     } else {
         format!("{}, {}", body.city.trim(), body.region.trim())
     };
-    *LOCATION_CACHE
-        .get_or_init(|| Mutex::new(None))
-        .lock()
-        .unwrap() = Some(CachedLocation {
-        city: city.clone(),
-        expires_at: now + WEATHER_CACHE_TTL_MS,
-    });
+    {
+        let mut cache = LOCATION_CACHE
+            .get_or_init(|| Mutex::new(None))
+            .lock()
+            .unwrap();
+        ensure_weather_generation(generation)?;
+        *cache = Some(CachedLocation {
+            city: city.clone(),
+            expires_at: now_millis() + WEATHER_CACHE_TTL_MS,
+        });
+    }
+    ensure_weather_generation(generation)?;
     Ok(city)
 }
 

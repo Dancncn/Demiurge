@@ -20,19 +20,6 @@ function formatClock(totalSeconds: number) {
   return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
 }
 
-function notify(title: string, body: string) {
-  if (!("Notification" in window)) return;
-  if (Notification.permission === "granted") {
-    new Notification(title, { body });
-    return;
-  }
-  if (Notification.permission === "default") {
-    void Notification.requestPermission().then((permission) => {
-      if (permission === "granted") new Notification(title, { body });
-    });
-  }
-}
-
 function topRhythmEntry(values?: Record<string, number>) {
   const entries = Object.entries(values ?? {}).filter(([, count]) => count > 0);
   entries.sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
@@ -73,19 +60,11 @@ export default function PomodoroCard({ activeSessionId, activeSessionTitle, goal
       setWorkflowRunId((current) => current || panel.runs[0]?.run_id || "");
     });
     let unlistenUpdated: UnlistenFn | undefined;
-    let unlistenCompleted: UnlistenFn | undefined;
     void api.listenPomodoroUpdated(setState).then((fn) => {
       unlistenUpdated = fn;
     });
-    void api.listenPomodoroCompleted((event) => {
-      setState(event.state);
-      notify(event.title, event.body);
-    }).then((fn) => {
-      unlistenCompleted = fn;
-    });
     return () => {
       unlistenUpdated?.();
-      unlistenCompleted?.();
     };
   }, []);
 
@@ -97,7 +76,7 @@ export default function PomodoroCard({ activeSessionId, activeSessionTitle, goal
   const duration = timer?.duration_secs ?? 0;
 
   // 轮询仅在 running 时启用（1s 兜底同步剩余秒数）；idle/paused 时由
-  // listenPomodoroUpdated / listenPomodoroCompleted 事件驱动刷新，避免无谓 IPC。
+  // 其他状态由 listenPomodoroUpdated 事件驱动刷新，避免无谓 IPC。
   useEffect(() => {
     if (!running) return;
     const poll = window.setInterval(() => void refresh(), 1000);

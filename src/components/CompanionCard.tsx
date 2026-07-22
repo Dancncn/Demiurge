@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import * as api from "../lib/api";
+import { applyDoNotDisturb } from "../lib/companionGovernance";
 import { useI18n } from "../lib/i18n";
 import type { CompanionPanelState, Settings } from "../lib/types";
 import { CloudSunIcon, RotateCwIcon, SettingsIcon } from "./Icons";
@@ -31,37 +32,39 @@ export default function CompanionCard({ settings, onOpenSettings }: Props) {
   const [state, setState] = useState<CompanionPanelState | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [localNow, setLocalNow] = useState(() => new Date());
+  const requestGenerationRef = useRef(0);
 
-  async function refresh() {
+  async function loadPanel(invalidateWeather: boolean) {
     if (!settings?.companion_enabled) return;
+    const generation = requestGenerationRef.current + 1;
+    requestGenerationRef.current = generation;
     setLoading(true);
     setError("");
     try {
-      setState(await api.companionPanelState());
+      if (invalidateWeather) {
+        await api.companionClearWeatherCache();
+        if (generation !== requestGenerationRef.current) return;
+      }
+      const next = await api.companionPanelState();
+      if (generation === requestGenerationRef.current) setState(next);
     } catch (err) {
-      setError(String(err));
+      if (generation === requestGenerationRef.current) setError(String(err));
     } finally {
-      setLoading(false);
+      if (generation === requestGenerationRef.current) setLoading(false);
     }
   }
 
-  async function refreshWeatherCache() {
-    if (!settings?.companion_enabled) return;
-    setLoading(true);
-    setError("");
-    try {
-      setState(await api.companionClearWeatherCache());
-    } catch (err) {
-      setError(String(err));
-    } finally {
-      setLoading(false);
-    }
-  }
+  const refresh = () => loadPanel(false);
+  const refreshWeather = () => loadPanel(true);
 
   useEffect(() => {
     void refresh();
     const timer = window.setInterval(() => void refresh(), 30 * 60 * 1000);
-    return () => window.clearInterval(timer);
+    return () => {
+      requestGenerationRef.current += 1;
+      window.clearInterval(timer);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     settings?.companion_enabled,
@@ -75,10 +78,20 @@ export default function CompanionCard({ settings, onOpenSettings }: Props) {
     settings?.weather_provider,
   ]);
 
+  useEffect(() => {
+    const timer = window.setInterval(() => setLocalNow(new Date()), 60 * 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+
   if (!settings?.companion_enabled) return null;
 
   const weather = state?.weather;
-  const suggestions = state?.suggestions ?? [];
+  const governed = applyDoNotDisturb(
+    state?.suggestions ?? [],
+    settings.companion_do_not_disturb,
+    localNow,
+  );
+  const suggestions = governed.suggestions;
   const weatherSummary = weather
     ? [
         weather.city,
@@ -122,7 +135,7 @@ export default function CompanionCard({ settings, onOpenSettings }: Props) {
         <div className="ml-auto flex shrink-0 items-center gap-1">
           <button
             type="button"
-            onClick={() => void refreshWeatherCache()}
+            onClick={() => void refreshWeather()}
             disabled={loading}
             className="grid size-7 place-items-center rounded-md text-[#59616d] hover:bg-[#eef1f5] disabled:opacity-50"
             aria-label={t("companion.refreshWeather")}
