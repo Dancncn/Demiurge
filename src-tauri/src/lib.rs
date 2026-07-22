@@ -30,7 +30,7 @@ use serde_json::json;
 use tauri::{AppHandle, Emitter, Manager, PhysicalSize, Size, State};
 use tokio::sync::oneshot;
 
-use agent::conversation::Message;
+use agent::conversation::{HistoryMessage, Message};
 use permission::{PermissionResponse, PermissionRule};
 use store::{PermissionMode, Session, SessionMeta, SessionStore, Settings};
 
@@ -139,8 +139,12 @@ impl AppState {
             if *last >= seq {
                 return; // 已有更新的快照落盘，跳过这次旧数据写入
             }
-            let _ = store::save_sessions(&dir, &store);
-            *last = seq;
+            match store::save_sessions(&dir, &store) {
+                Ok(()) => *last = seq,
+                Err(error) => {
+                    eprintln!("Failed to persist sessions in {}: {error}", dir.display());
+                }
+            }
         });
     }
 }
@@ -155,7 +159,7 @@ struct SessionList {
 struct NavigationSnapshot {
     session_id: String,
     sessions: Vec<SessionMeta>,
-    history: Vec<Message>,
+    history: Vec<HistoryMessage>,
     workspace: workspace::WorkspaceState,
     goal: Option<agent::goal::GoalPanelState>,
 }
@@ -282,7 +286,7 @@ fn navigation_snapshot_for_state(
         (
             session.id.clone(),
             list.sessions,
-            session.messages.clone(),
+            session.messages.iter().map(HistoryMessage::from).collect(),
             session.workspace_path.clone(),
             session.goal.clone(),
         )
@@ -700,6 +704,7 @@ async fn webdav_backup_now(
 
     let settings = store::redacted_settings(&state.settings.lock().unwrap().clone());
     let sessions = state.sessions.lock().unwrap().clone();
+    let sessions = store::session_store_value(&sessions)?;
     let payload = json!({
         "app": "Demiurge",
         "version": env!("CARGO_PKG_VERSION"),
@@ -1345,11 +1350,11 @@ fn session_stats(state: State<'_, AppState>, offset: i64) -> store::StatsPanel {
 
 /// 当前活动会话的消息历史。
 #[tauri::command]
-fn get_history(state: State<'_, AppState>) -> Vec<Message> {
+fn get_history(state: State<'_, AppState>) -> Vec<HistoryMessage> {
     let store = state.sessions.lock().unwrap();
     store
         .get(&store.active)
-        .map(|s| s.messages.clone())
+        .map(|s| s.messages.iter().map(HistoryMessage::from).collect())
         .unwrap_or_default()
 }
 
@@ -1940,6 +1945,205 @@ fn companion_enqueue_memory_suggestion(
         .map(|_| companion_queue_state(state.inner()))
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct CompanionMemoryUndoRecord {
+    queue_item_id: String,
+    memory_id: String,
+    action: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    previous_kind: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    previous_text: Option<String>,
+    applied_kind: String,
+    applied_text: String,
+}
+
+#[derive(Default, Serialize, Deserialize)]
+struct CompanionMemoryUndoJournal {
+    #[serde(default)]
+    records: HashMap<String, CompanionMemoryUndoRecord>,
+}
+
+fn companion_memory_undo_path(data_dir: &Path) -> PathBuf {
+    data_dir.join("companion-memory-undo.json")
+}
+
+fn load_companion_memory_undo_journal(
+    data_dir: &Path,
+) -> Result<CompanionMemoryUndoJournal, String> {
+    let path = companion_memory_undo_path(data_dir);
+    let primary: Result<CompanionMemoryUndoJournal, String> = fs::read_to_string(&path)
+        .map_err(|error| error.to_string())
+        .and_then(|raw| serde_json::from_str(&raw).map_err(|error| error.to_string()));
+    if let Ok(journal) = primary {
+        return Ok(journal);
+    }
+
+    let backup = store::backup_path(&path);
+    if let Ok(raw) = fs::read_to_string(&backup) {
+        if let Ok(journal) = serde_json::from_str::<CompanionMemoryUndoJournal>(&raw) {
+            if let Err(error) = store::atomic_write_text(&path, &raw, false) {
+                eprintln!(
+                    "Recovered companion memory undo journal from {} but failed to repair {}: {error}",
+                    backup.display(),
+                    path.display()
+                );
+            }
+            return Ok(journal);
+        }
+    }
+
+    if !path.exists() && !backup.exists() {
+        Ok(CompanionMemoryUndoJournal::default())
+    } else {
+        Err(format!(
+            "Companion memory undo journal {} and its backup are unreadable or corrupt.",
+            path.display()
+        ))
+    }
+}
+
+fn save_companion_memory_undo_journal(
+    data_dir: &Path,
+    journal: &CompanionMemoryUndoJournal,
+) -> Result<(), String> {
+    let raw = serde_json::to_string_pretty(journal)
+        .map_err(|error| format!("Failed to serialize companion memory undo journal: {error}"))?;
+    store::atomic_write_text(&companion_memory_undo_path(data_dir), &raw, true)
+}
+
+fn store_companion_memory_undo_record(
+    data_dir: &Path,
+    record: CompanionMemoryUndoRecord,
+) -> Result<(), String> {
+    let mut journal = load_companion_memory_undo_journal(data_dir)?;
+    journal.records.insert(record.queue_item_id.clone(), record);
+    save_companion_memory_undo_journal(data_dir, &journal)
+}
+
+fn remove_companion_memory_undo_record(data_dir: &Path, queue_item_id: &str) -> Result<(), String> {
+    let mut journal = load_companion_memory_undo_journal(data_dir)?;
+    journal.records.remove(queue_item_id);
+    save_companion_memory_undo_journal(data_dir, &journal)
+}
+
+fn rollback_companion_memory_change(
+    data: &Path,
+    sandbox: &Path,
+    packs: &Path,
+    pack_id: &str,
+    session_id: &str,
+    record: &CompanionMemoryUndoRecord,
+) -> Result<(), String> {
+    match record.action.as_str() {
+        "created" => {
+            let panel = agent::memory::panel_state(data, sandbox, packs, pack_id, session_id);
+            if panel
+                .entries
+                .iter()
+                .any(|entry| entry.id == record.memory_id)
+            {
+                agent::memory::delete_entry(
+                    data,
+                    sandbox,
+                    packs,
+                    pack_id,
+                    session_id,
+                    &record.memory_id,
+                )?;
+            }
+            Ok(())
+        }
+        "updated" => agent::memory::update_entry(
+            data,
+            sandbox,
+            packs,
+            pack_id,
+            session_id,
+            &record.memory_id,
+            record
+                .previous_kind
+                .as_deref()
+                .ok_or_else(|| "Undo record is missing previous memory kind.".to_string())?,
+            record
+                .previous_text
+                .as_deref()
+                .ok_or_else(|| "Undo record is missing previous memory text.".to_string())?,
+        )
+        .map(|_| ()),
+        action => Err(format!("Unknown companion memory undo action: {action}")),
+    }
+}
+
+fn apply_companion_memory_undo(
+    data: &Path,
+    sandbox: &Path,
+    packs: &Path,
+    pack_id: &str,
+    session_id: &str,
+    record: &CompanionMemoryUndoRecord,
+) -> Result<(), String> {
+    let panel = agent::memory::panel_state(data, sandbox, packs, pack_id, session_id);
+    let current = panel
+        .entries
+        .iter()
+        .find(|entry| entry.id == record.memory_id);
+    match record.action.as_str() {
+        "created" => {
+            let Some(current) = current else {
+                return Ok(());
+            };
+            if current.kind != record.applied_kind || current.text != record.applied_text {
+                return Err(
+                    "The saved memory changed after creation; undo will not delete it.".to_string(),
+                );
+            }
+            agent::memory::delete_entry(
+                data,
+                sandbox,
+                packs,
+                pack_id,
+                session_id,
+                &record.memory_id,
+            )?;
+            Ok(())
+        }
+        "updated" => {
+            let previous_kind = record
+                .previous_kind
+                .as_deref()
+                .ok_or_else(|| "Undo record is missing previous memory kind.".to_string())?;
+            let previous_text = record
+                .previous_text
+                .as_deref()
+                .ok_or_else(|| "Undo record is missing previous memory text.".to_string())?;
+            let current =
+                current.ok_or_else(|| "The updated memory no longer exists.".to_string())?;
+            if current.kind == previous_kind && current.text == previous_text {
+                return Ok(());
+            }
+            if current.kind != record.applied_kind || current.text != record.applied_text {
+                return Err(
+                    "The saved memory changed after merge/replace; undo will not overwrite it."
+                        .to_string(),
+                );
+            }
+            agent::memory::update_entry(
+                data,
+                sandbox,
+                packs,
+                pack_id,
+                session_id,
+                &record.memory_id,
+                previous_kind,
+                previous_text,
+            )?;
+            Ok(())
+        }
+        action => Err(format!("Unknown companion memory undo action: {action}")),
+    }
+}
+
 #[tauri::command]
 fn companion_save_memory_queue_item(
     state: State<'_, AppState>,
@@ -1953,7 +2157,7 @@ fn companion_save_memory_queue_item(
     let panel = agent::memory::panel_state(&data, &sandbox, &packs, &pack_id, &session_id);
     let duplicate = find_similar_memory_entry(&panel, &item);
     let resolution = resolution.unwrap_or_default();
-    let saved_id = match (duplicate, resolution.as_str()) {
+    let (saved_id, undo_record) = match (duplicate, resolution.as_str()) {
         (Some(existing), "merge") => {
             let merged = merge_memory_text(&existing.text, &item.text);
             agent::memory::update_entry(
@@ -1966,7 +2170,19 @@ fn companion_save_memory_queue_item(
                 &item.kind,
                 &merged,
             )?;
-            Some(existing.id)
+            let memory_id = existing.id.clone();
+            (
+                Some(memory_id.clone()),
+                CompanionMemoryUndoRecord {
+                    queue_item_id: id.clone(),
+                    memory_id,
+                    action: "updated".to_string(),
+                    previous_kind: Some(existing.kind),
+                    previous_text: Some(existing.text),
+                    applied_kind: item.kind.clone(),
+                    applied_text: merged,
+                },
+            )
         }
         (Some(existing), "replace") => {
             agent::memory::update_entry(
@@ -1979,7 +2195,19 @@ fn companion_save_memory_queue_item(
                 &item.kind,
                 &item.text,
             )?;
-            Some(existing.id)
+            let memory_id = existing.id.clone();
+            (
+                Some(memory_id.clone()),
+                CompanionMemoryUndoRecord {
+                    queue_item_id: id.clone(),
+                    memory_id,
+                    action: "updated".to_string(),
+                    previous_kind: Some(existing.kind),
+                    previous_text: Some(existing.text),
+                    applied_kind: item.kind.clone(),
+                    applied_text: item.text.clone(),
+                },
+            )
         }
         (Some(_), "keep_new") | (None, _) => {
             let panel = agent::memory::add_entry(
@@ -1992,13 +2220,54 @@ fn companion_save_memory_queue_item(
                 &item.kind,
                 &item.text,
             )?;
-            find_saved_memory_id(&panel, &item)
+            let memory_id = find_saved_memory_id(&panel, &item)
+                .ok_or_else(|| "Saved memory could not be located for undo.".to_string())?;
+            (
+                Some(memory_id.clone()),
+                CompanionMemoryUndoRecord {
+                    queue_item_id: id.clone(),
+                    memory_id,
+                    action: "created".to_string(),
+                    previous_kind: None,
+                    previous_text: None,
+                    applied_kind: item.kind.clone(),
+                    applied_text: item.text.clone(),
+                },
+            )
         }
         (Some(_), _) => {
             return Err("Similar memory exists; choose merge, replace, or keep_new.".to_string())
         }
     };
-    companion::mark_memory_queue_item(&data_dir, &id, "saved", saved_id)?;
+    if let Err(error) = store_companion_memory_undo_record(&data_dir, undo_record.clone()) {
+        let rollback = rollback_companion_memory_change(
+            &data,
+            &sandbox,
+            &packs,
+            &pack_id,
+            &session_id,
+            &undo_record,
+        );
+        return Err(match rollback {
+            Ok(()) => error,
+            Err(rollback_error) => format!("{error}; rollback also failed: {rollback_error}"),
+        });
+    }
+    if let Err(error) = companion::mark_memory_queue_item(&data_dir, &id, "saved", saved_id) {
+        let rollback = rollback_companion_memory_change(
+            &data,
+            &sandbox,
+            &packs,
+            &pack_id,
+            &session_id,
+            &undo_record,
+        );
+        let _ = remove_companion_memory_undo_record(&data_dir, &id);
+        return Err(match rollback {
+            Ok(()) => error,
+            Err(rollback_error) => format!("{error}; rollback also failed: {rollback_error}"),
+        });
+    }
     Ok(companion_queue_state(state.inner()))
 }
 
@@ -2026,7 +2295,7 @@ fn companion_save_all_memory_queue_items(
     for item in pending {
         let panel = agent::memory::panel_state(&data, &sandbox, &packs, &pack_id, &session_id);
         let duplicate = find_similar_memory_entry(&panel, &item);
-        let saved_id = if let Some(existing) = duplicate {
+        let (saved_id, undo_record) = if let Some(existing) = duplicate {
             let merged = merge_memory_text(&existing.text, &item.text);
             agent::memory::update_entry(
                 &data,
@@ -2038,7 +2307,19 @@ fn companion_save_all_memory_queue_items(
                 &item.kind,
                 &merged,
             )?;
-            Some(existing.id)
+            let memory_id = existing.id.clone();
+            (
+                Some(memory_id.clone()),
+                CompanionMemoryUndoRecord {
+                    queue_item_id: item.id.clone(),
+                    memory_id,
+                    action: "updated".to_string(),
+                    previous_kind: Some(existing.kind),
+                    previous_text: Some(existing.text),
+                    applied_kind: item.kind.clone(),
+                    applied_text: merged,
+                },
+            )
         } else {
             let panel = agent::memory::add_entry(
                 &data,
@@ -2050,9 +2331,52 @@ fn companion_save_all_memory_queue_items(
                 &item.kind,
                 &item.text,
             )?;
-            find_saved_memory_id(&panel, &item)
+            let memory_id = find_saved_memory_id(&panel, &item)
+                .ok_or_else(|| "Saved memory could not be located for undo.".to_string())?;
+            (
+                Some(memory_id.clone()),
+                CompanionMemoryUndoRecord {
+                    queue_item_id: item.id.clone(),
+                    memory_id,
+                    action: "created".to_string(),
+                    previous_kind: None,
+                    previous_text: None,
+                    applied_kind: item.kind.clone(),
+                    applied_text: item.text.clone(),
+                },
+            )
         };
-        companion::mark_memory_queue_item(&data_dir, &item.id, "saved", saved_id)?;
+        if let Err(error) = store_companion_memory_undo_record(&data_dir, undo_record.clone()) {
+            let rollback = rollback_companion_memory_change(
+                &data,
+                &sandbox,
+                &packs,
+                &pack_id,
+                &session_id,
+                &undo_record,
+            );
+            return Err(match rollback {
+                Ok(()) => error,
+                Err(rollback_error) => format!("{error}; rollback also failed: {rollback_error}"),
+            });
+        }
+        if let Err(error) =
+            companion::mark_memory_queue_item(&data_dir, &item.id, "saved", saved_id)
+        {
+            let rollback = rollback_companion_memory_change(
+                &data,
+                &sandbox,
+                &packs,
+                &pack_id,
+                &session_id,
+                &undo_record,
+            );
+            let _ = remove_companion_memory_undo_record(&data_dir, &item.id);
+            return Err(match rollback {
+                Ok(()) => error,
+                Err(rollback_error) => format!("{error}; rollback also failed: {rollback_error}"),
+            });
+        }
     }
     Ok(companion_queue_state(state.inner()))
 }
@@ -2089,9 +2413,20 @@ fn companion_undo_memory_queue_item(
         .saved_memory_id
         .clone()
         .ok_or_else(|| "Saved memory id is not available for undo.".to_string())?;
+    let journal = load_companion_memory_undo_journal(&data_dir)?;
+    let undo_record = journal.records.get(&id).cloned().ok_or_else(|| {
+        "This saved item predates safe undo metadata; refusing to delete existing memory."
+            .to_string()
+    })?;
+    if undo_record.memory_id != memory_id {
+        return Err("Saved memory id does not match its undo record.".to_string());
+    }
     let (data, sandbox, packs, pack_id, session_id) = memory_context(state.inner());
-    agent::memory::delete_entry(&data, &sandbox, &packs, &pack_id, &session_id, &memory_id)?;
+    apply_companion_memory_undo(&data, &sandbox, &packs, &pack_id, &session_id, &undo_record)?;
     companion::mark_memory_queue_item(&data_dir, &id, "pending", None)?;
+    if let Err(error) = remove_companion_memory_undo_record(&data_dir, &id) {
+        eprintln!("Companion memory was undone but its journal cleanup failed: {error}");
+    }
     Ok(companion_queue_state(state.inner()))
 }
 
@@ -2190,6 +2525,128 @@ fn merge_memory_text(existing: &str, incoming: &str) -> String {
         incoming.to_string()
     } else {
         format!("{}; {}", existing.trim(), incoming.trim())
+    }
+}
+
+#[cfg(test)]
+mod companion_memory_undo_tests {
+    use super::*;
+
+    fn memory_fixture() -> (PathBuf, PathBuf, PathBuf, PathBuf) {
+        let root = std::env::temp_dir().join(format!(
+            "demiurge_companion_undo_{}",
+            store::new_session_id()
+        ));
+        let data = root.join("data");
+        let sandbox = root.join("sandbox");
+        let packs = root.join("packs");
+        fs::create_dir_all(packs.join("default")).unwrap();
+        (root, data, sandbox, packs)
+    }
+
+    #[test]
+    fn merge_or_replace_undo_restores_the_previous_memory() {
+        let (root, data, sandbox, packs) = memory_fixture();
+        let panel = agent::memory::add_entry(
+            &data,
+            &sandbox,
+            &packs,
+            "default",
+            "session-1",
+            "user",
+            "preference",
+            "Uses concise replies",
+        )
+        .unwrap();
+        let original = panel.entries[0].clone();
+        agent::memory::update_entry(
+            &data,
+            &sandbox,
+            &packs,
+            "default",
+            "session-1",
+            &original.id,
+            "preference",
+            "Uses very concise replies",
+        )
+        .unwrap();
+        let record = CompanionMemoryUndoRecord {
+            queue_item_id: "queue-1".to_string(),
+            memory_id: original.id.clone(),
+            action: "updated".to_string(),
+            previous_kind: Some(original.kind.clone()),
+            previous_text: Some(original.text.clone()),
+            applied_kind: "preference".to_string(),
+            applied_text: "Uses very concise replies".to_string(),
+        };
+        store_companion_memory_undo_record(&data, record.clone()).unwrap();
+
+        apply_companion_memory_undo(&data, &sandbox, &packs, "default", "session-1", &record)
+            .unwrap();
+
+        let panel = agent::memory::panel_state(&data, &sandbox, &packs, "default", "session-1");
+        let restored = panel
+            .entries
+            .iter()
+            .find(|entry| entry.id == original.id)
+            .unwrap();
+        assert_eq!(restored.kind, original.kind);
+        assert_eq!(restored.text, original.text);
+        assert!(load_companion_memory_undo_journal(&data)
+            .unwrap()
+            .records
+            .contains_key("queue-1"));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn undo_refuses_to_overwrite_a_memory_changed_after_save() {
+        let (root, data, sandbox, packs) = memory_fixture();
+        let panel = agent::memory::add_entry(
+            &data,
+            &sandbox,
+            &packs,
+            "default",
+            "session-1",
+            "user",
+            "preference",
+            "Initial saved text",
+        )
+        .unwrap();
+        let created = panel.entries[0].clone();
+        let record = CompanionMemoryUndoRecord {
+            queue_item_id: "queue-2".to_string(),
+            memory_id: created.id.clone(),
+            action: "created".to_string(),
+            previous_kind: None,
+            previous_text: None,
+            applied_kind: created.kind.clone(),
+            applied_text: created.text.clone(),
+        };
+        agent::memory::update_entry(
+            &data,
+            &sandbox,
+            &packs,
+            "default",
+            "session-1",
+            &created.id,
+            "preference",
+            "User edited this later",
+        )
+        .unwrap();
+
+        let error =
+            apply_companion_memory_undo(&data, &sandbox, &packs, "default", "session-1", &record)
+                .unwrap_err();
+        assert!(error.contains("changed after creation"));
+        let panel = agent::memory::panel_state(&data, &sandbox, &packs, "default", "session-1");
+        assert!(panel
+            .entries
+            .iter()
+            .any(|entry| entry.text == "User edited this later"));
+
+        let _ = fs::remove_dir_all(root);
     }
 }
 
@@ -2568,6 +3025,12 @@ pub fn run() {
             workflow_panel_state,
             workflow_run,
             workflow_stop,
+            agent::workflow_runtime::workflow_validate,
+            agent::workflow_runtime::workflow_dry_run,
+            agent::workflow_runtime::workflow_templates,
+            agent::workflow_runtime::workflow_install_template,
+            agent::workflow_runtime::workflow_run_with_inputs,
+            agent::workflow_runtime::workflow_retry_failed_node,
             voice::voice_status,
             voice::voice_transcribe,
             voice::voice_synthesize,
