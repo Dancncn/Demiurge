@@ -21,7 +21,7 @@
 
 ---
 
-> 文档状态：2026-07-12 已按当前工作区、会话绑定、Git、编辑活动、流式渲染与权限边界实现复核。代码审查列出的 12 项 P1 已全部关闭；发布前验证基线为前端生产构建通过、Rust 255 项测试通过。
+> 文档状态：2026-07-22 已按当前实现复核。验证基线为前端 21 项测试、生产构建和 Rust 287 项测试通过；真正音频字节流、Computer Use 执行闭环与 Live2D 桌宠扩展仍在路线图中。
 
 ## 这是什么
 
@@ -52,7 +52,7 @@ Demiurge 是一个桌面伴侣 Agent 的“空引擎”。它不绑定具体角�
 - 项目树按目录懒加载，默认过滤依赖、构建产物与版本控制内部目录；文本预览限制为 256 KiB，并识别二进制文件。
 - Git 面板展示当前分支、本地/远程分支与未提交文件；分支请求与缓存绑定项目路径，切换时由后端再次验证调用方看到的项目，脏工作区仍会二次确认。
 - 文件编辑工具在消息流中显示“正在编辑/已编辑”的文件活动卡片，可展开查看受影响路径、参数、结果与差异预览。
-- 流式回复先在后端归一化供应商事件，再由前端按动画帧合并增量；Markdown、代码块、公式与文字淡入共用同一渲染路径。
+- 三类 Provider 共用有界 SSE 语义并校验协议终止标记；前端按 session + turn 去重事件，最终正文可修复漏 delta。Markdown/ToolCard 使用稳定渲染，Mermaid 等到流完成后再执行。
 
 ### Context Engineering
 
@@ -78,8 +78,8 @@ Demiurge 是一个桌面伴侣 Agent 的“空引擎”。它不绑定具体角�
 - `agent_spawn` 只读子 Agent。
 - fork context，修复未配对 tool call。
 - workflow JSON DSL：`agent`、`parallel`、`pipeline`、`phase`、`budget`、`log` step。
-- workflow journal/resume。
-- Workflows live panel。
+- workflow journal/resume 与 durable snapshot。
+- Workflows 面板支持参数表单、内置模板、dry-run、运行日志和失败节点重试，可从 View 菜单打开。
 - `worktree_create` 隔离工作区。
 
 ### 角色卡、Lorebook 与向量召回
@@ -94,7 +94,7 @@ Demiurge 是一个桌面伴侣 Agent 的“空引擎”。它不绑定具体角�
 
 ### Voice 与素材接口
 
-- Voice：语音输入（STT/ASR）已接入云端转写后端；语音输出支持云端与本地服务、语速/情感/streaming 请求参数、连接测试、失败降级，以及按句切分的播放队列、静音和打断。默认安装包不分发本地语音模型权重。
+- Voice：语音输入（STT/ASR）已接入云端转写后端；语音输出支持云端与本地服务、语速/情感参数、连接测试、失败降级，以及按句切分的播放队列、静音和立即打断。STT/TTS 载荷有大小上限；当前是流式文本驱动的分句合成，不是音频字节边接收边播放。默认安装包不分发本地语音模型权重。
 - 角色包素材字段：avatar、Live2D（已实现，经后端受检 bundle 转成前端 blob/data URL）、voice（预留）等。
 
 ## 快速开始
@@ -214,6 +214,7 @@ Demiurge/
 ├─ docs/                         # Design, implementation notes, roadmap
 ├─ packs/                        # Example character pack
 ├─ public/                       # Static assets
+├─ tests/                        # Front-end state, race, Voice and accessibility contracts
 └─ package.json                  # Front-end and Tauri scripts
 ```
 
@@ -229,7 +230,8 @@ Demiurge/
 - 权限上下文在回合开始、任何异步初始化之前捕获；裁决、审计和确认后的规则记忆始终复用该 session/workspace identity，不会因界面切换改写归属。
 - Session 权限按 session id 分桶并随会话删除；Project 权限按 canonical workspace identity 存入版本化 `project_permissions.json`，不会跨项目复用。
 - Project/User 权限文件在进程内串行并通过同目录临时文件原子替换；工作区身份或规则存储无法验证时拒绝自动授权。旧版无项目身份的 `permissions.json` 不会自动应用，升级后需在当前项目重新确认 Project 规则。
-- direct `http_get` / `web_fetch` 只连接公开 HTTP(S) 地址：首跳和每次重定向都会重做 DNS 全答案校验，固定已验证 IP，并拒绝凭据 URL、loopback、私网、链路本地、组播、未指定和保留地址。该路径禁用系统代理以防代理重新解析目标；外部抓取 adapter 不经过本机 direct fetch。
+- direct `http_get` / `web_fetch` 只连接公开 HTTP(S) 地址：首跳和每次重定向都会重做 DNS 全答案校验，固定已验证 IP，并拒绝凭据 URL、loopback、私网、链路本地、组播、未指定和保留地址。响应按上限流式读取，不会先完整下载再截断；外部抓取 adapter 不经过本机 direct fetch。
+- Session、Memory 与 Dream 的重要本地写入使用同目录临时文件和原子替换，主文件损坏时可从备份恢复并保留损坏副本。
 - Live2D 导入只复制普通文件，拒绝源链接/特殊文件；model3 的 Moc、纹理、物理、Pose、DisplayInfo、UserData、表情、动作和声音引用统一拒绝绝对路径、盘符、`.`/`..` 与链接逃逸。候选目录完整验证后以备份/rename 提交，任何提交错误都会尝试恢复旧目录和 manifest。
 - 角色包 id 只允许最长 128 字节的 ASCII 字母、数字、`-` 与 `_`；所有读取、修改、打开、Live2D、lore、memory 和 skills 入口都先 canonicalize `packs` 根与目标，要求目标是非链接的直接子目录。设置保存也拒绝无效或不存在的当前包。
 - `execute_tool` 只负责 deferred 分发；权限规则、角色包收紧策略、风险、确认内容、affected paths 与审计都绑定内层真实 target。允许 `open_path` 不会自动允许截图/OCR，旧的宽泛 wrapper Allow 也不再命中有效 target。
@@ -248,9 +250,10 @@ Demiurge/
 npm run tauri dev
 ```
 
-前端构建：
+前端测试与构建：
 
 ```bash
+npm test
 npm run build
 ```
 

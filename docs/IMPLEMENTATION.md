@@ -1,6 +1,6 @@
 # 实现说明
 
-> 文档状态：2026-07-12 已按当前源码复核；项目文件夹、Git 分支、会话绑定、文件编辑活动、统一 SSE 解码与动态外部工具授权下限均已纳入，代码审查列出的 12 项 P1 已全部关闭。审查结论见 [代码审查报告](./CODE-REVIEW-2026-07-12.md)。
+> 文档状态：2026-07-22 已按当前源码复核。统一事件归并、流式协议边界、工作流表单与恢复、语音/陪伴交互、本地状态恢复和前端测试基线已收口；当前验证基线为前端 21 项、Rust 287 项测试通过。审查结论见 [代码审查报告](./CODE-REVIEW-2026-07-12.md)。
 
 本文面向协作者，说明 Demiurge 的项目结构、核心数据流、后端模块、前端模块、安全边界和扩展方式。逐子系统的深度技术原理见 [modules/](./modules/README.md)（从[架构总览](./modules/01-architecture-overview.md)开始），路线图见 [TODO.md](./TODO.md)，设计背景见 [demiurge-mvp-design.md](./demiurge-mvp-design.md)。
 
@@ -114,12 +114,12 @@ Demiurge/
 | `connection_tests.rs` | Settings 连接测试；用当前表单设置验证 LLM Provider、Web Search 和 WebDAV 以外的网络 key，不要求先保存密钥 | `test_provider()` / `test_web_search()` |
 | `credentials.rs` | keyring 凭据读写，避免 LLM/Web Search/WebDAV/MCP env 密钥落入 settings 明文 | `hydrate_or_migrate_settings()` / `save_mcp_env_secrets()` |
 | `ocr.rs` | OCR 模型路径、ModelScope/Hugging Face 源、下载进度事件、缺模型检查、手动安装提示和 OCR 推理入口 | `model_status()` / `download_models()` / `recognize_rgba()` |
-| `voice.rs` | STT(ASR) 已接入云端转写后端（DashScope `qwen3-asr-flash` / OpenAI 兼容 Whisper，由 `voice_stt_backend` 选择并校验凭据）；TTS 已接通 DashScope + GPT-SoVITS / CosyVoice(alias) 本地后端，支持语速、情感、streaming 请求参数、连接测试和本地失败后 DashScope 降级；本地语音模型不随默认安装包分发 | `voice_transcribe()` / `voice_synthesize()` / `voice_status()` / `voice_tts_check()` |
+| `voice.rs` | STT(ASR) 已接入 DashScope `qwen3-asr-flash` / OpenAI 兼容 Whisper，并限制上传体积；TTS 已接通 DashScope + GPT-SoVITS / CosyVoice(alias) 本地后端，限制响应体积，支持语速、情感、连接测试和本地失败后 DashScope 降级；本地语音模型不随默认安装包分发 | `voice_transcribe()` / `voice_synthesize()` / `voice_status()` / `voice_tts_check()` |
 | `media.rs` | DashScope 媒体后端（图像生成）与 voice 用的 dashscope 凭据 / base_url 辅助 | `generate_image()` / `dashscope_api_key()` |
 | `pomodoro.rs` | 番茄钟运行时、持久化状态、完成事件、节奏记忆和勿扰联动所需的面板状态 | `pomodoro_state()` / `pomodoro_start()` / `pomodoro_pause()` / `pomodoro_resume()` / `pomodoro_skip()` |
 | `agent/session_engine.rs` | turn runtime state、入口互斥、中断标记、统一 agent event envelope 和会话写入封装 | `begin_turn()` / `finish_turn()` / `TurnEventEmitter` / `SessionTurnStore` |
 | `agent/runner.rs` | Agent loop，处理模型流、tool calls、tool results、最终回答 | `run_turn()` / `run_turn_with_options()` |
-| `agent/conversation.rs` | 内部消息结构和 tool call/result 表示 | `Message` / `ToolCall` |
+| `agent/conversation.rs` | 内部消息结构、tool call/result 表示，以及结构化工具执行状态与元数据的历史兼容 | `Message` / `ToolCall` / `ToolExecutionMeta` |
 | `agent/prompt.rs` | system prompt 分区组装，注入 persona、skills、instructions、scoped memories、summary、environment、tools 和 safety sections | `build_for_session_input()` / `build_with_report()` |
 | `agent/budget.rs` | 启发式 token 预算、provider usage 汇总、profile-aware history budget | `history_budget_for_profile()` / `TokenBudgetState` |
 | `agent/context.rs` | 历史裁剪，保留最近上下文并返回可摘要旧消息 | `trim_collect_removed_by_tokens()` |
@@ -133,7 +133,8 @@ Demiurge/
 | `agent/subagent.rs` | 只读子 Agent、fork/recent/brief context、evidence packet、多 reviewer、硬预算 | `run()` |
 | `agent/ultracode.rs` | `/ultracode` 临时编排 overlay | `overlay()` |
 | `agent/workflow_journal.rs` | workflow JSONL journal 和 resume overlay | `append()` / `resume_overlay()` |
-| `agent/workflow_runtime.rs` | JSON workflow DSL 执行、live panel 状态、durable run snapshot 写入和启动水合 | `launch()` / `run_launched()` / `hydrate_persisted_runs()` |
+| `agent/workflow_schema.rs` | Workflow 输入 schema、变量模板渲染、静态校验、dry-run 计划和内置模板 | `validate_workflow()` / `render_workflow()` / `dry_run()` / `builtin_templates()` |
+| `agent/workflow_runtime.rs` | JSON workflow DSL 执行、表单输入、模板安装、dry-run、失败节点重试、live panel 状态、durable run snapshot 写入和启动水合 | `launch()` / `workflow_run_with_inputs()` / `workflow_retry_failed_node()` / `hydrate_persisted_runs()` |
 | `llm/*` | OpenAI-compatible/local/Anthropic/Gemini provider adapters；公共 `SseDecoder` 处理任意字节分片、CR/LF、流尾与多行 data；适配器归一化正文、思考、工具、usage、错误和 finish reason | `stream_completion()` / `ProviderProfile::for_kind()` / `SseDecoder` |
 | `mcp/mod.rs` | stdio MCP Manager、server lifecycle、tool/resource discovery、resource read、动态 tool definition 与调用分发 | `ensure_initialized()` / `call_tool()` / `read_resource()` |
 | `tools/mod.rs` | 工具注册表、schema 输出、权限 metadata、统一执行入口 | `registry()` / `execute()` |
@@ -147,7 +148,7 @@ Demiurge/
 | `permission/mod.rs` | turn-owned 权限上下文、Session/Project/User 分层规则、confirm 往返、原子规则持久化与带身份审计 | `context_for_session()` / `decide_for_mode()` / `confirm()` |
 | `pack/mod.rs` | 角色包加载、manifest 校验、头像 data URL 读取、zip 导入校验与默认包落地 | `list_packs()` / `load_pack()` / `import_zip()` |
 | `pack/live2d.rs` | Live2D staging 导入、全 FileReferences containment/ASCII 重写、目录+manifest 回滚提交与受检 bundle | `import_live2d_folder()` / `live2d_bundle()` |
-| `store/mod.rs` | settings、sessions、权限规则等持久化 | `Settings` / `SessionStore` |
+| `store/mod.rs` | settings、sessions、权限规则等持久化；会话采用临时文件原子替换、上一版本备份与损坏恢复 | `Settings` / `SessionStore` / `atomic_write_text()` |
 
 ## 前端模块
 
@@ -171,7 +172,7 @@ Demiurge/
 | `components/ToolCard.tsx` | tool-start/tool-end 展示；编辑工具显示受影响文件活动、可展开详情、差异与回滚提示 |
 | `components/ConfirmDialog.tsx` | 敏感工具确认，支持 once/session/project scope |
 | `components/SettingsDialog.tsx` | provider、Persona Pack zip 导入、Web Search、MCP server、OCR 模型源/下载进度/缺模型引导、语音、WebDAV、权限、Companion/Weather、分层记忆维护和 Context 可视化设置，以及 Provider/Web Search/WebDAV 连接测试 |
-| `components/WorkflowsPanel.tsx` | workflow 定义、run/stop、agent、phase、log 的 live 状态 |
+| `components/WorkflowsPanel.tsx` | workflow 定义编辑、输入表单、内置模板、校验/dry-run、run/stop、失败节点重试及 live 状态 |
 
 ## 运行数据目录
 
@@ -276,7 +277,9 @@ Memory 仍以 Markdown 为主，但读写路径已分层：
 
 Prompt 会按 user/project/session/pack 加载分层 memory，并继续兼容旧的 project legacy memory。Settings Memory 面板按 scope 展示 path、条目、重复项和统计，支持对 user/project/session/pack 手动新增、编辑 kind/text、删除和去重；通用自动 memory extraction 仍优先写入 project scope。
 
-Companion memory 走独立的用户确认链路：手动陪伴建议和授权后的 LLM 陪伴抽取都会先写入 `companion-memory-queue.json`，每条包含来源会话、原因、scope、kind、正文、创建时间和状态。Settings 的 Companion 页提供抽取开关、范围说明、最近队列记录、批量保存/忽略、撤销写入和跳转 Memory 面板；保存前会检查目标 scope 的相近记忆，提示合并、替换或保留新条目。
+Memory、`/dream` 整理结果和 SessionStore 写入均使用同目录临时文件原子替换；保留上一版本备份，并在主文件损坏时尝试恢复。上下文折叠只在摘要生成成功后提交历史与 summary，取消或摘要失败不会先删除原消息。
+
+Companion memory 走独立的用户确认链路：手动陪伴建议和授权后的 LLM 陪伴抽取都会先写入 `companion-memory-queue.json`，每条包含来源会话、原因、scope、kind、正文、创建时间和状态。Settings 的 Companion 页提供抽取开关、范围说明、最近队列记录、批量保存/忽略、撤销写入和跳转 Memory 面板；保存前会检查目标 scope 的相近记忆，提示合并、替换或保留新条目，已保存记录可撤销并恢复队列状态。
 
 ## Companion / Weather
 
@@ -286,7 +289,7 @@ Companion memory 走独立的用户确认链路：手动陪伴建议和授权后
 
 ## Voice / Desktop Companion Shell
 
-语音链路分三层：`VoiceCallPanel` 负责前端录音与通话 UI，`voice_transcribe` 负责 STT，`useStreamingTtsQueue` 负责把模型流式增量按句切分后调用 `voice_synthesize` 播放。Settings 的 Voice 页可配置 STT/TTS backend、音色、语速、情感、streaming 请求参数、失败降级、应用聚焦快捷键和 TTS 连接测试。TTS backend 支持 DashScope、GPT-SoVITS 和 CosyVoice alias；本地后端默认只连 `media_base_url` 指向的外部服务，不把模型权重打进安装包。
+语音链路分三层：`VoiceCallPanel` 负责前端录音与通话 UI，`voice_transcribe` 负责 STT，`useStreamingTtsQueue` 负责把模型文本增量按句切分后调用 `voice_synthesize` 播放。Settings 的 Voice 页可配置 STT/TTS backend、音色、语速、情感、streaming 请求参数、失败降级、应用聚焦快捷键和 TTS 连接测试。TTS backend 支持 DashScope、GPT-SoVITS 和 CosyVoice alias；本地后端默认只连 `media_base_url` 指向的外部服务，不把模型权重打进安装包。当前“流式”指文本分句生成并排队播放，真正的音频字节流解码仍未实现。
 
 语音通话当前是第一阶段回合制体验：点击电话按钮或语音快捷键打开面板，接通后按键说话，录音结束走 STT，转写文本进入当前会话，assistant 流式回答同步进入 TTS 队列。面板显示接通/挂断、静音、时长和 TTS 队列状态，并在开始录音前停止当前 TTS，形成本地半双工打断。简单 VAD 用音量阈值检测端点；通话记忆归档与 Live2D 口型/动作联动尚未接入。
 
@@ -414,6 +417,8 @@ workflow 定义放在沙盒 `.demiurge/workflows/*.json`。运行时支持：
 - `pipeline`
 - `budget`
 
+Workflow schema 可声明字符串、数字、布尔等表单输入，并在消息、phase 名称和 agent prompt 中用 `{{input_name}}` 引用。运行前会执行静态校验和 dry-run，前端可安装内置模板、填写输入并查看执行计划；失败的 run 可从记录的失败节点发起重试。
+
 运行状态通过 `workflow-updated` 推送到前端，同时写入 `.demiurge/workflow-runs/<run_id>/journal.jsonl` 和 `.demiurge/workflow-runs/<run_id>/state.json`。`journal.jsonl` 保留事件 tail，用于恢复上下文；`state.json` 保存当前 run status、取消请求、phase、agent 进度、预算和 step 计数，用于跨进程水合。
 
 启动时和 Workflows 面板读取时，后端会把 `state.json` 合并回 live panel state。上一个进程仍处于 `running` 的 run 会恢复为 `stale_running`，表示状态、预算和进度可见，但没有 live task 附着；如果 snapshot 中已有取消请求，则恢复为 `killed`。`/workflows` 使用 runtime panel state 输出这些 durable 状态。
@@ -503,7 +508,13 @@ npm run tauri dev
 npm run build
 ```
 
-前端体积治理集中在 `vite.config.ts` 和重模块入口：`manualChunks` 将 Mermaid diagram chunks、Mermaid parser、Cytoscape/D3/graph layout、Markdown/KaTeX/highlight、PDF.js 和 JSZip 分离；`components/Markdown.tsx` 只保留轻量 Suspense 入口，完整渲染器在消息区域需要时加载；PDF/ZIP 解析也按需导入。2026-07-12 的生产构建通过，但仍对约 1.1 MB 的 Live2D vendor chunk 给出非阻断体积警告；这属于已知性能优化项，不应描述为零 warning。
+前端测试：
+
+```bash
+npm test
+```
+
+前端体积治理集中在 `vite.config.ts` 和重模块入口：`manualChunks` 将 Mermaid diagram chunks、Mermaid parser、Cytoscape/D3/graph layout、Markdown/KaTeX/highlight、PDF.js 和 JSZip 分离；`components/Markdown.tsx` 只保留轻量 Suspense 入口，完整渲染器在消息区域需要时加载；PDF/ZIP 解析也按需导入。2026-07-22 的生产构建通过，但仍对约 1.1 MB 的 Live2D vendor chunk 给出非阻断体积警告；这属于已知性能优化项，不应描述为零 warning。
 
 Rust 测试：
 
@@ -511,7 +522,7 @@ Rust 测试：
 cargo test --manifest-path src-tauri/Cargo.toml
 ```
 
-2026-07-12 验证结果：255 项 Rust 单元测试全部通过；供应商专项只覆盖离线解析与请求体契约，发布前仍应执行真实端点网络契约测试。
+2026-07-22 验证结果：21 项前端测试与 287 项 Rust 测试全部通过；`npm run build` 和 `cargo fmt --check` 通过。生产构建仍有约 1.1 MB 的 Live2D vendor chunk 非阻断体积警告；供应商专项只覆盖离线解析与请求体契约，发布前仍应执行真实端点网络契约测试。
 
 Tauri 打包：
 
