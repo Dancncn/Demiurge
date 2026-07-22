@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::fs;
 use std::future::Future;
 use std::path::Path;
@@ -8,15 +8,26 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
-use serde_json::json;
-use tauri::{AppHandle, Emitter, Manager};
+use serde_json::{json, Value};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 use super::subagent::{SubagentContextMode, SubagentRequest};
 use super::{budget, subagent, workflow_journal};
 use crate::store;
 
+#[path = "workflow_schema.rs"]
+mod workflow_schema;
+
+use workflow_schema::{
+    builtin_templates, count_steps, dry_run, find_step, node_id, render_workflow,
+    validate_workflow, WorkflowFile, WorkflowStep, MAX_PARALLEL_ITEMS,
+};
+pub use workflow_schema::{
+    WorkflowDryRun, WorkflowInputDefinition, WorkflowInputKind, WorkflowTemplateInfo,
+    WorkflowValidationIssue, WorkflowValidationLevel, WorkflowValidationReport,
+};
+
 const WORKFLOW_DIR: &str = ".demiurge/workflows";
-const MAX_PARALLEL_ITEMS: usize = 8;
 const RUN_STATE_SCHEMA_VERSION: u32 = 1;
 const RUN_STATE_FILE: &str = "state.json";
 const RUN_STATE_TMP_FILE: &str = "state.json.tmp";
@@ -28,18 +39,25 @@ pub struct WorkflowDefinitionInfo {
     pub name: String,
     pub description: String,
     pub path: String,
+    pub inputs: Vec<WorkflowInputDefinition>,
+    pub valid: bool,
+    pub issues: Vec<WorkflowValidationIssue>,
+    pub steps_total: usize,
 }
 
 #[derive(Clone, Debug, Serialize)]
 pub struct WorkflowPanelState {
     pub definitions: Vec<WorkflowDefinitionInfo>,
     pub runs: Vec<WorkflowRunProgress>,
+    pub templates: Vec<WorkflowTemplateInfo>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct WorkflowRunProgress {
     pub run_id: String,
     pub name: String,
+    #[serde(default)]
+    pub definition_name: String,
     pub status: WorkflowStatus,
     #[serde(default)]
     pub cancel_requested: bool,
@@ -53,6 +71,14 @@ pub struct WorkflowRunProgress {
     pub budget: budget::TokenBudgetState,
     pub steps_total: usize,
     pub steps_done: usize,
+    #[serde(default)]
+    pub input_values: BTreeMap<String, Value>,
+    #[serde(default)]
+    pub failed_node: Option<WorkflowFailedNode>,
+    #[serde(default)]
+    pub parent_run_id: Option<String>,
+    #[serde(default)]
+    pub retry_node_id: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -69,6 +95,8 @@ pub enum WorkflowStatus {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct WorkflowAgentProgress {
     pub id: u64,
+    #[serde(default)]
+    pub node_id: String,
     pub label: String,
     pub phase: Option<String>,
     pub status: WorkflowStatus,
@@ -77,44 +105,19 @@ pub struct WorkflowAgentProgress {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct WorkflowFailedNode {
+    pub node_id: String,
+    pub kind: String,
+    pub label: String,
+    pub phase: Option<String>,
+    pub error: String,
+    pub retryable: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 struct WorkflowRunStateFile {
     schema_version: u32,
     run: WorkflowRunProgress,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-struct WorkflowFile {
-    name: Option<String>,
-    description: Option<String>,
-    steps: Vec<WorkflowStep>,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-enum WorkflowStep {
-    Log {
-        message: String,
-    },
-    Phase {
-        name: String,
-        steps: Vec<WorkflowStep>,
-    },
-    Agent {
-        prompt: String,
-        label: Option<String>,
-        agent_type: Option<String>,
-        agent: Option<String>,
-        context_mode: Option<String>,
-    },
-    Parallel {
-        items: Vec<WorkflowStep>,
-    },
-    Pipeline {
-        items: Vec<WorkflowStep>,
-    },
-    Budget {
-        total: Option<usize>,
-    },
 }
 
 pub fn ensure_dir(state: &crate::AppState) -> Result<PathBuf, String> {
@@ -146,6 +149,7 @@ pub fn panel_state(state: &crate::AppState) -> WorkflowPanelState {
         runs.push(WorkflowRunProgress {
             run_id: info.run_id,
             name: "journal".to_string(),
+            definition_name: String::new(),
             status: WorkflowStatus::Journaled,
             cancel_requested: false,
             current_phase: None,
@@ -158,10 +162,18 @@ pub fn panel_state(state: &crate::AppState) -> WorkflowPanelState {
             budget: budget::TokenBudgetState::default(),
             steps_total: 0,
             steps_done: 0,
+            input_values: BTreeMap::new(),
+            failed_node: None,
+            parent_run_id: None,
+            retry_node_id: None,
         });
     }
     runs.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
-    WorkflowPanelState { definitions, runs }
+    WorkflowPanelState {
+        definitions,
+        runs,
+        templates: builtin_templates(),
+    }
 }
 
 pub fn hydrate_persisted_runs(state: &crate::AppState) {
@@ -216,15 +228,43 @@ pub fn list_definitions(state: &crate::AppState) -> Vec<WorkflowDefinitionInfo> 
                 return None;
             }
             let raw = fs::read_to_string(&path).ok()?;
-            let parsed = serde_json::from_str::<WorkflowFile>(&raw).ok();
+            let parsed = serde_json::from_str::<WorkflowFile>(&raw);
             let name = parsed
                 .as_ref()
+                .ok()
                 .and_then(|w| w.name.clone())
                 .or_else(|| path.file_stem().map(|s| s.to_string_lossy().to_string()))?;
+            let (description, inputs, valid, issues, steps_total) = match parsed {
+                Ok(workflow) => {
+                    let report = validate_workflow(&workflow, &definition_probe_inputs(&workflow));
+                    (
+                        workflow.description.unwrap_or_default(),
+                        workflow.inputs,
+                        report.valid,
+                        report.issues,
+                        count_steps(&workflow.steps),
+                    )
+                }
+                Err(error) => (
+                    String::new(),
+                    Vec::new(),
+                    false,
+                    vec![WorkflowValidationIssue {
+                        level: WorkflowValidationLevel::Error,
+                        path: "document".to_string(),
+                        message: format!("invalid workflow JSON: {error}"),
+                    }],
+                    0,
+                ),
+            };
             Some(WorkflowDefinitionInfo {
                 name,
-                description: parsed.and_then(|w| w.description).unwrap_or_default(),
+                description,
                 path: path.to_string_lossy().to_string(),
+                inputs,
+                valid,
+                issues,
+                steps_total,
             })
         })
         .collect::<Vec<_>>();
@@ -233,7 +273,21 @@ pub fn list_definitions(state: &crate::AppState) -> Vec<WorkflowDefinitionInfo> 
 }
 
 pub fn launch(app: &AppHandle, state: &crate::AppState, name: &str) -> Result<String, String> {
+    launch_with_inputs(app, state, name, BTreeMap::new())
+}
+
+pub fn launch_with_inputs(
+    app: &AppHandle,
+    state: &crate::AppState,
+    name: &str,
+    inputs: BTreeMap<String, Value>,
+) -> Result<String, String> {
     let (workflow, path) = load_workflow(state, name)?;
+    let report = validate_workflow(&workflow, &inputs);
+    if !report.valid {
+        return Err(format_validation_errors(&report.issues));
+    }
+    let rendered = render_workflow(&workflow, &report.normalized_inputs)?;
     let run_id = workflow_journal::new_run_id();
     let journal_path = state
         .sandbox_dir
@@ -248,7 +302,8 @@ pub fn launch(app: &AppHandle, state: &crate::AppState, name: &str) -> Result<St
     let now = store::now_millis();
     let progress = WorkflowRunProgress {
         run_id: run_id.clone(),
-        name: workflow.name.clone().unwrap_or_else(|| name.to_string()),
+        name: rendered.name.clone().unwrap_or_else(|| name.to_string()),
+        definition_name: name.to_string(),
         status: WorkflowStatus::Running,
         cancel_requested: false,
         current_phase: None,
@@ -259,8 +314,12 @@ pub fn launch(app: &AppHandle, state: &crate::AppState, name: &str) -> Result<St
         updated_at: now,
         error: None,
         budget: budget::TokenBudgetState::default(),
-        steps_total: count_steps(&workflow.steps),
+        steps_total: count_steps(&rendered.steps),
         steps_done: 0,
+        input_values: report.normalized_inputs,
+        failed_node: None,
+        parent_run_id: None,
+        retry_node_id: None,
     };
     state.workflow_runs.lock().unwrap().push(progress);
     state
@@ -278,12 +337,313 @@ pub fn launch(app: &AppHandle, state: &crate::AppState, name: &str) -> Result<St
     Ok(run_id)
 }
 
+pub fn validate_definition(
+    state: &crate::AppState,
+    name: &str,
+    inputs: BTreeMap<String, Value>,
+) -> Result<WorkflowValidationReport, String> {
+    let (workflow, _) = load_workflow(state, name)?;
+    Ok(validate_workflow(&workflow, &inputs))
+}
+
+pub fn dry_run_definition(
+    state: &crate::AppState,
+    name: &str,
+    inputs: BTreeMap<String, Value>,
+) -> Result<WorkflowDryRun, String> {
+    let (workflow, _) = load_workflow(state, name)?;
+    Ok(dry_run(&workflow, name, &inputs))
+}
+
+pub fn install_template(
+    state: &crate::AppState,
+    template_id: &str,
+    requested_name: Option<String>,
+) -> Result<WorkflowDefinitionInfo, String> {
+    let template = builtin_templates()
+        .into_iter()
+        .find(|template| template.id == template_id)
+        .ok_or_else(|| format!("unknown workflow template `{template_id}`"))?;
+    let mut definition = template.definition;
+    let file_name = requested_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .unwrap_or(&template.id);
+    let safe_name = sanitize_name(file_name);
+    if safe_name.is_empty() {
+        return Err("workflow template name is invalid".to_string());
+    }
+    if let Some(name) = requested_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+    {
+        if let Some(object) = definition.as_object_mut() {
+            object.insert("name".to_string(), Value::String(name.to_string()));
+        }
+    }
+
+    let workflow: WorkflowFile = serde_json::from_value(definition.clone())
+        .map_err(|error| format!("invalid built-in workflow template: {error}"))?;
+    let report = validate_workflow(&workflow, &definition_probe_inputs(&workflow));
+    if !report.valid {
+        return Err(format_validation_errors(&report.issues));
+    }
+
+    let dir = ensure_dir(state)?;
+    let target = dir.join(format!("{safe_name}.json"));
+    if target.exists() {
+        return Err(format!(
+            "workflow `{safe_name}` already exists; choose another name"
+        ));
+    }
+    let temp = dir.join(format!(".{safe_name}.json.tmp"));
+    let body = serde_json::to_vec_pretty(&definition)
+        .map_err(|error| format!("serialize workflow template failed: {error}"))?;
+    fs::write(&temp, body).map_err(|error| format!("write workflow template failed: {error}"))?;
+    fs::rename(&temp, &target)
+        .map_err(|error| format!("commit workflow template failed: {error}"))?;
+
+    list_definitions(state)
+        .into_iter()
+        .find(|definition| Path::new(&definition.path) == target)
+        .ok_or_else(|| "installed workflow template could not be reloaded".to_string())
+}
+
+pub fn launch_failed_node_retry(
+    app: &AppHandle,
+    state: &crate::AppState,
+    parent_run_id: &str,
+) -> Result<String, String> {
+    let parent = state
+        .workflow_runs
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|run| run.run_id == parent_run_id)
+        .cloned()
+        .or_else(|| {
+            let root = state.sandbox_dir.lock().unwrap().clone();
+            read_run_state_in_root(&root, parent_run_id)
+        })
+        .ok_or_else(|| format!("workflow run `{parent_run_id}` was not found"))?;
+    let failed = parent
+        .failed_node
+        .clone()
+        .filter(|failed| failed.retryable)
+        .ok_or_else(|| "this workflow has no retryable failed node".to_string())?;
+    let definition_name = if parent.definition_name.trim().is_empty() {
+        parent.name.clone()
+    } else {
+        parent.definition_name.clone()
+    };
+    let (workflow, _) = load_workflow(state, &definition_name)?;
+    let report = validate_workflow(&workflow, &parent.input_values);
+    if !report.valid {
+        return Err(format_validation_errors(&report.issues));
+    }
+    let rendered = render_workflow(&workflow, &report.normalized_inputs)?;
+    let (step, _) = find_step(&rendered.steps, &failed.node_id).ok_or_else(|| {
+        format!(
+            "failed node `{}` no longer exists in workflow `{definition_name}`",
+            failed.node_id
+        )
+    })?;
+
+    let run_id = workflow_journal::new_run_id();
+    let now = store::now_millis();
+    let journal_path =
+        workflow_journal::run_dir(&state.sandbox_dir.lock().unwrap().clone(), &run_id)
+            .join("journal.jsonl")
+            .to_string_lossy()
+            .to_string();
+    state
+        .workflow_runs
+        .lock()
+        .unwrap()
+        .push(WorkflowRunProgress {
+            run_id: run_id.clone(),
+            name: format!("{} / retry {}", parent.name, failed.label),
+            definition_name,
+            status: WorkflowStatus::Running,
+            cancel_requested: false,
+            current_phase: failed.phase.clone(),
+            agents: Vec::new(),
+            logs: vec![format!(
+                "retrying node {} from run {}",
+                failed.node_id, parent_run_id
+            )],
+            journal_path,
+            started_at: now,
+            updated_at: now,
+            error: None,
+            budget: parent.budget.clone(),
+            steps_total: count_steps(std::slice::from_ref(&step)),
+            steps_done: 0,
+            input_values: report.normalized_inputs,
+            failed_node: None,
+            parent_run_id: Some(parent_run_id.to_string()),
+            retry_node_id: Some(failed.node_id.clone()),
+        });
+    state
+        .workflow_cancels
+        .lock()
+        .unwrap()
+        .insert(run_id.clone(), Arc::new(AtomicBool::new(false)));
+    let _ = workflow_journal::append(
+        state,
+        &run_id,
+        "workflow_node_retry_started",
+        json!({
+            "parent_run_id": parent_run_id,
+            "node_id": failed.node_id,
+            "definition": parent.definition_name,
+        }),
+    );
+    emit_update(app, state);
+    Ok(run_id)
+}
+
+pub async fn run_failed_node_retry(app: AppHandle, run_id: String) {
+    let state = app.state::<crate::AppState>();
+    let result = async {
+        let run = state
+            .workflow_runs
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|run| run.run_id == run_id)
+            .cloned()
+            .ok_or_else(|| format!("retry run `{run_id}` was not found"))?;
+        let node_id = run
+            .retry_node_id
+            .clone()
+            .ok_or_else(|| "retry run is missing its node id".to_string())?;
+        let (workflow, _) = load_workflow(state.inner(), &run.definition_name)?;
+        let report = validate_workflow(&workflow, &run.input_values);
+        if !report.valid {
+            return Err(format_validation_errors(&report.issues));
+        }
+        let rendered = render_workflow(&workflow, &report.normalized_inputs)?;
+        let (step, phase) = find_step(&rendered.steps, &node_id)
+            .ok_or_else(|| format!("retry node `{node_id}` no longer exists"))?;
+        run_step(&app, state.inner(), &run_id, phase, node_id, step).await?;
+        if is_cancelled(state.inner(), &run_id) {
+            mark_run(
+                state.inner(),
+                &run_id,
+                WorkflowStatus::Killed,
+                true,
+                Some("user stopped workflow node retry".to_string()),
+            );
+        } else {
+            mark_run(state.inner(), &run_id, WorkflowStatus::Done, false, None);
+            let _ = workflow_journal::append(
+                state.inner(),
+                &run_id,
+                "workflow_node_retry_done",
+                json!({}),
+            );
+        }
+        emit_update(&app, state.inner());
+        Ok::<(), String>(())
+    }
+    .await;
+    if let Err(error) = result {
+        mark_run(
+            state.inner(),
+            &run_id,
+            WorkflowStatus::Failed,
+            false,
+            Some(error.clone()),
+        );
+        let _ = workflow_journal::append(
+            state.inner(),
+            &run_id,
+            "workflow_node_retry_failed",
+            json!({ "error": error }),
+        );
+        emit_update(&app, state.inner());
+    }
+    state.workflow_cancels.lock().unwrap().remove(&run_id);
+}
+
+#[tauri::command]
+pub fn workflow_validate(
+    state: State<'_, crate::AppState>,
+    name: String,
+    inputs: BTreeMap<String, Value>,
+) -> Result<WorkflowValidationReport, String> {
+    validate_definition(state.inner(), &name, inputs)
+}
+
+#[tauri::command]
+pub fn workflow_dry_run(
+    state: State<'_, crate::AppState>,
+    name: String,
+    inputs: BTreeMap<String, Value>,
+) -> Result<WorkflowDryRun, String> {
+    dry_run_definition(state.inner(), &name, inputs)
+}
+
+#[tauri::command]
+pub fn workflow_templates() -> Vec<WorkflowTemplateInfo> {
+    builtin_templates()
+}
+
+#[tauri::command]
+pub fn workflow_install_template(
+    state: State<'_, crate::AppState>,
+    template_id: String,
+    name: Option<String>,
+) -> Result<WorkflowDefinitionInfo, String> {
+    install_template(state.inner(), &template_id, name)
+}
+
+#[tauri::command]
+pub fn workflow_run_with_inputs(
+    app: AppHandle,
+    state: State<'_, crate::AppState>,
+    name: String,
+    inputs: BTreeMap<String, Value>,
+) -> Result<String, String> {
+    let run_id = launch_with_inputs(&app, state.inner(), &name, inputs)?;
+    let run_id_for_task = run_id.clone();
+    tauri::async_runtime::spawn(async move {
+        run_launched(app, run_id_for_task, name).await;
+    });
+    Ok(run_id)
+}
+
+#[tauri::command]
+pub fn workflow_retry_failed_node(
+    app: AppHandle,
+    state: State<'_, crate::AppState>,
+    run_id: String,
+) -> Result<String, String> {
+    let retry_run_id = launch_failed_node_retry(&app, state.inner(), &run_id)?;
+    let retry_run_id_for_task = retry_run_id.clone();
+    tauri::async_runtime::spawn(async move {
+        run_failed_node_retry(app, retry_run_id_for_task).await;
+    });
+    Ok(retry_run_id)
+}
+
 pub async fn run_launched(app: AppHandle, run_id: String, name: String) {
     let state = app.state::<crate::AppState>();
     let result = async {
         let (workflow, _) = load_workflow(state.inner(), &name)?;
-        for step in workflow.steps {
-            run_step(&app, state.inner(), &run_id, None, step).await?;
+        let inputs = run_inputs(state.inner(), &run_id);
+        let report = validate_workflow(&workflow, &inputs);
+        if !report.valid {
+            return Err(format_validation_errors(&report.issues));
+        }
+        let workflow = render_workflow(&workflow, &report.normalized_inputs)?;
+        for (index, step) in workflow.steps.into_iter().enumerate() {
+            let generated = format!("steps[{index}]");
+            let step_id = node_id(&step, &generated);
+            run_step(&app, state.inner(), &run_id, None, step_id, step).await?;
             if is_cancelled(state.inner(), &run_id) {
                 mark_run(
                     state.inner(),
@@ -344,92 +704,138 @@ fn run_step<'a>(
     state: &'a crate::AppState,
     run_id: &'a str,
     phase: Option<String>,
+    step_id: String,
     step: WorkflowStep,
 ) -> StepFuture<'a> {
     Box::pin(async move {
         if is_cancelled(state, run_id) {
             return Ok(());
         }
-        match step {
-            WorkflowStep::Log { message } => {
-                push_log(app, state, run_id, message.clone());
-                let _ =
-                    workflow_journal::append(state, run_id, "log", json!({ "message": message }));
-            }
-            WorkflowStep::Phase { name, steps } => {
-                set_phase(app, state, run_id, Some(name.clone()));
-                let _ = workflow_journal::append(
-                    state,
-                    run_id,
-                    "phase_started",
-                    json!({ "name": name }),
-                );
-                for child in steps {
-                    run_step(app, state, run_id, Some(name.clone()), child).await?;
+        let step_kind = step.kind().to_string();
+        let step_label = step.label();
+        let retry_phase = phase.clone();
+        let result = async {
+            match step {
+                WorkflowStep::Log { message, .. } => {
+                    push_log(app, state, run_id, message.clone());
+                    let _ = workflow_journal::append(
+                        state,
+                        run_id,
+                        "log",
+                        json!({ "message": message }),
+                    );
                 }
-                let _ =
-                    workflow_journal::append(state, run_id, "phase_done", json!({ "name": name }));
-            }
-            WorkflowStep::Agent {
-                prompt,
-                label,
-                agent_type,
-                agent,
-                context_mode,
-            } => {
-                run_agent_step(
-                    app,
-                    state,
-                    run_id,
-                    phase,
+                WorkflowStep::Phase { name, steps, .. } => {
+                    set_phase(app, state, run_id, Some(name.clone()));
+                    let _ = workflow_journal::append(
+                        state,
+                        run_id,
+                        "phase_started",
+                        json!({ "name": name }),
+                    );
+                    for (index, child) in steps.into_iter().enumerate() {
+                        let generated = format!("{step_id}.steps[{index}]");
+                        let child_id = node_id(&child, &generated);
+                        run_step(app, state, run_id, Some(name.clone()), child_id, child).await?;
+                    }
+                    let _ = workflow_journal::append(
+                        state,
+                        run_id,
+                        "phase_done",
+                        json!({ "name": name }),
+                    );
+                }
+                WorkflowStep::Agent {
                     prompt,
                     label,
                     agent_type,
                     agent,
                     context_mode,
-                )
-                .await?;
-            }
-            WorkflowStep::Parallel { items } => {
-                if items.len() > MAX_PARALLEL_ITEMS {
-                    return Err(format!(
-                        "parallel 最多支持 {MAX_PARALLEL_ITEMS} 个 item，当前 {} 个。",
-                        items.len()
-                    ));
+                    ..
+                } => {
+                    run_agent_step(
+                        app,
+                        state,
+                        run_id,
+                        phase,
+                        prompt,
+                        label,
+                        agent_type,
+                        agent,
+                        context_mode,
+                        step_id.clone(),
+                    )
+                    .await?;
                 }
-                let futures = items
-                    .into_iter()
-                    .map(|item| run_step(app, state, run_id, phase.clone(), item))
-                    .collect::<Vec<_>>();
-                let results = futures_util::future::join_all(futures).await;
-                for result in results {
-                    result?;
+                WorkflowStep::Parallel { items, .. } => {
+                    if items.len() > MAX_PARALLEL_ITEMS {
+                        return Err(format!(
+                            "parallel 最多支持 {MAX_PARALLEL_ITEMS} 个 item，当前 {} 个。",
+                            items.len()
+                        ));
+                    }
+                    let futures = items
+                        .into_iter()
+                        .enumerate()
+                        .map(|(index, item)| {
+                            let generated = format!("{step_id}.items[{index}]");
+                            let child_id = node_id(&item, &generated);
+                            run_step(app, state, run_id, phase.clone(), child_id, item)
+                        })
+                        .collect::<Vec<_>>();
+                    let results = futures_util::future::join_all(futures).await;
+                    for result in results {
+                        result?;
+                    }
+                }
+                WorkflowStep::Pipeline { items, .. } => {
+                    for (index, item) in items.into_iter().enumerate() {
+                        let generated = format!("{step_id}.items[{index}]");
+                        let child_id = node_id(&item, &generated);
+                        run_step(app, state, run_id, phase.clone(), child_id, item).await?;
+                    }
+                }
+                WorkflowStep::Budget { total, .. } => {
+                    set_budget(app, state, run_id, budget::TokenBudgetState::new(total));
+                    push_log(
+                        app,
+                        state,
+                        run_id,
+                        format!(
+                            "budget total set to {}",
+                            total
+                                .map(|n| n.to_string())
+                                .unwrap_or_else(|| "unlimited".to_string())
+                        ),
+                    );
+                    let _ = workflow_journal::append(
+                        state,
+                        run_id,
+                        "budget",
+                        json!({ "total": total }),
+                    );
                 }
             }
-            WorkflowStep::Pipeline { items } => {
-                for item in items {
-                    run_step(app, state, run_id, phase.clone(), item).await?;
-                }
-            }
-            WorkflowStep::Budget { total } => {
-                set_budget(app, state, run_id, budget::TokenBudgetState::new(total));
-                push_log(
-                    app,
-                    state,
-                    run_id,
-                    format!(
-                        "budget total set to {}",
-                        total
-                            .map(|n| n.to_string())
-                            .unwrap_or_else(|| "unlimited".to_string())
-                    ),
-                );
-                let _ =
-                    workflow_journal::append(state, run_id, "budget", json!({ "total": total }));
-            }
+            mark_step_done(app, state, run_id);
+            Ok::<(), String>(())
         }
-        mark_step_done(app, state, run_id);
-        Ok(())
+        .await;
+        if let Err(error) = &result {
+            record_failed_node(
+                app,
+                state,
+                run_id,
+                WorkflowFailedNode {
+                    node_id: step_id,
+                    kind: step_kind,
+                    label: step_label,
+                    phase: retry_phase,
+                    error: error.clone(),
+                    retryable: !is_cancelled(state, run_id),
+                },
+            );
+        }
+        result
     })
 }
 
@@ -443,6 +849,7 @@ async fn run_agent_step(
     agent_type: Option<String>,
     agent_name: Option<String>,
     context_mode: Option<String>,
+    node_id: String,
 ) -> Result<(), String> {
     let id = next_agent_id(state, run_id);
     if workflow_budget(state, run_id).is_some_and(|budget| budget.is_exhausted()) {
@@ -452,12 +859,20 @@ async fn run_agent_step(
         return Err(message);
     }
     let label = label.unwrap_or_else(|| format!("agent-{id}"));
-    push_agent(app, state, run_id, id, label.clone(), phase.clone());
+    push_agent(
+        app,
+        state,
+        run_id,
+        id,
+        node_id.clone(),
+        label.clone(),
+        phase.clone(),
+    );
     let _ = workflow_journal::append(
         state,
         run_id,
         "agent_started",
-        json!({ "agent_id": id, "label": label, "phase": phase, "prompt": prompt, "agent": agent_name.clone() }),
+        json!({ "agent_id": id, "node_id": node_id, "label": label, "phase": phase, "prompt": prompt, "agent": agent_name.clone() }),
     );
     let mode = SubagentContextMode::parse(context_mode.as_deref());
     let cancel = state.workflow_cancels.lock().unwrap().get(run_id).cloned();
@@ -533,6 +948,44 @@ async fn run_agent_step(
             );
             Err(e)
         }
+    }
+}
+
+fn definition_probe_inputs(workflow: &WorkflowFile) -> BTreeMap<String, Value> {
+    workflow
+        .inputs
+        .iter()
+        .map(|field| {
+            let value = field.default.clone().unwrap_or_else(|| match field.kind {
+                WorkflowInputKind::Text | WorkflowInputKind::Textarea => {
+                    Value::String("sample".to_string())
+                }
+                WorkflowInputKind::Number => json!(field.min.unwrap_or(0.0)),
+                WorkflowInputKind::Boolean => Value::Bool(false),
+                WorkflowInputKind::Select => field
+                    .options
+                    .first()
+                    .cloned()
+                    .map(Value::String)
+                    .unwrap_or(Value::Null),
+            });
+            (field.key.clone(), value)
+        })
+        .collect()
+}
+
+fn format_validation_errors(issues: &[WorkflowValidationIssue]) -> String {
+    let details = issues
+        .iter()
+        .filter(|issue| issue.level == WorkflowValidationLevel::Error)
+        .take(12)
+        .map(|issue| format!("{}: {}", issue.path, issue.message))
+        .collect::<Vec<_>>()
+        .join("\n");
+    if details.is_empty() {
+        "workflow validation failed".to_string()
+    } else {
+        format!("workflow validation failed:\n{details}")
     }
 }
 
@@ -626,6 +1079,7 @@ fn push_agent(
     state: &crate::AppState,
     run_id: &str,
     id: u64,
+    node_id: String,
     label: String,
     phase: Option<String>,
 ) {
@@ -633,6 +1087,7 @@ fn push_agent(
     if let Some(run) = runs.iter_mut().find(|run| run.run_id == run_id) {
         run.agents.push(WorkflowAgentProgress {
             id,
+            node_id,
             label,
             phase,
             status: WorkflowStatus::Running,
@@ -643,6 +1098,54 @@ fn push_agent(
     }
     drop(runs);
     emit_update(app, state);
+}
+
+fn run_inputs(state: &crate::AppState, run_id: &str) -> BTreeMap<String, Value> {
+    state
+        .workflow_runs
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|run| run.run_id == run_id)
+        .map(|run| run.input_values.clone())
+        .unwrap_or_default()
+}
+
+fn record_failed_node(
+    app: &AppHandle,
+    state: &crate::AppState,
+    run_id: &str,
+    failed: WorkflowFailedNode,
+) {
+    let mut should_emit = false;
+    {
+        let mut runs = state.workflow_runs.lock().unwrap();
+        if let Some(run) = runs.iter_mut().find(|run| run.run_id == run_id) {
+            // Container steps also observe their child's error. The first record
+            // is the deepest node, which is the only useful retry target.
+            if run.failed_node.is_none() {
+                run.failed_node = Some(failed.clone());
+                run.updated_at = store::now_millis();
+                should_emit = true;
+            }
+        }
+    }
+    if should_emit {
+        let _ = workflow_journal::append(
+            state,
+            run_id,
+            "workflow_node_failed",
+            json!({
+                "node_id": failed.node_id,
+                "kind": failed.kind,
+                "label": failed.label,
+                "phase": failed.phase,
+                "error": failed.error,
+                "retryable": failed.retryable,
+            }),
+        );
+        emit_update(app, state);
+    }
 }
 
 fn update_agent(
@@ -741,21 +1244,6 @@ fn mark_step_done(app: &AppHandle, state: &crate::AppState, run_id: &str) {
     }
     drop(runs);
     emit_update(app, state);
-}
-
-fn count_steps(steps: &[WorkflowStep]) -> usize {
-    steps
-        .iter()
-        .map(|step| match step {
-            WorkflowStep::Log { .. } | WorkflowStep::Agent { .. } | WorkflowStep::Budget { .. } => {
-                1
-            }
-            WorkflowStep::Phase { steps, .. } => 1 + count_steps(steps),
-            WorkflowStep::Parallel { items } | WorkflowStep::Pipeline { items } => {
-                1 + count_steps(items)
-            }
-        })
-        .sum()
 }
 
 fn push_log(app: &AppHandle, state: &crate::AppState, run_id: &str, message: String) {
@@ -926,7 +1414,7 @@ mod tests {
         let parsed = serde_json::from_str::<WorkflowFile>(raw).unwrap();
         assert_eq!(parsed.steps.len(), 3);
         match &parsed.steps[0] {
-            WorkflowStep::Budget { total } => assert_eq!(*total, Some(12000)),
+            WorkflowStep::Budget { total, .. } => assert_eq!(*total, Some(12000)),
             _ => panic!("expected budget step"),
         }
     }
@@ -945,11 +1433,13 @@ mod tests {
         let run = WorkflowRunProgress {
             run_id: "wf_state_test".to_string(),
             name: "state-test".to_string(),
+            definition_name: "state-test".to_string(),
             status: WorkflowStatus::Killed,
             cancel_requested: true,
             current_phase: Some("phase-a".to_string()),
             agents: vec![WorkflowAgentProgress {
                 id: 1,
+                node_id: "reader".to_string(),
                 label: "reader".to_string(),
                 phase: Some("phase-a".to_string()),
                 status: WorkflowStatus::Done,
@@ -971,6 +1461,10 @@ mod tests {
             },
             steps_total: 4,
             steps_done: 2,
+            input_values: BTreeMap::new(),
+            failed_node: None,
+            parent_run_id: None,
+            retry_node_id: None,
         };
 
         write_run_state_in_root(&root, &run).unwrap();
@@ -999,6 +1493,7 @@ mod tests {
         let run = WorkflowRunProgress {
             run_id: "wf_restore_test".to_string(),
             name: "restore-test".to_string(),
+            definition_name: "restore-test".to_string(),
             status: WorkflowStatus::Running,
             cancel_requested: false,
             current_phase: Some("phase-a".to_string()),
@@ -1018,6 +1513,10 @@ mod tests {
             },
             steps_total: 4,
             steps_done: 2,
+            input_values: BTreeMap::new(),
+            failed_node: None,
+            parent_run_id: None,
+            retry_node_id: None,
         };
         write_run_state_in_root(&root, &run).unwrap();
 
@@ -1048,6 +1547,7 @@ mod tests {
         let run = WorkflowRunProgress {
             run_id: "wf_resume_state".to_string(),
             name: "resume-state".to_string(),
+            definition_name: "resume-state".to_string(),
             status: WorkflowStatus::Failed,
             cancel_requested: false,
             current_phase: Some("verify".to_string()),
@@ -1067,6 +1567,17 @@ mod tests {
             },
             steps_total: 5,
             steps_done: 3,
+            input_values: BTreeMap::new(),
+            failed_node: Some(WorkflowFailedNode {
+                node_id: "verify".to_string(),
+                kind: "agent".to_string(),
+                label: "verify".to_string(),
+                phase: Some("verify".to_string()),
+                error: "verification failed".to_string(),
+                retryable: true,
+            }),
+            parent_run_id: None,
+            retry_node_id: None,
         };
         write_run_state_in_root(&root, &run).unwrap();
 
