@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import { CheckIcon, CopyIcon } from "./Icons";
 import { useCopyToClipboard } from "../lib/hooks";
 
@@ -21,7 +21,7 @@ function loadMermaid() {
   return mermaidPromise;
 }
 
-export function MermaidBlock({ chart }: { chart: string }) {
+function MermaidBlockView({ chart }: { chart: string }) {
   const idRef = useRef(`mermaid-${Math.random().toString(36).slice(2)}`);
   const [svg, setSvg] = useState("");
   const [error, setError] = useState("");
@@ -78,3 +78,5 @@ export function MermaidBlock({ chart }: { chart: string }) {
     </div>
   );
 }
+
+export const MermaidBlock = memo(MermaidBlockView);

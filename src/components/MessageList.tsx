@@ -1,5 +1,6 @@
-import { memo, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
 import type { DisplayItem } from "../lib/types";
+import { isScrollNearBottom } from "../lib/agentEventReducer";
 import { Markdown } from "./Markdown";
 import ToolCard from "./ToolCard";
 import { Dashboard } from "./Dashboard";
@@ -24,8 +25,8 @@ function ThinkingDots({ label }: { label: string }) {
 const UserMessage = memo(function UserMessage({ text }: { text: string }) {
   return (
     <article className="cf-message-in flex justify-end">
-      <div className="max-w-[min(680px,78%)]">
-        <div className="whitespace-pre-wrap rounded-lg bg-[#eef1f5] px-4 py-2.5 text-[16px] leading-[1.6] text-[#202124]">
+      <div className="user-message-content">
+        <div className="app-user-message md-type-body-large whitespace-pre-wrap rounded-lg bg-[#eef1f5] px-4 py-2.5 text-[#202124]">
           {text}
         </div>
       </div>
@@ -47,7 +48,7 @@ function ReasoningBlock({ text, active }: { text: string; active: boolean }) {
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
-        className="inline-flex items-center gap-1.5 rounded-md px-1.5 py-0.5 text-[12px] text-[#8a9099] transition hover:bg-[#eef1f5] hover:text-[#202124]"
+        className="md-type-label-medium inline-flex items-center gap-1.5 rounded-md px-1.5 py-0.5 text-[#8a9099] transition hover:bg-[#eef1f5] hover:text-[#202124]"
       >
         {active ? (
           <span className="cf-dots">
@@ -61,7 +62,7 @@ function ReasoningBlock({ text, active }: { text: string; active: boolean }) {
         <span>{active ? "思考中…" : open ? "收起思考过程" : "已深度思考（点击展开）"}</span>
       </button>
       {open && (
-        <div className="mt-1 whitespace-pre-wrap border-l-2 border-[#e6e9ee] pl-3 text-[13px] leading-[1.6] text-[#6f7782]">
+        <div className="md-type-body-medium mt-1 whitespace-pre-wrap border-l-2 border-[#e6e9ee] pl-3 text-[#6f7782]">
           {text}
         </div>
       )}
@@ -93,8 +94,8 @@ const AssistantMessage = memo(function AssistantMessage({
   return (
     <article className="cf-message-in group flex justify-start">
       <img src={AVATAR} alt="AI" className="mr-3 mt-0.5 size-10 shrink-0 rounded-md border border-[#dfe3e8] bg-white object-contain" />
-      <div className="min-w-0 max-w-[min(900px,82%)]">
-        <div className="py-0.5 text-[16px] leading-[1.6]">
+      <div className="assistant-message-content min-w-0">
+        <div className="md-type-body-large py-0.5">
           {reasoning && reasoning.trim() && !error && (
             <ReasoningBlock text={reasoning} active={streaming && !text} />
           )}
@@ -144,15 +145,44 @@ type Props = {
 };
 
 export function MessageList({ items, thinking, greeting, onRetry, onOpenFortune }: Props) {
-  const bottomRef = useRef<HTMLDivElement | null>(null);
+  const viewportRef = useRef<HTMLDivElement | null>(null);
+  const followTailRef = useRef(true);
+  const onRetryRef = useRef(onRetry);
+  onRetryRef.current = onRetry;
+  const stableRetry = useCallback((text: string) => onRetryRef.current(text), []);
+
+  const trackScrollPosition = useCallback(() => {
+    const viewport = viewportRef.current;
+    if (viewport) followTailRef.current = isScrollNearBottom(viewport);
+  }, []);
+
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+    if (!followTailRef.current) return;
+    const frame = requestAnimationFrame(() => {
+      const viewport = viewportRef.current;
+      if (viewport) viewport.scrollTop = viewport.scrollHeight;
+    });
+    return () => cancelAnimationFrame(frame);
   }, [items, thinking]);
 
+  const showDashboard = items.length === 0 && !thinking;
+
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain bg-white [-webkit-overflow-scrolling:touch]">
-      <div className="mx-auto flex w-full max-w-3xl flex-col px-4 pb-40 pt-5">
-        {items.length === 0 && !thinking ? (
+    <div
+      ref={viewportRef}
+      onScroll={trackScrollPosition}
+      className="app-message-list min-h-0 flex-1 overflow-y-auto overscroll-contain bg-white [-webkit-overflow-scrolling:touch]"
+      role="log"
+      aria-live="polite"
+      aria-relevant="additions text"
+      aria-busy={thinking || items.some((item) => item.kind === "assistant" && item.streaming)}
+    >
+      <div
+        className={`message-list-content mx-auto flex w-full flex-col px-3 pb-40 sm:px-5 ${
+          showDashboard ? "is-dashboard pt-0" : "pt-5"
+        }`}
+      >
+        {showDashboard ? (
           <div className="cf-message-in">
             <Dashboard greeting={greeting} onOpenFortune={onOpenFortune} />
           </div>
@@ -171,7 +201,7 @@ export function MessageList({ items, thinking, greeting, onRetry, onOpenFortune 
                   errorTitle={item.errorTitle}
                   errorHint={item.errorHint}
                   retryText={item.retryText}
-                  onRetry={onRetry}
+                  onRetry={stableRetry}
                 />
               ) : (
                 <ToolCard
@@ -200,7 +230,6 @@ export function MessageList({ items, thinking, greeting, onRetry, onOpenFortune 
             )}
           </div>
         )}
-        <div ref={bottomRef} />
       </div>
     </div>
   );

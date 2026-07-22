@@ -1,4 +1,4 @@
-import { Children, ComponentPropsWithoutRef, ReactNode, isValidElement, useMemo } from "react";
+import { Children, ComponentPropsWithoutRef, ReactNode, isValidElement, memo, useMemo } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import rehypeKatex from "rehype-katex";
 import rehypeHighlight from "rehype-highlight";
@@ -22,7 +22,10 @@ function extractText(node: ReactNode): string {
 
 // 代码块外框渲染在 <pre> 这一层：被解析为「块级代码」就套同一个框（与是否有语言标记无关），
 // 行内代码保持行内样式。这样流式过程中代码不会在「行内 / 块级」之间反复横跳。
-function CodeBlock({ children }: ComponentPropsWithoutRef<"pre">) {
+function CodeBlock({
+  children,
+  renderMermaid,
+}: ComponentPropsWithoutRef<"pre"> & { renderMermaid: boolean }) {
   const { copied, copy } = useCopyToClipboard();
   const codeElement = Array.isArray(children) ? children[0] : children;
   const codeProps = isValidElement(codeElement)
@@ -34,7 +37,7 @@ function CodeBlock({ children }: ComponentPropsWithoutRef<"pre">) {
   const label = match ? match[1] : "code";
   const code = extractText(codeChildren).replace(/\n$/, "");
 
-  if (label.toLowerCase() === "mermaid") {
+  if (label.toLowerCase() === "mermaid" && renderMermaid) {
     return <MermaidBlock chart={code} />;
   }
 
@@ -105,11 +108,11 @@ function streamingText(children: ReactNode, active: boolean): ReactNode {
   });
 }
 
-export default function MarkdownRenderer({ text, streaming = false }: { text: string; streaming?: boolean }) {
+function MarkdownRenderer({ text, streaming = false }: { text: string; streaming?: boolean }) {
   const prepared = normalizeMath(streaming ? closeUnclosedFence(text) : text);
   const components = useMemo<Components>(
     () => ({
-      pre: CodeBlock,
+      pre: (props) => <CodeBlock {...props} renderMermaid={!streaming} />,
       p: ({ children }) => <p>{streamingText(children, streaming)}</p>,
       li: ({ children }) => <li>{streamingText(children, streaming)}</li>,
       h1: ({ children }) => <h1>{streamingText(children, streaming)}</h1>,
@@ -139,3 +142,5 @@ export default function MarkdownRenderer({ text, streaming = false }: { text: st
     </div>
   );
 }
+
+export default memo(MarkdownRenderer);

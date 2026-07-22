@@ -8,6 +8,8 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
+    "test": "node --test --experimental-strip-types \"tests/*.test.ts\"",
+    "test:frontend": "node --test --experimental-strip-types \"tests/*.test.ts\"",
     "test:navigation": "node --test --experimental-strip-types tests/navigationEpoch.test.ts",
     "preview": "vite preview",
     "tauri": "node scripts/tauri.mjs",

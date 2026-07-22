@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { memo, useEffect, useState } from "react";
 import type { ToolRisk, ToolSourceQuality } from "../lib/types";
 import { useI18n, type TFunction } from "../lib/i18n";
 import DiffPreview from "./DiffPreview";
@@ -137,7 +137,7 @@ function rollbackHint(name: string, status: Props["status"], result?: string) {
   return "Rollback available: run undo_edit to restore the most recent edit record.";
 }
 
-export default function ToolCard({
+function ToolCard({
   name,
   args,
   status,
@@ -286,3 +286,5 @@ export default function ToolCard({
     </div>
   );
 }
+
+export default memo(ToolCard);

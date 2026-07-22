@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import * as api from "../lib/api";
 import type {
   GitChangedFile,
@@ -7,6 +7,7 @@ import type {
   WorkspaceState,
 } from "../lib/types";
 import { useI18n } from "../lib/i18n";
+import { normalizeExplorerTab, RequestGeneration, type ExplorerTab } from "../lib/agentEventReducer";
 import {
   ChevronDownIcon,
   CloseIcon,
@@ -14,6 +15,7 @@ import {
   FolderIcon,
   RotateCwIcon,
 } from "./Icons";
+import { SegmentedControl } from "./SegmentedControl";
 
 type Props = {
   open: boolean;
@@ -23,8 +25,6 @@ type Props = {
   onClose: () => void;
   onWorkspaceChange: (workspace: WorkspaceState) => void;
 };
-
-type ExplorerTab = "files" | "changes";
 
 const PREVIEW_ROOT: WorkspaceEntry[] = [
   { name: "src", path: "src", kind: "directory", size: 0 },
@@ -70,9 +70,14 @@ export function WorkspaceExplorer({
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const isDesktop = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+  const workspaceKey = workspace ? `${workspace.path}\u0000${workspace.is_git ? "git" : "files"}` : "";
+  const workspaceKeyRef = useRef(workspaceKey);
+  const requestsRef = useRef(new RequestGeneration());
+  workspaceKeyRef.current = workspaceKey;
 
   const loadDirectory = useCallback(
     async (relativePath: string) => {
+      const ticket = requestsRef.current.issue(`directory:${normalizePath(relativePath)}`, workspaceKey);
       setLoadingPaths((current) => new Set(current).add(relativePath));
       try {
         const entries = isDesktop
@@ -80,40 +85,57 @@ export function WorkspaceExplorer({
           : relativePath
             ? []
             : PREVIEW_ROOT;
+        if (!requestsRef.current.accepts(ticket, workspaceKeyRef.current)) return;
         setChildrenByPath((current) => ({ ...current, [relativePath]: entries }));
         setError(null);
       } catch (e) {
-        setError(String(e));
+        if (requestsRef.current.accepts(ticket, workspaceKeyRef.current)) setError(String(e));
       } finally {
-        setLoadingPaths((current) => {
-          const next = new Set(current);
-          next.delete(relativePath);
-          return next;
-        });
+        if (requestsRef.current.accepts(ticket, workspaceKeyRef.current)) {
+          setLoadingPaths((current) => {
+            const next = new Set(current);
+            next.delete(relativePath);
+            return next;
+          });
+        }
       }
     },
-    [isDesktop],
+    [isDesktop, workspaceKey],
   );
 
   const loadChanges = useCallback(async () => {
+    const ticket = requestsRef.current.issue("changes", workspaceKey);
     if (!workspace?.is_git) {
-      setChanges([]);
+      if (requestsRef.current.accepts(ticket, workspaceKeyRef.current)) {
+        setChanges([]);
+        setTab((current) => normalizeExplorerTab(current, false));
+      }
       return;
     }
     try {
-      setChanges(isDesktop ? await api.gitChangedFiles() : []);
+      const next = isDesktop ? await api.gitChangedFiles() : [];
+      if (!requestsRef.current.accepts(ticket, workspaceKeyRef.current)) return;
+      setChanges(next);
+      setError(null);
     } catch (e) {
-      setError(String(e));
+      if (requestsRef.current.accepts(ticket, workspaceKeyRef.current)) setError(String(e));
     }
-  }, [isDesktop, workspace?.is_git]);
+  }, [isDesktop, workspace?.is_git, workspaceKey]);
 
   useEffect(() => {
-    if (!open || !workspace) return;
+    requestsRef.current.invalidateAll();
+    setTab((current) => normalizeExplorerTab(current, Boolean(workspace?.is_git)));
     setChildrenByPath({});
     setExpanded(new Set());
+    setLoadingPaths(new Set());
     setPreview(null);
+    setPreviewLoading(false);
+    setChanges([]);
     setError(null);
+    setRefreshing(false);
+    if (!open || !workspace) return;
     void Promise.all([loadDirectory(""), loadChanges()]);
+    return () => requestsRef.current.invalidateAll();
   }, [open, workspace?.path, refreshKey, loadDirectory, loadChanges]);
 
   const changedPathSet = useMemo(
@@ -122,13 +144,14 @@ export function WorkspaceExplorer({
   );
 
   async function refresh() {
+    const ticket = requestsRef.current.issue("refresh", workspaceKey);
     setRefreshing(true);
     setError(null);
     try {
       const paths = ["", ...expanded];
       await Promise.all([...paths.map((path) => loadDirectory(path)), loadChanges()]);
     } finally {
-      setRefreshing(false);
+      if (requestsRef.current.accepts(ticket, workspaceKeyRef.current)) setRefreshing(false);
     }
   }
 
@@ -144,26 +167,35 @@ export function WorkspaceExplorer({
   }
 
   async function openFile(entry: WorkspaceEntry) {
+    const ticket = requestsRef.current.issue("preview", workspaceKey);
     setPreviewLoading(true);
     setError(null);
     try {
       if (isDesktop) {
-        setPreview(await api.readWorkspaceFile(entry.path));
+        const next = await api.readWorkspaceFile(entry.path);
+        if (requestsRef.current.accepts(ticket, workspaceKeyRef.current)) setPreview(next);
       } else {
-        setPreview({
+        const next = {
           path: entry.path,
           name: entry.name,
           content: t("workspace.previewUnavailable"),
           size: entry.size,
           truncated: false,
           binary: false,
-        });
+        };
+        if (requestsRef.current.accepts(ticket, workspaceKeyRef.current)) setPreview(next);
       }
     } catch (e) {
-      setError(String(e));
+      if (requestsRef.current.accepts(ticket, workspaceKeyRef.current)) setError(String(e));
     } finally {
-      setPreviewLoading(false);
+      if (requestsRef.current.accepts(ticket, workspaceKeyRef.current)) setPreviewLoading(false);
     }
+  }
+
+  function closePreview() {
+    requestsRef.current.issue("preview", workspaceKey);
+    setPreview(null);
+    setPreviewLoading(false);
   }
 
   async function chooseWorkspace() {
@@ -222,9 +254,10 @@ export function WorkspaceExplorer({
           <button
             type="button"
             onClick={() => void (directory ? toggleDirectory(entry) : openFile(entry))}
-            className="group flex h-8 w-full min-w-0 items-center gap-1.5 rounded-md pr-2 text-left text-[12px] text-[#4f5661] transition hover:bg-[#eef1f5] hover:text-[#202124]"
+            className="md-type-body-small group flex h-8 w-full min-w-0 items-center gap-1.5 rounded-md pr-2 text-left text-[#4f5661] transition hover:bg-[#eef1f5] hover:text-[#202124]"
             style={{ paddingLeft: 8 + depth * 14 }}
             title={entry.path}
+            aria-expanded={directory ? isOpen : undefined}
           >
             {directory ? (
               <ChevronDownIcon
@@ -242,7 +275,7 @@ export function WorkspaceExplorer({
             <span className="min-w-0 flex-1 truncate">{entry.name}</span>
             {changed && <span className="size-1.5 shrink-0 rounded-full bg-[#d97706]" />}
             {!directory && entry.size > 0 && (
-              <span className="hidden shrink-0 text-[10px] text-[#a0a6af] group-hover:inline">{formatBytes(entry.size)}</span>
+              <span className="md-type-label-small hidden shrink-0 text-[#a0a6af] group-hover:inline">{formatBytes(entry.size)}</span>
             )}
           </button>
           {directory && isOpen ? renderEntries(entry.path, depth + 1) : null}
@@ -254,20 +287,20 @@ export function WorkspaceExplorer({
   if (!open || !workspace) return null;
 
   return (
-    <aside className="workspace-explorer flex w-[360px] shrink-0 flex-col border-l border-[#dfe3e8] bg-[#fbfcfd]">
+    <aside className="workspace-explorer flex w-[360px] shrink-0 flex-col border-l border-[#dfe3e8] bg-[#fbfcfd]" aria-label={t("workspace.toggle")}>
       <div className="flex items-start gap-2 border-b border-[#eceff3] px-3 py-3">
-        <div className="grid size-8 shrink-0 place-items-center rounded-lg border border-[#e2e5ea] bg-white text-[#59616d]">
+        <div className="workspace-header-icon grid size-8 shrink-0 place-items-center rounded-lg border border-[#e2e5ea] bg-white text-[#59616d]">
           <FolderIcon size={16} />
         </div>
         <div className="min-w-0 flex-1">
-          <div className="truncate text-[13px] font-semibold text-[#202124]">{workspace.name}</div>
-          <div className="mt-0.5 truncate text-[10px] text-[#8a9099]" title={workspace.path}>{workspace.path}</div>
+          <div className="md-type-title-small truncate font-semibold text-[#202124]">{workspace.name}</div>
+          <div className="md-type-label-small mt-0.5 truncate text-[#8a9099]" title={workspace.path}>{workspace.path}</div>
         </div>
         <button
           type="button"
           onClick={() => void refresh()}
           disabled={refreshing}
-          className="grid size-7 shrink-0 place-items-center rounded-md text-[#69707a] transition hover:bg-[#eef1f5] disabled:opacity-50"
+          className="md-icon-button grid size-7 shrink-0 place-items-center text-[#69707a] transition hover:bg-[#eef1f5] disabled:opacity-50"
           aria-label={t("workspace.refresh")}
           title={t("workspace.refresh")}
         >
@@ -276,18 +309,18 @@ export function WorkspaceExplorer({
         <button
           type="button"
           onClick={onClose}
-          className="grid size-7 shrink-0 place-items-center rounded-md text-[#69707a] transition hover:bg-[#eef1f5]"
+          className="md-icon-button grid size-7 shrink-0 place-items-center text-[#69707a] transition hover:bg-[#eef1f5]"
           aria-label={t("workspace.close")}
         >
           <CloseIcon size={15} />
         </button>
       </div>
 
-      <div className="flex items-center gap-1.5 border-b border-[#eceff3] px-3 py-2">
+      <div className="workspace-actions flex items-center gap-1.5 border-b border-[#eceff3] px-3 py-2">
         <button
           type="button"
           onClick={() => void openWorkspaceInSystem()}
-          className="flex-1 whitespace-nowrap rounded-md border border-[#e2e5ea] bg-white px-2 py-1.5 text-[11px] text-[#59616d] transition hover:bg-[#eef1f5] hover:text-[#202124]"
+          className="md-button md-button-outlined flex-1 whitespace-nowrap border border-[#e2e5ea] bg-white px-2 text-[#59616d] transition hover:bg-[#eef1f5] hover:text-[#202124]"
         >
           {t("workspace.openFolder")}
         </button>
@@ -295,47 +328,43 @@ export function WorkspaceExplorer({
           type="button"
           onClick={() => void chooseWorkspace()}
           disabled={busy}
-          className="flex-1 whitespace-nowrap rounded-md bg-[#111827] px-2 py-1.5 text-[11px] font-medium text-white transition hover:bg-[#2b3442] disabled:cursor-not-allowed disabled:opacity-40"
+          className="md-button md-button-filled flex-1 whitespace-nowrap bg-[#111827] px-2 text-white transition hover:bg-[#2b3442] disabled:cursor-not-allowed disabled:opacity-40"
         >
           {t("workspace.changeFolder")}
         </button>
       </div>
 
-      <div className="flex items-center gap-1 border-b border-[#eceff3] px-3 py-2">
-        <button
-          type="button"
-          onClick={() => setTab("files")}
-          className={`whitespace-nowrap rounded-md px-2.5 py-1.5 text-[12px] font-medium transition ${
-            tab === "files" ? "bg-white text-[#202124] shadow-sm" : "text-[#7a8088] hover:bg-[#eef1f5]"
-          }`}
-        >
-          {t("workspace.files")}
-        </button>
-        <button
-          type="button"
-          onClick={() => setTab("changes")}
-          disabled={!workspace.is_git}
-          className={`whitespace-nowrap rounded-md px-2.5 py-1.5 text-[12px] font-medium transition disabled:opacity-40 ${
-            tab === "changes" ? "bg-white text-[#202124] shadow-sm" : "text-[#7a8088] hover:bg-[#eef1f5]"
-          }`}
-        >
-          {t("workspace.changes")} {changes.length > 0 ? `(${changes.length})` : ""}
-        </button>
+      <div className="workspace-tabs border-b border-[#eceff3] px-3 py-2">
+        <SegmentedControl<ExplorerTab>
+          value={tab}
+          onChange={setTab}
+          ariaLabel={`${t("workspace.files")} / ${t("workspace.changes")}`}
+          className="workspace-tab-control"
+          showCheck={false}
+          options={[
+            { value: "files", label: t("workspace.files") },
+            {
+              value: "changes",
+              label: `${t("workspace.changes")}${changes.length > 0 ? ` (${changes.length})` : ""}`,
+              disabled: !workspace.is_git,
+            },
+          ]}
+        />
       </div>
 
       {error && (
-        <div className="border-b border-[#f2d7a5] bg-[#fff8e8] px-3 py-2 text-[11px] leading-relaxed text-[#8a5a00]">
+        <div className="md-type-body-small border-b border-[#f2d7a5] bg-[#fff8e8] px-3 py-2 text-[#8a5a00]">
           {error}
         </div>
       )}
 
       {tab === "files" ? (
         preview ? (
-          <div className="flex min-h-0 flex-1 flex-col">
+          <div className="flex min-h-0 flex-1 flex-col" role="tabpanel">
             <button
               type="button"
-              onClick={() => setPreview(null)}
-              className="flex h-9 shrink-0 items-center gap-1.5 border-b border-[#eceff3] px-3 text-left text-[12px] text-[#59616d] transition hover:bg-[#eef1f5]"
+              onClick={closePreview}
+              className="md-type-label-medium flex h-9 shrink-0 items-center gap-1.5 border-b border-[#eceff3] px-3 text-left text-[#59616d] transition hover:bg-[#eef1f5]"
             >
               <ChevronDownIcon size={14} className="rotate-90" />
               <span className="min-w-0 flex-1 truncate">{preview.path}</span>
@@ -357,7 +386,7 @@ export function WorkspaceExplorer({
             )}
           </div>
         ) : (
-          <div className="capsule-scrollbar min-h-0 flex-1 overflow-y-auto p-2">
+          <div className="capsule-scrollbar min-h-0 flex-1 overflow-y-auto p-2" role="tabpanel">
             {previewLoading ? (
               <div className="px-3 py-3 text-xs text-[#8a9099]">{t("workspace.loading")}</div>
             ) : (
@@ -366,7 +395,7 @@ export function WorkspaceExplorer({
           </div>
         )
       ) : (
-        <div className="capsule-scrollbar min-h-0 flex-1 overflow-y-auto p-2">
+        <div className="capsule-scrollbar min-h-0 flex-1 overflow-y-auto p-2" role="tabpanel">
           {changes.length === 0 ? (
             <div className="px-3 py-8 text-center text-xs text-[#8a9099]">{t("workspace.clean")}</div>
           ) : (
@@ -374,14 +403,15 @@ export function WorkspaceExplorer({
               <button
                 key={`${change.status}:${change.path}`}
                 type="button"
-                onClick={() =>
+                onClick={() => {
+                  setTab("files");
                   void openFile({
                     name: change.path.split(/[\\/]/).pop() || change.path,
                     path: normalizePath(change.path),
                     kind: "file",
                     size: 0,
-                  }).then(() => setTab("files"))
-                }
+                  });
+                }}
                 className="mb-1 flex w-full min-w-0 items-center gap-2 rounded-md px-2 py-2 text-left transition hover:bg-[#eef1f5]"
               >
                 <span className={`rounded px-1.5 py-0.5 font-mono text-[10px] font-semibold ${changeTone(change.status)}`}>
