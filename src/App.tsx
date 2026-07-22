@@ -19,6 +19,7 @@ import type {
   SessionEnginePanelState,
   SessionMeta,
   Settings,
+  AppAppearance,
   AppTheme,
   WorkspaceState,
 } from "./lib/types";
@@ -35,6 +36,7 @@ import FortuneDialog from "./components/FortuneDialog";
 import CompanionCard from "./components/CompanionCard";
 import PomodoroCard from "./components/PomodoroCard";
 import VoiceCallPanel from "./components/VoiceCallPanel";
+import WorkflowsPanel from "./components/WorkflowsPanel";
 import {
   CheckIcon,
   ChevronDownIcon,
@@ -54,6 +56,7 @@ import { autoContextBudget } from "./lib/providers";
 import { canDrawToday, isAutoPromptEnabled, isDismissedToday } from "./lib/fortune";
 import { useI18n } from "./lib/i18n";
 import { useClickOutside } from "./lib/hooks";
+import { usePomodoroNotifications } from "./lib/usePomodoroNotifications";
 import { useStreamingTtsQueue } from "./lib/useStreamingTtsQueue";
 import {
   eventBelongsToSession,
@@ -61,6 +64,7 @@ import {
   turnBelongsToSession,
   type NavigationTicket,
 } from "./lib/navigationEpoch";
+import { AgentEventReducer } from "./lib/agentEventReducer";
 
 const Live2DPanel = lazy(() => import("./components/Live2DPanel"));
 
@@ -81,6 +85,7 @@ const PREVIEW_SETTINGS: Settings = {
   context_budget_auto: true,
   language: "zh",
   theme: "system",
+  appearance: "material_bloom",
   launch_on_startup: false,
   auto_memory_enabled: true,
   embedding_enabled: false,
@@ -309,6 +314,7 @@ function hasSameAssistantTextAfterLastUser(items: DisplayItem[], text: string) {
 
 export default function App() {
   const { t, setLang } = useI18n();
+  usePomodoroNotifications();
   const [items, setItems] = useState<DisplayItem[]>([]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
@@ -328,7 +334,10 @@ export default function App() {
   const [activeView, setActiveView] = useState<AppView>("chat");
   const [settingsInitialTab, setSettingsInitialTab] = useState<SettingsTab>("general");
   const [previewTheme, setPreviewTheme] = useState<AppTheme | null>(null);
-  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [previewAppearance, setPreviewAppearance] = useState<AppAppearance | null>(null);
+  const [sidebarOpen, setSidebarOpen] = useState(
+    () => typeof window === "undefined" || !window.matchMedia("(max-width: 767px)").matches,
+  );
   const [packMenuOpen, setPackMenuOpen] = useState(false);
   const [agentMenuOpen, setAgentMenuOpen] = useState(false);
   const [toyMenuOpen, setToyMenuOpen] = useState(false);
@@ -336,6 +345,7 @@ export default function App() {
   const [confirmReq, setConfirmReq] = useState<ConfirmRequestEvent | null>(null);
   const [planState, setPlanState] = useState<PlanState>({ active: false, approved: false });
   const [fortuneOpen, setFortuneOpen] = useState(false);
+  const [workflowOpen, setWorkflowOpen] = useState(false);
   const [spokenRepliesEnabled, setSpokenRepliesEnabled] = useState(false);
   const [voicePanelOpen, setVoicePanelOpen] = useState(false);
   const [voiceCallActive, setVoiceCallActive] = useState(false);
@@ -368,6 +378,7 @@ export default function App() {
   const activeIdRef = useRef(activeId);
   const navigationEpochRef = useRef(new NavigationEpoch());
   const navigationPendingRef = useRef(true);
+  const agentEventReducerRef = useRef(new AgentEventReducer());
 
   useEffect(() => {
     itemsRef.current = items;
@@ -407,8 +418,11 @@ export default function App() {
       if (!matchesHotkey(event, hotkey)) return;
       event.preventDefault();
       setVoicePanelOpen(true);
-      if (!voiceCallActiveRef.current) startVoiceCall();
-      window.setTimeout(() => window.dispatchEvent(new Event("demiurge-voice-hotkey")), 0);
+      if (!voiceCallActiveRef.current) {
+        startVoiceCall();
+      } else {
+        window.dispatchEvent(new Event("demiurge-voice-hotkey"));
+      }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
@@ -521,6 +535,21 @@ export default function App() {
     media.addEventListener("change", applyTheme);
     return () => media.removeEventListener("change", applyTheme);
   }, [previewTheme, settings?.theme]);
+
+  useEffect(() => {
+    document.documentElement.dataset.appearance = previewAppearance ?? settings?.appearance ?? "material_bloom";
+  }, [previewAppearance, settings?.appearance]);
+
+  useEffect(() => {
+    const compactWindow = window.matchMedia("(max-width: 767px)");
+    const collapseForCompactWindow = () => {
+      if (compactWindow.matches) setSidebarOpen(false);
+    };
+
+    collapseForCompactWindow();
+    compactWindow.addEventListener("change", collapseForCompactWindow);
+    return () => compactWindow.removeEventListener("change", collapseForCompactWindow);
+  }, []);
 
   useEffect(() => {
     if (!("__TAURI_INTERNALS__" in window)) return;
@@ -642,40 +671,68 @@ export default function App() {
     api
       .listenAgentEvents({
         onAssistantStart: (turn) => {
-          if (!turnBelongsToSession(activeIdRef.current, turn)) return;
+          if (!turn || !turnBelongsToSession(activeIdRef.current, turn)) return;
+          const decision = agentEventReducerRef.current.accept({
+            kind: "start",
+            sessionId: turn.session_id,
+            turnId: turn.id,
+          });
+          if (!decision.accepted) return;
           finalizeAssistant();
           ttsQueueRef.current.beginTurn(spokenRepliesEnabledRef.current || voiceCallActiveRef.current);
         },
         onAssistantDelta: (text, turn) => {
-          if (!turnBelongsToSession(activeIdRef.current, turn)) return;
+          if (!turn || !turnBelongsToSession(activeIdRef.current, turn)) return;
+          const decision = agentEventReducerRef.current.accept({
+            kind: "delta",
+            sessionId: turn.session_id,
+            turnId: turn.id,
+            text,
+          });
+          if (!decision.accepted) return;
           pendingStream.current.content += text;
           if (spokenRepliesEnabledRef.current || voiceCallActiveRef.current) ttsQueueRef.current.pushText(text);
           scheduleFlush();
         },
         onAssistantReasoning: (text, turn) => {
-          if (!turnBelongsToSession(activeIdRef.current, turn)) return;
+          if (!turn || !turnBelongsToSession(activeIdRef.current, turn)) return;
+          const decision = agentEventReducerRef.current.accept({
+            kind: "reasoning",
+            sessionId: turn.session_id,
+            turnId: turn.id,
+            text,
+          });
+          if (!decision.accepted) return;
           pendingStream.current.reasoning += text;
           scheduleFlush();
         },
         onAssistantDone: (text, turn) => {
-          if (!turnBelongsToSession(activeIdRef.current, turn)) return;
+          if (!turn || !turnBelongsToSession(activeIdRef.current, turn)) return;
+          const decision = agentEventReducerRef.current.accept({
+            kind: "done",
+            sessionId: turn.session_id,
+            turnId: turn.id,
+            text,
+          });
+          if (!decision.accepted) return;
           flushPending();
           if (spokenRepliesEnabledRef.current || voiceCallActiveRef.current) ttsQueueRef.current.flush();
+          const canonicalText = decision.canonicalText ?? text;
           const id = curAssistantId.current;
           if (id) {
             setItems((p) =>
               p.map((it) =>
                 it.id === id && it.kind === "assistant"
-                  ? { ...it, streaming: false, text: it.text.trim() ? it.text : text }
+                  ? { ...it, streaming: false, text: canonicalText }
                   : it,
               ),
             );
-          } else if (text.trim()) {
+          } else if (canonicalText.trim()) {
             const nid = genId();
             setItems((p) =>
-              hasSameAssistantTextAfterLastUser(p, text)
+              hasSameAssistantTextAfterLastUser(p, canonicalText)
                 ? p
-                : [...p, { id: nid, kind: "assistant", text, streaming: false }],
+                : [...p, { id: nid, kind: "assistant", text: canonicalText, streaming: false }],
             );
           }
           curAssistantId.current = null;
@@ -683,7 +740,13 @@ export default function App() {
           void refreshGoalPanel();
         },
         onAssistantError: (e, turn) => {
-          if (!turnBelongsToSession(activeIdRef.current, turn)) return;
+          if (!turn || !turnBelongsToSession(activeIdRef.current, turn)) return;
+          const decision = agentEventReducerRef.current.accept({
+            kind: "error",
+            sessionId: turn.session_id,
+            turnId: turn.id,
+          });
+          if (!decision.accepted) return;
           finalizeAssistant();
           ttsQueueRef.current.stop();
           assistantErrorDelivered.current = true;
@@ -705,14 +768,26 @@ export default function App() {
           void refreshGoalPanel();
         },
         onAssistantInterrupted: (turn) => {
-          if (!turnBelongsToSession(activeIdRef.current, turn)) return;
+          if (!turn || !turnBelongsToSession(activeIdRef.current, turn)) return;
+          const decision = agentEventReducerRef.current.accept({
+            kind: "interrupted",
+            sessionId: turn.session_id,
+            turnId: turn.id,
+          });
+          if (!decision.accepted) return;
           finalizeAssistant();
           ttsQueueRef.current.stop();
           setBusy(false);
           void refreshGoalPanel();
         },
         onToolStart: (e, turn) => {
-          if (!turnBelongsToSession(activeIdRef.current, turn)) return;
+          if (!turn || !turnBelongsToSession(activeIdRef.current, turn)) return;
+          const decision = agentEventReducerRef.current.accept({
+            kind: "activity",
+            sessionId: turn.session_id,
+            turnId: turn.id,
+          });
+          if (!decision.accepted) return;
           finalizeAssistant();
           const nid = genId();
           toolItemIds.current.set(e.tool_call_id, nid);
@@ -734,7 +809,13 @@ export default function App() {
           ]);
         },
         onToolEnd: (e, turn) => {
-          if (!turnBelongsToSession(activeIdRef.current, turn)) return;
+          if (!turn || !turnBelongsToSession(activeIdRef.current, turn)) return;
+          const decision = agentEventReducerRef.current.accept({
+            kind: "activity",
+            sessionId: turn.session_id,
+            turnId: turn.id,
+          });
+          if (!decision.accepted) return;
           const id = toolItemIds.current.get(e.tool_call_id);
           if (id) toolItemIds.current.delete(e.tool_call_id);
           setItems((p) =>
@@ -826,7 +907,7 @@ export default function App() {
     };
   }, []);
 
-  // 顶部菜单 / pack 菜单 / agent 菜单 / 玩具菜单的「外点 + Escape 关闭」逻辑统一收敛到 useClickOutside。
+  // 顶部菜单 / pack 菜单 / agent 菜单的「外点 + Escape 关闭」逻辑统一收敛到 useClickOutside。
   useClickOutside(packMenuRef, () => setPackMenuOpen(false), { enabled: packMenuOpen });
   useClickOutside(titleMenuRef, () => setTitleMenuOpen(null), { escape: true, enabled: !!titleMenuOpen });
   useClickOutside(agentMenuRef, () => setAgentMenuOpen(false), { enabled: agentMenuOpen });
@@ -1019,6 +1100,7 @@ export default function App() {
       await api.saveSettings(s);
       setSettings(s);
       setPreviewTheme(null);
+      setPreviewAppearance(null);
     } catch (e) {
       console.error("Failed to save settings", e);
     }
@@ -1026,6 +1108,7 @@ export default function App() {
 
   function handleCloseSettings() {
     setPreviewTheme(null);
+    setPreviewAppearance(null);
     setActiveView("chat");
   }
 
@@ -1183,7 +1266,7 @@ export default function App() {
   }
 
   return (
-    <main className="flex h-[100dvh] flex-col overflow-hidden bg-[#eef1f5] text-[#202124]">
+    <main className="app-shell flex h-[100dvh] flex-col overflow-hidden bg-[#eef1f5] text-[#202124]">
       <div ref={titleMenuRef} className="app-titlebar">
         <div
           className="app-titlebar-brand app-titlebar-drag"
@@ -1193,6 +1276,18 @@ export default function App() {
           <img src="/demiurge.png" alt="" className="size-4 rounded-[4px]" />
           <span>Demiurge</span>
         </div>
+
+        {!sidebarOpen && (
+          <button
+            type="button"
+            onClick={() => setSidebarOpen(true)}
+            className="app-mobile-navigation-toggle"
+            aria-label={t("header.openSidebar")}
+            title={t("header.openSidebar")}
+          >
+            <PanelLeftIcon size={17} />
+          </button>
+        )}
 
         <nav className="app-titlebar-menus" aria-label="Application menu">
           <div className="relative">
@@ -1319,6 +1414,16 @@ export default function App() {
                     {activeView === view && <CheckIcon size={14} />}
                   </button>
                 ))}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setTitleMenuOpen(null);
+                    setWorkflowOpen(true);
+                  }}
+                  className="cf-menu-item flex w-full items-center gap-2"
+                >
+                  Workflows
+                </button>
               </div>
             )}
           </div>
@@ -1442,23 +1547,17 @@ export default function App() {
           onOpenSettings={() => openSettings("general")}
         />
 
-        <section className="flex min-h-0 min-w-0 flex-1 flex-col p-2 pl-0">
-        <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-lg border border-[#dfe3e8] bg-white shadow-[0_1px_2px_rgba(15,23,42,0.06)]">
+        <section className="app-content-frame flex min-h-0 min-w-0 flex-1 flex-col p-2 pl-0">
+        <div className="app-workspace-surface flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-lg border border-[#dfe3e8] bg-white shadow-[0_1px_2px_rgba(15,23,42,0.06)]">
           {activeView === "chat" ? (
             <>
-              <header className="flex h-12 shrink-0 items-center gap-2 border-b border-[#eceff3] bg-[#fbfcfd] px-3">
-                <button
-                  onClick={() => setSidebarOpen(true)}
-                  aria-label={t("header.openSidebar")}
-                  className="grid h-8 w-8 shrink-0 place-items-center rounded-md text-[#4f5661] transition hover:bg-[#eef1f5] md:hidden"
-                >
-                  <PanelLeftIcon size={20} />
-                </button>
-
+              <header className="app-chat-toolbar flex h-12 shrink-0 items-center gap-2 border-b border-[#eceff3] bg-[#fbfcfd] px-3">
                 <div ref={packMenuRef} className="relative">
                   <button
                     onClick={() => setPackMenuOpen((v) => !v)}
-                    className="flex h-8 max-w-[240px] items-center gap-2 rounded-md px-2 text-[14px] font-semibold text-[#202124] transition hover:bg-[#eef1f5]"
+                    className="app-chat-toolbar-pack md-button md-button-text flex h-8 max-w-[240px] items-center gap-2 rounded-md px-2 text-[14px] font-semibold text-[#202124] transition hover:bg-[#eef1f5]"
+                    aria-haspopup="menu"
+                    aria-expanded={packMenuOpen}
                   >
                     <img
                       src={packAvatar || "/demiurge.png"}
@@ -1504,10 +1603,12 @@ export default function App() {
                   <div ref={agentMenuRef} className="relative">
                   <button
                     onClick={() => setAgentMenuOpen((v) => !v)}
-                    className={`flex h-8 items-center gap-1 rounded-md px-2 text-[13px] font-medium transition hover:bg-[#eef1f5] ${
+                    className={`app-chat-toolbar-agent md-button md-button-text flex h-8 items-center gap-1 rounded-md px-2 text-[13px] font-medium transition hover:bg-[#eef1f5] ${
                       selectedAgentNames.length ? "text-[#171717]" : "text-[#6f7782]"
                     }`}
                     title={t("header.agents")}
+                    aria-haspopup="menu"
+                    aria-expanded={agentMenuOpen}
                   >
                     {selectedAgentLabel}
                     <ChevronDownIcon
@@ -1563,7 +1664,7 @@ export default function App() {
                   </div>
                 )}
 
-                <div className="hidden min-w-0 flex-col border-l border-[#dfe3e8] pl-3 text-[14px] text-[#8a9099] sm:flex">
+                <div className="app-session-heading hidden min-w-0 flex-col border-l border-[#dfe3e8] pl-3 text-[14px] text-[#8a9099] sm:flex">
                   <span className="max-w-[28vw] truncate font-medium text-[#3f3f3f]" title={activeSession?.title ?? t("chat.newChat")}>
                     {activeSession?.title ?? t("chat.newChat")}
                   </span>
@@ -1571,16 +1672,16 @@ export default function App() {
                 </div>
 
 
-                <div className="ml-auto flex items-center gap-2">
+                <div className="app-toolbar-actions ml-auto flex items-center gap-1">
                   {planState.path && !planState.approved && (
                     <div className="hidden items-center gap-1 rounded-md border border-[#b8d4ff] bg-[#eef5ff] px-2 py-1 text-xs text-[#0b57d0] lg:flex">
                       <span className="max-w-[18vw] truncate" title={planState.path}>
                         {t("header.planReady")}{planState.path}
                       </span>
-                      <button className="rounded bg-[#0b57d0] px-2 py-1 text-white" onClick={() => void handleApprovePlan()}>
+                      <button className="md-button md-button-filled rounded bg-[#0b57d0] px-2 py-1 text-white" onClick={() => void handleApprovePlan()}>
                         {t("header.approve")}
                       </button>
-                      <button className="rounded px-2 py-1 text-[#5f6368] hover:bg-white" onClick={() => void handleRejectPlan()}>
+                      <button className="md-button md-button-text rounded px-2 py-1 text-[#5f6368] hover:bg-white" onClick={() => void handleRejectPlan()}>
                         {t("header.reject")}
                       </button>
                     </div>
@@ -1590,12 +1691,13 @@ export default function App() {
                     type="button"
                     onClick={() => setWorkspacePanelOpen((value) => !value)}
                     disabled={!workspace}
-                    className={`grid h-8 w-8 place-items-center rounded-md transition ${
+                    className={`app-toolbar-secondary md-icon-button grid h-8 w-8 place-items-center rounded-md transition ${
                       workspacePanelOpen
                         ? "bg-[#eef5ff] text-[#0b57d0]"
                         : "text-[#59616d] hover:bg-[#eef1f5]"
                     } disabled:cursor-not-allowed disabled:opacity-40`}
                     aria-label={t("workspace.toggle")}
+                    aria-pressed={workspacePanelOpen}
                     title={workspace?.path || t("workspace.toggle")}
                   >
                     <FolderIcon size={17} />
@@ -1605,12 +1707,13 @@ export default function App() {
                     type="button"
                     onClick={() => void toggleDesktopCompanion()}
                     disabled={!settings}
-                    className={`grid h-8 w-8 place-items-center rounded-md transition ${
+                    className={`app-toolbar-secondary md-icon-button grid h-8 w-8 place-items-center rounded-md transition ${
                       settings?.desktop_companion_enabled
                         ? "bg-[#eef5ff] text-[#0b57d0]"
                         : "text-[#59616d] hover:bg-[#eef1f5]"
                     } disabled:cursor-not-allowed disabled:opacity-40`}
                     aria-label={t("desktopCompanion.toggle")}
+                    aria-pressed={Boolean(settings?.desktop_companion_enabled)}
                     title={t("desktopCompanion.toggle")}
                   >
                     <PinIcon size={16} />
@@ -1623,12 +1726,13 @@ export default function App() {
                       if (!voiceCallActive) startVoiceCall();
                     }}
                     disabled={!settings?.voice_enabled}
-                    className={`grid h-8 w-8 place-items-center rounded-md transition ${
+                    className={`md-icon-button grid h-8 w-8 place-items-center rounded-md transition ${
                       voicePanelOpen
                         ? "bg-[#eef5ff] text-[#0b57d0]"
                         : "text-[#59616d] hover:bg-[#eef1f5]"
                     } disabled:cursor-not-allowed disabled:opacity-40`}
                     aria-label={t("voice.call.title")}
+                    aria-pressed={voicePanelOpen}
                     title={t("voice.call.title")}
                   >
                     <PhoneIcon size={16} />
@@ -1638,12 +1742,13 @@ export default function App() {
                     type="button"
                     onClick={toggleSpokenReplies}
                     disabled={!ttsQueue.available}
-                    className={`grid h-8 w-8 place-items-center rounded-md transition ${
+                    className={`app-toolbar-secondary md-icon-button grid h-8 w-8 place-items-center rounded-md transition ${
                       spokenRepliesEnabled
                         ? "bg-[#eef5ff] text-[#0b57d0]"
                         : "text-[#59616d] hover:bg-[#eef1f5]"
                     } disabled:cursor-not-allowed disabled:opacity-40`}
                     aria-label={spokenRepliesEnabled ? t("voice.stopSpokenReplies") : t("voice.startSpokenReplies")}
+                    aria-pressed={spokenRepliesEnabled}
                     title={spokenRepliesEnabled ? t("voice.stopSpokenReplies") : t("voice.startSpokenReplies")}
                   >
                     <VolumeIcon size={17} />
@@ -1738,15 +1843,16 @@ export default function App() {
                 startedAt={voiceCallStartedAt}
                 settings={settings}
                 ttsStatus={ttsQueue.status}
+                characterName={packName}
+                avatarUrl={packAvatar}
                 onStart={startVoiceCall}
-                onEnd={endVoiceCall}
                 onClose={closeVoicePanel}
                 onMutedChange={setVoiceCallMuted}
                 onTranscript={handleVoiceTranscript}
                 onStopAudio={ttsQueue.stop}
               />
 
-              <div className="flex min-h-0 min-w-0 flex-1">
+              <div className="app-chat-body flex min-h-0 min-w-0 flex-1">
                 <div className="flex min-h-0 min-w-0 flex-1 flex-col">
                   <MessageList
                     items={items}
@@ -1823,6 +1929,7 @@ export default function App() {
               onClose={handleCloseSettings}
               onSave={handleSaveSettings}
               onPreviewTheme={setPreviewTheme}
+              onPreviewAppearance={setPreviewAppearance}
               onPacksChange={setPacks}
               onAgentPanelChange={setAgentPanel}
             />
@@ -1833,6 +1940,15 @@ export default function App() {
 
       <ConfirmDialog req={confirmReq} mode={settings?.permission_mode ?? "default"} onRespond={handleRespondConfirm} />
       <FortuneDialog open={fortuneOpen} onClose={() => setFortuneOpen(false)} />
+      <WorkflowsPanel
+        open={workflowOpen}
+        busy={interactionBusy}
+        onClose={() => setWorkflowOpen(false)}
+        onResume={(command) => {
+          setWorkflowOpen(false);
+          void handleSend(command);
+        }}
+      />
     </main>
   );
 }

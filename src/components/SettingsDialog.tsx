@@ -20,6 +20,7 @@ import type {
   PermissionPanelState,
   PermissionRuleView,
   PermissionScope,
+  AppAppearance,
   AppTheme,
   ProviderKind,
   ReasoningEffort,
@@ -29,8 +30,25 @@ import type {
   WebDavConfig,
   WebSearchProvider,
 } from "../lib/types";
-import { CheckIcon, CloseIcon, DownloadIcon, FileIcon, FolderIcon, PersonIcon, TrashIcon } from "./Icons";
+import {
+  CheckIcon,
+  CloseIcon,
+  CloudSunIcon,
+  DownloadIcon,
+  FileIcon,
+  FolderIcon,
+  GitBranchIcon,
+  ImageIcon,
+  MicIcon,
+  MousePointerIcon,
+  PersonIcon,
+  SettingsIcon,
+  SparklesIcon,
+  TrashIcon,
+  WrenchIcon,
+} from "./Icons";
 import { Select } from "./Select";
+import { SegmentedControl } from "./SegmentedControl";
 import { PackEditor } from "./pack-editor/PackEditor";
 import { PackFileBrowser } from "./pack-editor/PackFileBrowser";
 import { LorebookRecallPanel } from "./pack-editor/LorebookRecallPanel";
@@ -47,6 +65,7 @@ interface Props {
   onClose: () => void;
   onSave: (s: Settings) => void;
   onPreviewTheme?: (theme: AppTheme) => void;
+  onPreviewAppearance?: (appearance: AppAppearance) => void;
   onPacksChange: (packs: PackManifest[]) => void;
   onAgentPanelChange: (state: AgentPanelState) => void;
 }
@@ -104,6 +123,26 @@ const themeOptions: { value: AppTheme; labelKey: string; helpKey: string }[] = [
   { value: "dark", labelKey: "settings.general.theme.dark", helpKey: "settings.general.theme.darkHelp" },
 ];
 
+const appearanceOptions: {
+  value: AppAppearance;
+  labelKey: string;
+  helpKey: string;
+  colors: string[];
+}[] = [
+  {
+    value: "material_bloom",
+    labelKey: "settings.general.appearance.materialBloom",
+    helpKey: "settings.general.appearance.materialBloomHelp",
+    colors: ["#ffffff", "#f9dce8", "#c44782", "#76568f"],
+  },
+  {
+    value: "classic",
+    labelKey: "settings.general.appearance.classic",
+    helpKey: "settings.general.appearance.classicHelp",
+    colors: ["#ffffff", "#eef1f5", "#59616d", "#111827"],
+  },
+];
+
 const voiceSttOptions = [
   { value: "none", labelKey: "settings.voice.backend.none", helpKey: "settings.voice.stt.noneHelp" },
   { value: "dashscope", labelKey: "settings.voice.backend.dashscope", helpKey: "settings.voice.stt.dashscopeHelp" },
@@ -118,10 +157,10 @@ const voiceTtsOptions = [
 ];
 
 const inputCls =
-  "h-9 w-full rounded-md border border-[#d9d9d9] bg-white px-3 text-[13px] text-[#202124] outline-none transition focus:border-[#7a7f87] focus:ring-1 focus:ring-[#202124]/10";
-const labelCls = "mb-1.5 block text-[12px] font-medium text-[#5f6368]";
+  "md-text-field md-type-body-medium h-10 w-full rounded-md border border-[#d9d9d9] bg-white px-3 text-[#202124] outline-none transition focus:border-[#7a7f87] focus:ring-1 focus:ring-[#202124]/10";
+const labelCls = "md-type-label-large mb-1.5 block text-[#5f6368]";
 const secondaryButtonCls =
-  "cf-press inline-flex h-8 items-center justify-center rounded-md border border-[#d9d9d9] bg-white px-3 text-[12px] font-medium text-[#333] hover:bg-[#f5f5f5] disabled:cursor-not-allowed disabled:opacity-50";
+  "md-button md-button-outlined cf-press inline-flex items-center justify-center rounded-md border border-[#d9d9d9] bg-white px-3 text-[#333] hover:bg-[#f5f5f5] disabled:cursor-not-allowed disabled:opacity-50";
 
 function formatBytes(n: number) {
   if (!Number.isFinite(n) || n <= 0) return "0 B";
@@ -157,6 +196,12 @@ function normalizeReasoningEffort(value: string): ReasoningEffort {
 
 function normalizeTheme(value: string): AppTheme {
   return themeOptions.some((theme) => theme.value === value) ? (value as AppTheme) : "system";
+}
+
+function normalizeAppearance(value: string): AppAppearance {
+  return appearanceOptions.some((appearance) => appearance.value === value)
+    ? (value as AppAppearance)
+    : "material_bloom";
 }
 
 function modelSupportsReasoningEffort(provider: ProviderKind, model: string) {
@@ -341,12 +386,12 @@ function Section({
   children: React.ReactNode;
 }) {
   return (
-    <section className="border-b border-[#eceff3] py-5 first:pt-0 last:border-b-0">
-      <div className="mb-4">
-        <h3 className="text-[14px] font-semibold text-[#202124]">{title}</h3>
-        {description && <p className="mt-1 max-w-2xl text-[12px] leading-5 text-[#7a8088]">{description}</p>}
+    <section className="md-settings-section border-b border-[#eceff3] py-6 first:pt-0 last:border-b-0">
+      <div className="md-settings-section-header mb-4">
+        <h3 className="md-type-title-small font-semibold text-[#202124]">{title}</h3>
+        {description && <p className="md-type-body-small mt-1 max-w-2xl text-[#7a8088]">{description}</p>}
       </div>
-      {children}
+      <div className="md-settings-section-body min-w-0">{children}</div>
     </section>
   );
 }
@@ -364,7 +409,7 @@ function Field({
     <label className="block">
       <span className={labelCls}>{label}</span>
       {children}
-      {help && <span className="mt-1.5 block text-[12px] leading-5 text-[#8a9099]">{help}</span>}
+      {help && <span className="md-type-body-small mt-1.5 block text-[#8a9099]">{help}</span>}
     </label>
   );
 }
@@ -381,13 +426,13 @@ function ToggleRow({
   onChange: (checked: boolean) => void;
 }) {
   return (
-    <label className="flex items-start justify-between gap-4 rounded-lg border border-[#e2e5ea] bg-[#fbfcfd] px-3 py-3">
+    <label className="md-switch-list-tile flex items-center justify-between gap-4 rounded-lg border border-[#e2e5ea] bg-[#fbfcfd] px-3 py-3">
       <span>
-        <span className="block text-[13px] font-medium text-[#202124]">{title}</span>
-        <span className="mt-1 block text-[12px] leading-5 text-[#7a8088]">{description}</span>
+        <span className="md-type-title-small block text-[#202124]">{title}</span>
+        <span className="md-type-body-small mt-1 block text-[#7a8088]">{description}</span>
       </span>
       <input
-        className="mt-0.5 h-4 w-4 shrink-0 accent-[#111827]"
+        className="md-switch shrink-0"
         type="checkbox"
         checked={checked}
         onChange={(e) => onChange(e.target.checked)}
@@ -416,8 +461,8 @@ function FortuneAutoPromptRow() {
 function ContextMetric({ label, value }: { label: string; value: number }) {
   return (
     <div className="rounded-lg border border-[#e5e8ed] bg-white px-3 py-2">
-      <div className="text-[11px] text-[#8a9099]">{label}</div>
-      <div className="mt-1 text-[15px] font-semibold text-[#202124]">{value.toLocaleString()}</div>
+      <div className="md-type-label-small text-[#8a9099]">{label}</div>
+      <div className="md-type-title-medium mt-1 font-semibold text-[#202124]">{value.toLocaleString()}</div>
     </div>
   );
 }
@@ -590,6 +635,7 @@ export default function SettingsDialog({
   onClose,
   onSave,
   onPreviewTheme,
+  onPreviewAppearance,
   onPacksChange,
   onAgentPanelChange,
 }: Props) {
@@ -1647,40 +1693,65 @@ export default function SettingsDialog({
     ),
   );
 
-  const navItems: { id: SettingsTab; label: string; detail: string }[] = [
-    { id: "general", label: t("settings.general"), detail: form.language === "zh" ? "简体中文" : "English" },
-    { id: "provider", label: t("settings.nav.providers"), detail: selectedProvider.label },
+  const navItems: { id: SettingsTab; label: string; detail: string; icon: React.ReactNode }[] = [
+    {
+      id: "general",
+      label: t("settings.general"),
+      detail: form.language === "zh" ? "简体中文" : "English",
+      icon: <SettingsIcon size={18} />,
+    },
+    { id: "provider", label: t("settings.nav.providers"), detail: selectedProvider.label, icon: <CloudSunIcon size={18} /> },
     {
       id: "persona",
       label: t("settings.nav.persona"),
       detail: packs.find((pack) => pack.id === form.current_pack)?.name ?? form.current_pack,
+      icon: <PersonIcon size={18} />,
     },
-    { id: "media", label: t("settings.nav.media"), detail: form.image_model || t("settings.nav.detail.media") },
+    {
+      id: "media",
+      label: t("settings.nav.media"),
+      detail: form.image_model || t("settings.nav.detail.media"),
+      icon: <ImageIcon size={18} />,
+    },
     {
       id: "companion",
       label: t("settings.nav.companion"),
       detail: form.companion_enabled ? t("settings.nav.detail.enabled") : t("settings.nav.detail.disabled"),
+      icon: <SparklesIcon size={18} />,
     },
-    { id: "web", label: t("settings.nav.web"), detail: selectedWebSearchProvider.label },
+    { id: "web", label: t("settings.nav.web"), detail: selectedWebSearchProvider.label, icon: <MousePointerIcon size={18} /> },
     {
       id: "files",
       label: t("settings.nav.files"),
       detail: form.webdav_enabled ? t("settings.nav.detail.webdavOn") : t("settings.nav.detail.docsBackup"),
+      icon: <FolderIcon size={18} />,
     },
-    { id: "context", label: t("settings.nav.context"), detail: t("settings.nav.detail.tokens", { n: form.max_input_tokens }) },
+    {
+      id: "context",
+      label: t("settings.nav.context"),
+      detail: t("settings.nav.detail.tokens", { n: form.max_input_tokens }),
+      icon: <FileIcon size={18} />,
+    },
     {
       id: "tools",
       label: t("settings.nav.tools"),
       detail: ocrStatus?.installed
         ? t("settings.nav.detail.mcpOcrReady", { n: form.mcp_servers.length })
         : t("settings.nav.detail.mcpOcr", { n: form.mcp_servers.length }),
+      icon: <WrenchIcon size={18} />,
     },
     {
       id: "voice",
       label: t("settings.nav.voice"),
       detail: form.voice_enabled ? t("settings.nav.detail.enabled") : t("settings.nav.detail.disabled"),
+      icon: <MicIcon size={18} />,
     },
-    { id: "advanced", label: t("settings.nav.advanced"), detail: t("settings.nav.detail.storage") },
+    {
+      id: "advanced",
+      label: t("settings.nav.advanced"),
+      detail: t("settings.nav.detail.storage"),
+      icon: <GitBranchIcon size={18} />,
+    },
   ];
 
   function save() {
@@ -1695,6 +1766,7 @@ export default function SettingsDialog({
       max_input_tokens: maxInput,
       reserved_output_tokens: reserved,
       theme: normalizeTheme(form.theme),
+      appearance: normalizeAppearance(form.appearance),
       launch_on_startup: form.launch_on_startup,
       reasoning_effort: normalizeReasoningEffort(form.reasoning_effort),
       companion_memory_extraction_scope: form.companion_memory_extraction_scope.trim() || "recent_turn",
@@ -1751,12 +1823,12 @@ export default function SettingsDialog({
   }
 
   return (
-    <div className="flex h-full min-h-0 w-full overflow-hidden bg-[#f6f7f9]">
-        <aside className="flex w-[232px] shrink-0 flex-col border-r border-[#dfe3e8] bg-[#eef1f5]">
+    <div className="settings-shell flex h-full min-h-0 w-full overflow-hidden bg-[#f6f7f9]">
+        <aside className="settings-sidebar flex w-[248px] shrink-0 flex-col border-r border-[#dfe3e8] bg-[#eef1f5]">
           <div className="flex h-12 items-center border-b border-[#dfe3e8] px-4">
-            <div className="text-[13px] font-semibold text-[#202124]">{t("settings.heading")}</div>
+            <div className="md-type-title-medium font-semibold text-[#202124]">{t("settings.heading")}</div>
             <button
-              className="ml-auto grid size-8 place-items-center rounded-md text-[#69707a] transition hover:bg-[#e3e7ed] hover:text-[#202124]"
+              className="md-icon-button ml-auto grid size-8 place-items-center rounded-md text-[#69707a] transition hover:bg-[#e3e7ed] hover:text-[#202124]"
               onClick={onClose}
               aria-label={t("settings.close")}
             >
@@ -1771,41 +1843,48 @@ export default function SettingsDialog({
                   key={item.id}
                   type="button"
                   onClick={() => setActiveTab(item.id)}
-                  className={`cf-press mb-1 flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left ${
-                    selected ? "bg-white text-[#111827] shadow-sm" : "text-[#4f5661] hover:bg-[#e4e8ee]"
+                  className={`settings-nav-item cf-press mb-1 flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left ${
+                    selected ? "is-selected bg-white text-[#111827] shadow-sm" : "text-[#4f5661] hover:bg-[#e4e8ee]"
                   }`}
                 >
-                  <span
-                    className={`size-1.5 shrink-0 rounded-full ${selected ? "bg-[#111827]" : "bg-[#a6adb8]"}`}
-                    aria-hidden
-                  />
+                  <span className="settings-nav-icon shrink-0" aria-hidden>
+                    {item.icon}
+                  </span>
                   <span className="min-w-0 flex-1">
-                    <span className="block truncate text-[13px] font-medium">{item.label}</span>
-                    <span className="mt-0.5 block truncate text-[11px] text-[#8a9099]">{item.detail}</span>
+                    <span className="md-type-label-large block truncate">{item.label}</span>
+                    <span className="md-type-label-small mt-0.5 block truncate text-[#8a9099]">{item.detail}</span>
                   </span>
                 </button>
               );
             })}
           </nav>
-          <div className="border-t border-[#dfe3e8] p-3 text-[11px] leading-5 text-[#7a8088]">
+          <div className="md-type-body-small border-t border-[#dfe3e8] p-3 text-[#7a8088]">
             {t("settings.credentialNote")}
           </div>
         </aside>
 
-        <section className="flex min-w-0 flex-1 flex-col bg-white">
-          <header className="flex h-12 shrink-0 items-center border-b border-[#eceff3] px-5">
-            <div className="min-w-0">
-              <div className="text-[14px] font-semibold text-[#202124]">
+        <section className="settings-content flex min-w-0 flex-1 flex-col bg-white">
+          <header className="settings-header flex h-12 shrink-0 items-center border-b border-[#eceff3] px-5">
+            <div className="settings-current-title min-w-0">
+              <div className="md-type-title-medium font-semibold text-[#202124]">
                 {navItems.find((item) => item.id === activeTab)?.label}
               </div>
             </div>
-            <div className="ml-auto flex items-center gap-2">
+            <div className="settings-mobile-nav hidden min-w-0 flex-1">
+              <Select
+                value={activeTab}
+                onChange={(value) => setActiveTab(value as SettingsTab)}
+                options={navItems.map((item) => ({ value: item.id, label: item.label, hint: item.detail, icon: item.icon }))}
+                triggerClassName="md-type-label-large flex h-10 w-full min-w-0 items-center gap-1 rounded-md border border-[#d9d9d9] bg-white px-2 text-[#202124] outline-none"
+              />
+            </div>
+            <div className="settings-header-actions ml-auto flex items-center gap-2">
               <button type="button" className={secondaryButtonCls} onClick={onClose}>
                 {t("settings.cancel")}
               </button>
               <button
                 type="button"
-                className="cf-press inline-flex h-8 items-center justify-center rounded-md bg-[#111827] px-4 text-[12px] font-medium text-white hover:bg-[#2b3442]"
+                className="settings-save md-button md-button-filled cf-press inline-flex items-center justify-center rounded-md bg-[#111827] px-4 text-white hover:bg-[#2b3442]"
                 onClick={save}
               >
                 {t("settings.save")}
@@ -1813,61 +1892,76 @@ export default function SettingsDialog({
             </div>
           </header>
 
-          <div className="min-h-0 flex-1 overflow-y-auto">
-            <div className="mx-auto max-w-[760px] px-6 py-5">
+          <div className="settings-content-scroll min-h-0 flex-1 overflow-y-auto">
+            <div className="settings-content-inner mx-auto w-full max-w-[1040px] px-4 py-6 sm:px-6 lg:px-8">
               {activeTab === "general" && (
-                <>
+                <div className="settings-general-pane">
                   <Section title={t("settings.language")} description={t("settings.languageDesc")}>
-                    <div className="inline-flex rounded-lg border border-[#dfe3e8] bg-[#f6f7f9] p-1">
-                      {(["zh", "en"] as const).map((lng) => {
-                        const active = form.language === lng;
+                    <SegmentedControl
+                      value={form.language}
+                      ariaLabel={t("settings.language")}
+                      options={[
+                        { value: "zh", label: t("settings.langZh") },
+                        { value: "en", label: t("settings.langEn") },
+                      ]}
+                      onChange={(language) => {
+                        set("language", language);
+                        setLang(language);
+                      }}
+                    />
+                  </Section>
+                  <Section
+                    title={t("settings.general.appearanceTitle")}
+                    description={t("settings.general.appearanceDesc")}
+                  >
+                    <div className="grid gap-2 sm:grid-cols-2">
+                      {appearanceOptions.map((appearance) => {
+                        const selected = normalizeAppearance(form.appearance) === appearance.value;
                         return (
                           <button
-                            key={lng}
+                            key={appearance.value}
                             type="button"
                             onClick={() => {
-                              set("language", lng);
-                              setLang(lng);
+                              set("appearance", appearance.value);
+                              onPreviewAppearance?.(appearance.value);
                             }}
-                            className={`cf-press min-w-[120px] rounded-md px-4 py-2 text-[13px] font-medium transition ${
-                              active ? "bg-white text-[#111827] shadow-sm" : "text-[#5f6368] hover:text-[#202124]"
+                            className={`appearance-option md-choice-card cf-press min-h-[88px] rounded-lg border px-3 py-3 text-left transition ${
+                              selected
+                                ? "is-selected border-[#111827] bg-[#f8f9fb] text-[#111827]"
+                                : "border-[#e2e5ea] bg-white text-[#4f5661] hover:bg-[#f8f9fb]"
                             }`}
                           >
-                            {lng === "zh" ? t("settings.langZh") : t("settings.langEn")}
+                            <span className="flex items-center gap-2 text-[13px] font-semibold">
+                              {t(appearance.labelKey)}
+                              {selected && <CheckIcon size={14} className="ml-auto shrink-0" />}
+                            </span>
+                            <span className="my-2 flex h-3 overflow-hidden rounded-[3px] border border-black/5">
+                              {appearance.colors.map((color) => (
+                                <span key={color} className="flex-1" style={{ backgroundColor: color }} />
+                              ))}
+                            </span>
+                            <span className="block text-[12px] leading-5 text-[#7a8088]">
+                              {t(appearance.helpKey)}
+                            </span>
                           </button>
                         );
                       })}
                     </div>
                   </Section>
                   <Section title={t("settings.general.themeTitle")} description={t("settings.general.themeDesc")}>
-                    <div className="grid gap-2 sm:grid-cols-3">
-                      {themeOptions.map((theme) => {
-                        const selected = normalizeTheme(form.theme) === theme.value;
-                        return (
-                          <button
-                            key={theme.value}
-                            type="button"
-                            onClick={() => {
-                              set("theme", theme.value);
-                              onPreviewTheme?.(theme.value);
-                            }}
-                            className={`cf-press min-h-16 rounded-lg border px-3 py-3 text-left transition ${
-                              selected
-                                ? "border-[#111827] bg-[#f8f9fb] text-[#111827]"
-                                : "border-[#e2e5ea] bg-white text-[#4f5661] hover:bg-[#f8f9fb]"
-                            }`}
-                          >
-                            <span className="flex items-center gap-2 text-[13px] font-semibold">
-                              {t(theme.labelKey)}
-                              {selected && <CheckIcon size={14} className="ml-auto shrink-0" />}
-                            </span>
-                            <span className="mt-1 block text-[12px] leading-5 text-[#7a8088]">
-                              {t(theme.helpKey)}
-                            </span>
-                          </button>
-                        );
-                      })}
-                    </div>
+                    <SegmentedControl
+                      value={normalizeTheme(form.theme)}
+                      ariaLabel={t("settings.general.themeTitle")}
+                      options={themeOptions.map((theme) => ({
+                        value: theme.value,
+                        label: t(theme.labelKey),
+                        hint: t(theme.helpKey),
+                      }))}
+                      onChange={(theme) => {
+                        set("theme", theme);
+                        onPreviewTheme?.(theme);
+                      }}
+                    />
                   </Section>
                   <Section title={t("settings.general.startupTitle")} description={t("settings.general.startupDesc")}>
                     <ToggleRow
@@ -1880,7 +1974,7 @@ export default function SettingsDialog({
                   <Section title={t("fortune.autoPromptSection")} description={t("fortune.autoPromptSectionDesc")}>
                     <FortuneAutoPromptRow />
                   </Section>
-                </>
+                </div>
               )}
 
               {activeTab === "provider" && (
@@ -3961,7 +4055,7 @@ export default function SettingsDialog({
                                 <label className="ml-auto flex items-center gap-2 text-[12px] text-[#5f6368]">
                                   <input
                                     type="checkbox"
-                                    className="h-4 w-4 accent-[#111827]"
+                                    className="md-switch md-switch-compact"
                                     checked={server.enabled}
                                     onChange={(e) => updateMcpServer(index, { enabled: e.target.checked })}
                                   />

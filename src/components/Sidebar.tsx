@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import type { SessionMeta } from "../lib/types";
 import { useI18n } from "../lib/i18n";
-import { ComposeIcon, ImageIcon, PanelLeftIcon, PersonIcon, SettingsIcon, SparklesIcon, TrashIcon } from "./Icons";
+import { ChatIcon, ComposeIcon, ImageIcon, PanelLeftIcon, PersonIcon, SettingsIcon, SparklesIcon, TrashIcon } from "./Icons";
 
 export type AppView = "chat" | "media" | "skills" | "live2d" | "settings";
 
@@ -82,76 +82,100 @@ export function Sidebar({
     }
   }
 
+  function closeCompactNavigation() {
+    if (window.matchMedia("(max-width: 767px)").matches) onToggle();
+  }
+
+  function navigateTo(view: AppView) {
+    onViewChange(view);
+    closeCompactNavigation();
+  }
+
   const navButton =
-    "cf-press flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-[13px]";
+    "app-nav-item cf-press flex h-12 w-full items-center gap-3 rounded-full px-3 text-left text-[13px]";
 
   return (
     <>
       {open && <div onClick={onToggle} aria-hidden className="fixed inset-0 z-30 bg-black/20 md:hidden" />}
       <aside
-        className={`fixed inset-y-0 left-0 z-40 flex w-[260px] flex-col border-r border-[#dfe3e8] bg-[#eef1f5] px-2 py-2 shadow-[12px_0_32px_rgba(15,23,42,0.12)] transition-transform duration-200 md:relative md:z-auto md:shrink-0 md:translate-x-0 md:shadow-none md:transition-[width] ${
+        className={`app-sidebar app-navigation-rail fixed inset-y-0 left-0 z-40 flex w-[260px] flex-col border-r border-[#dfe3e8] bg-[#eef1f5] px-3 py-2 shadow-[12px_0_32px_rgba(15,23,42,0.12)] transition-transform duration-200 md:relative md:z-auto md:shrink-0 md:translate-x-0 md:shadow-none md:transition-[width] ${
           open ? "translate-x-0" : "-translate-x-full"
-        } ${open ? "md:w-[230px]" : "md:w-[64px]"}`}
+        } ${open ? "md:w-[248px]" : "md:w-[80px]"}`}
+        aria-label={t("sidebar.chats")}
       >
-        <div className={`mb-3 flex h-9 items-center ${open ? "justify-between px-1" : "justify-center"}`}>
+        <div
+          className={`app-navigation-leading mb-3 flex items-center gap-2 ${
+            open ? "h-10 justify-between px-1" : "h-auto flex-col justify-center"
+          }`}
+        >
           <button
             onClick={onToggle}
-            className="grid h-8 w-8 shrink-0 place-items-center rounded-md text-[#4f5661] cf-press hover:bg-[#dfe4ea]"
+            className="md-icon-button grid h-8 w-8 shrink-0 place-items-center rounded-md text-[#4f5661] cf-press hover:bg-[#dfe4ea]"
             aria-label={t("sidebar.toggle")}
+            title={t("sidebar.toggle")}
           >
             <PanelLeftIcon size={20} />
           </button>
           <button
             onClick={() => {
-              onViewChange("chat");
+              navigateTo("chat");
               onNewChat();
             }}
             disabled={navigationLocked}
-            className={`grid h-8 w-8 place-items-center rounded-md text-[#4f5661] cf-press hover:bg-[#dfe4ea] disabled:cursor-not-allowed disabled:opacity-50 ${open ? "" : "hidden"}`}
+            className="md-icon-button md-icon-button-tonal grid h-8 w-8 place-items-center rounded-md text-[#4f5661] cf-press hover:bg-[#dfe4ea] disabled:cursor-not-allowed disabled:opacity-50"
             aria-label={t("sidebar.newChat")}
+            title={t("sidebar.newChat")}
           >
             <ComposeIcon size={19} />
           </button>
         </div>
 
-        <div className="mb-3 grid gap-1">
+        <nav className="mb-3 grid gap-1" aria-label={t("sidebar.chats")}>
           <button
-            onClick={() => onViewChange("chat")}
-            className={`${navButton} ${activeView === "chat" ? "bg-white text-[#111827] shadow-sm" : "text-[#202124] hover:bg-[#dfe4ea]"} ${
+            onClick={() => navigateTo("chat")}
+            className={`${navButton} ${activeView === "chat" ? "is-active bg-white text-[#111827] shadow-sm" : "text-[#202124] hover:bg-[#dfe4ea]"} ${
               open ? "" : "justify-center px-0"
             }`}
+            aria-current={activeView === "chat" ? "page" : undefined}
+            title={t("nav.chat")}
           >
-            <ComposeIcon size={17} className="shrink-0" />
+            <ChatIcon size={17} className="shrink-0" />
             {open && <span>{t("nav.chat")}</span>}
           </button>
           <button
-            onClick={() => onViewChange("media")}
-            className={`${navButton} ${activeView === "media" ? "bg-white text-[#111827] shadow-sm" : "text-[#202124] hover:bg-[#dfe4ea]"} ${
+            onClick={() => navigateTo("media")}
+            className={`${navButton} ${activeView === "media" ? "is-active bg-white text-[#111827] shadow-sm" : "text-[#202124] hover:bg-[#dfe4ea]"} ${
               open ? "" : "justify-center px-0"
             }`}
+            aria-current={activeView === "media" ? "page" : undefined}
+            title={t("nav.images")}
           >
             <ImageIcon size={17} className="shrink-0" />
             {open && <span>{t("nav.images")}</span>}
           </button>
           <button
-            onClick={() => onViewChange("skills")}
-            className={`${navButton} ${activeView === "skills" ? "bg-white text-[#111827] shadow-sm" : "text-[#202124] hover:bg-[#dfe4ea]"} ${
+            onClick={() => navigateTo("skills")}
+            className={`${navButton} ${activeView === "skills" ? "is-active bg-white text-[#111827] shadow-sm" : "text-[#202124] hover:bg-[#dfe4ea]"} ${
               open ? "" : "justify-center px-0"
             }`}
+            aria-current={activeView === "skills" ? "page" : undefined}
+            title={t("nav.skills")}
           >
             <SparklesIcon size={17} className="shrink-0" />
             {open && <span>{t("nav.skills")}</span>}
           </button>
           <button
-            onClick={() => onViewChange("live2d")}
-            className={`${navButton} ${activeView === "live2d" ? "bg-white text-[#111827] shadow-sm" : "text-[#202124] hover:bg-[#dfe4ea]"} ${
+            onClick={() => navigateTo("live2d")}
+            className={`${navButton} ${activeView === "live2d" ? "is-active bg-white text-[#111827] shadow-sm" : "text-[#202124] hover:bg-[#dfe4ea]"} ${
               open ? "" : "justify-center px-0"
             }`}
+            aria-current={activeView === "live2d" ? "page" : undefined}
+            title={t("nav.live2d")}
           >
             <PersonIcon size={17} className="shrink-0" />
             {open && <span>{t("nav.live2d")}</span>}
           </button>
-        </div>
+        </nav>
 
         <div className={`capsule-scrollbar min-h-0 flex-1 overflow-y-auto ${open ? "" : "hidden"}`}>
           <div className="px-2 pb-1.5 text-[11px] font-semibold uppercase tracking-wide text-[#8a9099]">{t("sidebar.chats")}</div>
@@ -161,8 +185,8 @@ export function Sidebar({
             return (
               <div
                 key={s.id}
-                className={`group relative mb-1 rounded-lg ${
-                  activeView === "chat" && s.id === activeId ? "bg-white shadow-sm" : "hover:bg-[#dfe4ea]"
+                className={`app-session-item group relative mb-1 rounded-lg ${
+                  activeView === "chat" && s.id === activeId ? "is-active bg-white shadow-sm" : "hover:bg-[#dfe4ea]"
                 }`}
               >
                 <div className="flex items-center">
@@ -187,17 +211,26 @@ export function Sidebar({
                       }}
                       className="mx-1 min-w-0 flex-1 rounded-md border border-[#cfd5dd] bg-white px-2 py-1.5 text-[13px] outline-none focus:border-[#111827] disabled:opacity-60"
                       aria-label={t("sidebar.chatTitle")}
+                      aria-invalid={Boolean(renameError)}
+                      aria-describedby={renameError ? `rename-error-${s.id}` : undefined}
                     />
                   ) : (
                     <button
                       onClick={() => {
-                        onViewChange("chat");
+                        navigateTo("chat");
                         onSelectSession(s.id);
                       }}
                       onDoubleClick={() => beginRename(s)}
+                      onKeyDown={(event) => {
+                        if (event.key === "F2") {
+                          event.preventDefault();
+                          beginRename(s);
+                        }
+                      }}
                       disabled={navigationLocked}
                       className="min-w-0 flex-1 px-2.5 py-2 text-left text-[13px] text-[#202124] disabled:cursor-not-allowed disabled:opacity-60"
                       title={`${s.title}\n${t("sidebar.renameHint")}`}
+                      aria-current={activeView === "chat" && s.id === activeId ? "page" : undefined}
                     >
                       <span className="block truncate">{s.title}</span>
                       {s.workspace_name && (
@@ -211,7 +244,7 @@ export function Sidebar({
                     <button
                       onClick={() => beginRename(s)}
                       disabled={navigationLocked}
-                      className="grid h-7 w-7 shrink-0 place-items-center rounded-md text-[#69707a] opacity-0 transition hover:bg-[#cfd5dd] hover:text-[#111827] group-hover:opacity-100 disabled:opacity-0"
+                      className="grid h-7 w-7 shrink-0 place-items-center rounded-md text-[#69707a] opacity-0 transition hover:bg-[#cfd5dd] hover:text-[#111827] focus:opacity-100 group-focus-within:opacity-100 group-hover:opacity-100 disabled:opacity-0"
                       aria-label={t("sidebar.rename")}
                       title={t("sidebar.rename")}
                     >
@@ -221,25 +254,33 @@ export function Sidebar({
                   <button
                     onClick={() => onDeleteSession(s.id)}
                     disabled={navigationLocked || editing}
-                    className="mr-1 grid h-7 w-7 shrink-0 place-items-center rounded-md text-[#69707a] opacity-0 transition hover:bg-[#cfd5dd] hover:text-[#dc2626] group-hover:opacity-100 disabled:opacity-0"
+                    className="mr-1 grid h-7 w-7 shrink-0 place-items-center rounded-md text-[#69707a] opacity-0 transition hover:bg-[#cfd5dd] hover:text-[#dc2626] focus:opacity-100 group-focus-within:opacity-100 group-hover:opacity-100 disabled:opacity-0"
                     aria-label={t("sidebar.deleteChat")}
                   >
                     <TrashIcon size={15} />
                   </button>
                 </div>
-                {editing && renameError && <div className="px-3 pb-2 text-xs text-[#dc2626]">{renameError}</div>}
+                {editing && renameError && (
+                  <div id={`rename-error-${s.id}`} role="alert" className="px-3 pb-2 text-xs text-[#dc2626]">
+                    {renameError}
+                  </div>
+                )}
               </div>
             );
           })}
         </div>
 
-        <div className="border-t border-[#dfe3e8] pt-2">
+        <div className="app-navigation-footer border-t border-[#dfe3e8] pt-2">
           <button
-            onClick={onOpenSettings}
-            className={`flex w-full items-center gap-2 rounded-md py-2 text-left text-[13px] transition ${
-              activeView === "settings" ? "bg-white shadow-sm" : "hover:bg-[#dfe4ea]"
+            onClick={() => {
+              onOpenSettings();
+              closeCompactNavigation();
+            }}
+            className={`app-settings-entry flex w-full items-center gap-2 rounded-md py-2 text-left text-[13px] transition ${
+              activeView === "settings" ? "is-active bg-white shadow-sm" : "hover:bg-[#dfe4ea]"
             } ${open ? "px-2" : "justify-center px-0"}`}
             aria-label={t("sidebar.settings")}
+            aria-current={activeView === "settings" ? "page" : undefined}
           >
             {open ? (
               <>

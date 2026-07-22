@@ -3,6 +3,7 @@ import * as api from "../lib/api";
 import { useI18n } from "../lib/i18n";
 import type { DayCell, StatsPanel } from "../lib/types";
 import { findEntry, getTodayRecord } from "../lib/fortune";
+import { ChevronDownIcon } from "./Icons";
 
 const LEVEL_BG = ["#eef1f5", "#cfe9dd", "#9fd6bf", "#52b894", "#10a37f"];
 const AVATAR = "/demiurge.png";
@@ -50,11 +51,11 @@ function mockStats(): StatsPanel {
 function Metric({ label, value, index }: { label: string; value: string; index: number }) {
   return (
     <div
-      className="cf-rise rounded-md border border-[#eceff3] bg-[#fbfcfd] px-2.5 py-1.5"
+      className="dashboard-metric cf-rise min-w-0 px-3 py-2.5"
       style={{ "--i": index } as CSSProperties}
     >
-      <div className="text-[11px] text-[#8a9099]">{label}</div>
-      <div className="truncate text-[14px] font-semibold tabular-nums text-[#202124]" title={value}>
+      <div className="md-type-label-small text-[#8a9099]">{label}</div>
+      <div className="md-type-title-small truncate font-semibold tabular-nums text-[#202124]" title={value}>
         {value}
       </div>
     </div>
@@ -83,7 +84,7 @@ function Heatmap({ cells }: { cells: DayCell[] }) {
           />
         ))}
       </div>
-      <div className="mt-2 flex items-center gap-1.5 text-[11px] text-[#9aa1ab]">
+      <div className="md-type-label-small mt-2 flex items-center gap-1.5 text-[#9aa1ab]">
         <span>{t("dashboard.less")}</span>
         {LEVEL_BG.map((bg) => (
           <span key={bg} className="rounded-[2px]" style={{ width: 9, height: 9, background: bg }} />
@@ -131,54 +132,61 @@ export function Dashboard({ greeting, onOpenFortune }: { greeting: string; onOpe
   const fortuneAction = todayEntry ? t("fortune.cardView") : t("fortune.cardDraw");
 
   return (
-    <div className="mx-auto flex w-full max-w-2xl flex-col items-center px-4 pb-5 pt-4">
-      <div className="mb-4 flex items-center justify-center gap-3">
-        <img src={AVATAR} alt="" className="size-9 rounded-xl border border-[#e6e9ee] bg-[#faf8fd] object-contain" />
-        <h1 className="text-[20px] font-semibold tracking-tight text-[#202124]">{greeting}</h1>
+    <main className="dashboard-root mx-auto w-full max-w-[1120px] pb-6 pt-5">
+      <header className="dashboard-greeting mb-5 flex items-center gap-3">
+        <img src={AVATAR} alt="" className="size-10 rounded-lg border border-[#e6e9ee] bg-[#faf8fd] object-contain" />
+        <h1 className="md-type-title-large font-semibold text-[#202124]">{greeting}</h1>
+      </header>
+
+      <div className="dashboard-layout grid min-w-0 gap-4">
+        {stats && (
+          <section className="dashboard-panel min-w-0 overflow-hidden rounded-lg border border-[#e6e9ee] bg-white shadow-[0_1px_3px_rgba(15,23,42,0.05)]">
+            <header className="flex items-center justify-between border-b border-[#eceff3] px-4 py-3">
+              <h2 className="md-type-title-small font-semibold text-[#202124]">{t("dashboard.overview")}</h2>
+              <span className="md-type-label-small text-[#9aa1ab]">
+                {t("dashboard.lastWeeks", { n: Math.round(stats.heatmap_days / 7) })}
+              </span>
+            </header>
+            <div className="dashboard-metrics grid grid-cols-2 sm:grid-cols-4">
+              {metrics.map((metric, index) => (
+                <Metric key={metric.label} index={index} label={metric.label} value={metric.value} />
+              ))}
+            </div>
+            <div className="dashboard-heatmap overflow-x-auto border-t border-[#eceff3] px-4 py-3">
+              <Heatmap cells={stats.heatmap} />
+            </div>
+          </section>
+        )}
+
+        {onOpenFortune && (
+          <button
+            type="button"
+            onClick={onOpenFortune}
+            className="dashboard-fortune cf-lift flex min-h-[180px] w-full flex-col items-start rounded-lg border border-[#e6e9ee] bg-white p-4 text-left shadow-[0_1px_3px_rgba(15,23,42,0.05)]"
+          >
+            <span className="dashboard-fortune-icon grid size-11 shrink-0 place-items-center rounded-lg bg-[#fde8f3]">
+              <svg viewBox="0 0 64 84" width="22" height="28" aria-hidden>
+                <path d="M10 30 Q10 26 14 26 L50 26 Q54 26 54 30 L50 76 Q50 80 46 80 L18 80 Q14 80 14 76 Z" fill="#8b3a2e" />
+                <ellipse cx="32" cy="28" rx="22" ry="4.5" fill="#5e221b" />
+                <g fill="#3a2a1e">
+                  <rect x="20" y="4" width="3" height="26" rx="1.5" />
+                  <rect x="29" y="2" width="3" height="28" rx="1.5" />
+                  <rect x="38" y="6" width="3" height="24" rx="1.5" />
+                </g>
+              </svg>
+            </span>
+            <span className="mt-4 min-w-0">
+              <span className="md-type-title-small block font-semibold text-[#202124]">{t("fortune.cardTitle")}</span>
+              <span className="md-type-body-small mt-1 block text-[#7a8088]">{fortuneDesc}</span>
+            </span>
+            <span className="dashboard-fortune-action md-type-label-medium mt-auto flex w-full items-center justify-between pt-4 font-semibold text-[#b91c1c]">
+              {fortuneAction}
+              <ChevronDownIcon size={16} className="-rotate-90" />
+            </span>
+          </button>
+        )}
       </div>
-
-      {stats && (
-        <div className="mb-4 w-full overflow-hidden rounded-xl border border-[#e6e9ee] bg-white shadow-[0_1px_3px_rgba(15,23,42,0.05)]">
-          <div className="flex items-center justify-between border-b border-[#eceff3] px-4 py-2">
-            <span className="text-[12px] font-semibold uppercase tracking-wide text-[#8a9099]">{t("dashboard.overview")}</span>
-            <span className="text-[11px] text-[#9aa1ab]">{t("dashboard.lastWeeks", { n: Math.round(stats.heatmap_days / 7) })}</span>
-          </div>
-          <div className="grid grid-cols-2 gap-2 p-2.5 sm:grid-cols-4">
-            {metrics.map((m, i) => (
-              <Metric key={m.label} index={i} label={m.label} value={m.value} />
-            ))}
-          </div>
-          <div className="overflow-x-auto px-3 pb-2.5 pt-0.5">
-            <Heatmap cells={stats.heatmap} />
-          </div>
-        </div>
-      )}
-
-      {onOpenFortune && (
-        <button
-          type="button"
-          onClick={onOpenFortune}
-          className="cf-lift mb-4 flex w-full items-center gap-3 rounded-xl border border-[#e6e9ee] bg-white px-4 py-3 text-left shadow-[0_1px_3px_rgba(15,23,42,0.05)]"
-        >
-          <span className="grid size-10 shrink-0 place-items-center rounded-lg bg-[#fff1e6] text-[#b91c1c]">
-            <svg viewBox="0 0 64 84" width="22" height="28" aria-hidden>
-              <path d="M10 30 Q10 26 14 26 L50 26 Q54 26 54 30 L50 76 Q50 80 46 80 L18 80 Q14 80 14 76 Z" fill="#8b3a2e" />
-              <ellipse cx="32" cy="28" rx="22" ry="4.5" fill="#5e221b" />
-              <g fill="#3a2a1e">
-                <rect x="20" y="4" width="3" height="26" rx="1.5" />
-                <rect x="29" y="2" width="3" height="28" rx="1.5" />
-                <rect x="38" y="6" width="3" height="24" rx="1.5" />
-              </g>
-            </svg>
-          </span>
-          <span className="min-w-0 flex-1">
-            <span className="block text-[13px] font-semibold text-[#202124]">{t("fortune.cardTitle")}</span>
-            <span className="block truncate text-[11px] text-[#7a8088]">{fortuneDesc}</span>
-          </span>
-          <span className="shrink-0 text-[12px] font-medium text-[#b91c1c]">{fortuneAction}</span>
-        </button>
-      )}
-    </div>
+    </main>
   );
 }
 

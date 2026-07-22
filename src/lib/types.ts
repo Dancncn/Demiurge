@@ -41,6 +41,7 @@ export type PermissionMode = "plan" | "default" | "auto" | "bypass";
 export type ReasoningEffort = "auto" | "low" | "medium" | "high" | "xhigh" | "max";
 export type Language = "zh" | "en";
 export type AppTheme = "system" | "light" | "dark";
+export type AppAppearance = "material_bloom" | "classic";
 export type WebSearchProvider = "auto" | "bing" | "duckduckgo" | "tavily" | "brave" | "exa";
 
 export interface ConnectionTestResult {
@@ -72,6 +73,7 @@ export interface Settings {
   /** UI language: "zh" (default) or "en". */
   language: Language;
   theme: AppTheme;
+  appearance: AppAppearance;
   launch_on_startup: boolean;
   reasoning_effort: ReasoningEffort;
   auto_memory_enabled: boolean;

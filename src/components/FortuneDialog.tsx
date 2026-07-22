@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { useI18n } from "../lib/i18n";
+import { SparklesIcon } from "./Icons";
 import {
   drawFortune,
   findEntry,
@@ -33,21 +34,17 @@ function FortuneTube({ className }: { className?: string }) {
           <stop offset="1" stopColor="#6e2a22" />
         </linearGradient>
       </defs>
-      {/* 签（顶部露出，长短不一） */}
       <g fill="#3a2a1e">
         <rect x="20" y="4" width="3" height="26" rx="1.5" />
         <rect x="29" y="2" width="3" height="28" rx="1.5" />
         <rect x="38" y="6" width="3" height="24" rx="1.5" />
       </g>
-      {/* 签筒主体 */}
       <path
         d="M10 30 Q10 26 14 26 L50 26 Q54 26 54 30 L50 76 Q50 80 46 80 L18 80 Q14 80 14 76 Z"
         fill="url(#cf-tube)"
       />
-      {/* 筒口 */}
       <ellipse cx="32" cy="28" rx="22" ry="4.5" fill="#5e221b" />
       <ellipse cx="32" cy="27" rx="20" ry="3.5" fill="#2a1a12" />
-      {/* 筒身饰带 */}
       <rect x="14" y="48" width="36" height="3" fill="#5e221b" opacity="0.55" />
     </svg>
   );
@@ -171,7 +168,7 @@ export default function FortuneDialog({ open, onClose }: Props) {
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-[#111827]/35 p-4 backdrop-blur-[2px]"
+      className="fortune-backdrop fixed inset-0 z-50 flex items-center justify-center bg-[#111827]/30 p-4"
       role="dialog"
       aria-modal="true"
       aria-label={t("fortune.title")}
@@ -179,45 +176,53 @@ export default function FortuneDialog({ open, onClose }: Props) {
       <div
         ref={dialogRef}
         tabIndex={-1}
-        className="cf-menu-in flex w-full max-w-md flex-col overflow-hidden rounded-2xl border border-[#d7dbe2] bg-white shadow-[0_24px_80px_rgba(15,23,42,0.28)] outline-none"
+        className="fortune-surface cf-menu-in flex max-h-[calc(100vh-32px)] w-full max-w-[470px] flex-col overflow-hidden rounded-lg border border-[#cfd4dc] bg-white shadow-[0_18px_48px_rgba(15,23,42,0.24)] outline-none"
       >
-        <header className="flex items-center justify-between border-b border-[#eceff3] bg-[#fbfcfd] px-5 py-3.5">
-          <div className="text-[15px] font-semibold text-[#202124]">{t("fortune.title")}</div>
+        <header className="fortune-header flex h-11 shrink-0 items-center justify-between border-b border-[#dde1e7] bg-[#f2f4f7] px-3">
+          <div className="md-type-title-small flex min-w-0 items-center gap-2 font-semibold text-[#252a31]">
+            <SparklesIcon size={15} className="fortune-accent text-[#8b3a2e]" />
+            <span className="truncate">{t("fortune.title")}</span>
+          </div>
           <button
             type="button"
             onClick={handleClose}
             aria-label={t("fortune.close")}
-            className="cf-press grid h-8 w-8 place-items-center rounded-md text-[#6f7782] transition hover:bg-[#eef1f5] hover:text-[#202124]"
+            className="md-icon-button cf-press grid size-7 place-items-center rounded text-[#66707d] transition hover:bg-[#e3e7ec] hover:text-[#202124]"
           >
-            <CloseIcon size={18} />
+            <CloseIcon size={16} />
           </button>
         </header>
 
-        <div className="flex min-h-0 flex-1 flex-col items-center px-6 py-8">
+        <div className="min-h-0 flex-1 overflow-y-auto">
           {phase === "guide" && (
-            <div className="cf-message-in flex flex-col items-center text-center">
-              <FortuneTube className="cf-breathe" />
-              <h2 className="mt-4 text-[20px] font-semibold tracking-tight text-[#202124]">
-                {t("fortune.guideTitle")}
-              </h2>
-              <p className="mt-2 max-w-[280px] text-[13px] leading-[1.7] text-[#6f7782]">
-                {t("fortune.guideDesc")}
-              </p>
-              <button
-                type="button"
-                data-autofocus
-                onClick={handleDraw}
-                className="cf-press mt-6 inline-flex h-10 items-center justify-center rounded-full bg-[#b91c1c] px-7 text-[14px] font-medium text-white shadow-[0_4px_14px_rgba(185,28,28,0.28)] transition hover:bg-[#a11616]"
-              >
-                {t("fortune.draw")}
-              </button>
+            <div className="cf-message-in">
+              <div className="grid min-h-[190px] grid-cols-[82px_minmax(0,1fr)] items-center gap-5 px-6 py-6">
+                <div className="grid h-[112px] place-items-center border-r border-[#e2e5ea] pr-5">
+                  <FortuneTube className="cf-breathe" />
+                </div>
+                <div className="min-w-0 text-left">
+                  <h2 className="md-type-title-medium font-semibold text-[#202124]">{t("fortune.guideTitle")}</h2>
+                  <p className="md-type-body-medium mt-2 text-[#66707d]">{t("fortune.guideDesc")}</p>
+                </div>
+              </div>
+              <footer className="flex justify-end border-t border-[#dde1e7] bg-[#f8f9fb] px-4 py-3">
+                <button
+                  type="button"
+                  data-autofocus
+                  onClick={handleDraw}
+                  className="fortune-primary-action md-button md-button-filled cf-press inline-flex items-center justify-center gap-1.5 rounded-md border border-[#8f2f25] bg-[#9f3b30] px-4 text-white transition hover:bg-[#8d3027]"
+                >
+                  <SparklesIcon size={14} />
+                  {t("fortune.draw")}
+                </button>
+              </footer>
             </div>
           )}
 
           {phase === "shaking" && (
-            <div className="flex flex-col items-center text-center">
+            <div className="flex min-h-[246px] flex-col items-center justify-center px-6 py-8 text-center">
               <FortuneTube className="cf-shake" />
-              <p className="mt-6 text-[13px] text-[#8a9099]">{t("fortune.drawing")}</p>
+              <p className="md-type-body-medium mt-5 text-[#737b86]">{t("fortune.drawing")}</p>
             </div>
           )}
 
@@ -227,9 +232,9 @@ export default function FortuneDialog({ open, onClose }: Props) {
 
           {phase === "result" && !entry && (
             // 今日已抽但签文数据缺失（版本回退/签文库裁剪）：温和兜底，允许重抽。
-            <div className="cf-message-in flex flex-col items-center text-center">
-              <p className="text-[13px] text-[#6f7782]">{t("fortune.missingKey")}</p>
-              <div className="mt-6 flex gap-2">
+            <div className="cf-message-in">
+              <div className="md-type-body-medium px-6 py-8 text-[#66707d]">{t("fortune.missingKey")}</div>
+              <div className="flex justify-end gap-2 border-t border-[#dde1e7] bg-[#f8f9fb] px-4 py-3">
                 <button
                   type="button"
                   data-autofocus
@@ -238,14 +243,14 @@ export default function FortuneDialog({ open, onClose }: Props) {
                     setEntry(null);
                     setPhase("guide");
                   }}
-                  className="cf-press inline-flex h-9 items-center rounded-md bg-[#b91c1c] px-5 text-[13px] font-medium text-white hover:bg-[#a11616]"
+                  className="fortune-primary-action md-button md-button-filled cf-press inline-flex items-center rounded-md border border-[#8f2f25] bg-[#9f3b30] px-4 text-white hover:bg-[#8d3027]"
                 >
                   {t("fortune.redraw")}
                 </button>
                 <button
                   type="button"
                   onClick={handleClose}
-                  className="cf-press inline-flex h-9 items-center rounded-md border border-[#d9d9d9] bg-white px-5 text-[13px] font-medium text-[#344054] hover:bg-[#f5f5f5]"
+                  className="md-button md-button-outlined cf-press inline-flex items-center rounded-md border border-[#cfd5dd] bg-white px-4 text-[#344054] hover:bg-[#eef1f4]"
                 >
                   {t("fortune.close")}
                 </button>
@@ -272,71 +277,71 @@ function ResultView({
   const verses = entry.verse.split("／");
 
   return (
-    <div className="cf-fall w-full" aria-live="polite">
-      {/* 顶部装饰条：等级强调色 */}
-      <div className="mx-auto mb-5 h-1 w-16 rounded-full" style={{ background: meta.accent }} />
+    <div className="cf-fall flex min-h-0 w-full flex-col" aria-live="polite">
+      <div className="px-6 pb-5 pt-5">
+        {/* 等级标签 + 签号 */}
+        <div className="cf-rise flex items-center gap-2" style={{ "--i": 0 } as CSSProperties}>
+          <span
+            className="fortune-level-chip md-type-label-small rounded-[3px] border px-2 py-0.5 font-semibold"
+            style={{ background: meta.chipBg, borderColor: `${meta.accent}55`, color: meta.chipText }}
+          >
+            {levelLabel}
+          </span>
+          <span className="md-type-label-small text-[#8a929d]">{entry.id}</span>
+        </div>
 
-      {/* 等级标签 + 签号 */}
-      <div className="cf-rise flex items-center justify-center gap-2" style={{ "--i": 0 } as CSSProperties}>
-        <span
-          className="rounded-full px-3 py-1 text-[12px] font-semibold"
-          style={{ background: meta.chipBg, color: meta.chipText }}
+        {/* 签题 */}
+        <h2
+          className="fortune-title md-type-title-large cf-rise mt-3 font-semibold"
+          style={{ "--i": 1, color: meta.accent } as CSSProperties}
         >
-          {levelLabel}
-        </span>
-        <span className="text-[11px] text-[#9aa1ab]">{entry.id}</span>
-      </div>
+          {entry.title}
+        </h2>
 
-      {/* 签题 */}
-      <h2
-        className="cf-rise mt-4 text-center text-[26px] font-semibold tracking-[0.04em]"
-        style={{ "--i": 1, color: meta.accent } as CSSProperties}
-      >
-        {entry.title}
-      </h2>
-
-      {/* 签诗 */}
-      <div
-        className="cf-rise mt-3 text-center text-[15px] leading-[2] text-[#3f3f3f]"
-        style={{ "--i": 2 } as CSSProperties}
-      >
-        {verses.map((line, i) => (
-          <div key={i}>{line}</div>
-        ))}
+        {/* 签诗 */}
+        <div
+          className="fortune-verse md-type-body-large cf-rise mt-3 border-l-2 pl-4 leading-7 text-[#3f454d]"
+          style={{ "--i": 2, borderColor: `${meta.accent}88` } as CSSProperties}
+        >
+          {verses.map((line, i) => (
+            <div key={i}>{line}</div>
+          ))}
+        </div>
       </div>
 
       {/* 解签 */}
       <div
-        className="cf-rise mt-5 w-full rounded-lg border border-[#eceff3] bg-[#fbfcfd] px-4 py-3 text-[13px] leading-[1.75] text-[#59616d]"
+        className="md-type-body-medium cf-rise border-y border-[#e1e5ea] bg-[#f7f8fa] px-6 py-4 text-[#59616d]"
         style={{ "--i": 3 } as CSSProperties}
       >
-        <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-[#9aa1ab]">
-          {t("fortune.interpretation")}
-        </div>
+        <div className="md-type-label-small mb-1 font-semibold text-[#737b86]">{t("fortune.interpretation")}</div>
         {entry.interpretation}
       </div>
 
       {/* 祝福 */}
       <div
-        className="cf-rise mt-4 text-center text-[14px] font-medium leading-[1.7]"
+        className="fortune-blessing md-type-body-medium cf-rise px-6 py-4 font-medium"
         style={{ "--i": 4, color: meta.accent } as CSSProperties}
       >
         {entry.blessing}
       </div>
 
       {/* 明日再来提示 + 关闭 */}
-      <div className="cf-rise mt-6 flex flex-col items-center gap-3" style={{ "--i": 5 } as CSSProperties}>
-        <p className="text-[12px] text-[#9aa1ab]">{t("fortune.tomorrow")}</p>
+      <footer
+        className="cf-rise flex items-center justify-between gap-4 border-t border-[#dde1e7] bg-[#f8f9fb] px-4 py-3"
+        style={{ "--i": 5 } as CSSProperties}
+      >
+        <p className="md-type-body-small min-w-0 text-[#8a929d]">{t("fortune.tomorrow")}</p>
         <button
           type="button"
           data-autofocus
           onClick={onClose}
-          className="cf-press inline-flex h-10 items-center justify-center rounded-full px-7 text-[14px] font-medium text-white transition"
-          style={{ background: meta.accent }}
+          className="fortune-primary-action md-button md-button-filled cf-press inline-flex shrink-0 items-center justify-center rounded-md border px-4 text-white transition"
+          style={{ background: meta.accent, borderColor: meta.accent }}
         >
           {t("fortune.close")}
         </button>
-      </div>
+      </footer>
     </div>
   );
 }

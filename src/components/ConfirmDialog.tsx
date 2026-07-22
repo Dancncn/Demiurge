@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useId, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import type { ConfirmRequestEvent, PermissionMode, PermissionScope, ToolRisk } from "../lib/types";
 import DiffPreview from "./DiffPreview";
+import { SegmentedControl } from "./SegmentedControl";
 
 interface Props {
   req: ConfirmRequestEvent | null;
@@ -46,22 +47,76 @@ function approvalLabel(tool: string) {
 
 export default function ConfirmDialog({ req, mode, onRespond }: Props) {
   const [scope, setScope] = useState<PermissionScope>("once");
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+  const rejectRef = useRef<HTMLButtonElement | null>(null);
+  const titleId = useId();
+  const summaryId = useId();
 
   useEffect(() => {
     setScope("once");
   }, [req?.id]);
+
+  useEffect(() => {
+    if (!req) return;
+    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const frame = requestAnimationFrame(() => rejectRef.current?.focus());
+    return () => {
+      cancelAnimationFrame(frame);
+      previousFocus?.focus();
+    };
+  }, [req?.id]);
+
+  function handleDialogKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      onRespond(false, scope);
+      return;
+    }
+    if (event.key !== "Tab") return;
+    const focusable = Array.from(
+      dialogRef.current?.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      ) ?? [],
+    );
+    if (focusable.length === 0) {
+      event.preventDefault();
+      dialogRef.current?.focus();
+      return;
+    }
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (!dialogRef.current?.contains(document.activeElement)) {
+      event.preventDefault();
+      (event.shiftKey ? last : first).focus();
+    } else if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  }
 
   if (!req) return null;
   const isEditTool = editTools.has(req.tool);
   const confirmLabel = approvalLabel(req.tool);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#111827]/35 p-4 backdrop-blur-[2px]">
-      <div className="flex max-h-[88vh] w-full max-w-3xl flex-col overflow-hidden rounded-xl border border-[#d7dbe2] bg-white shadow-[0_24px_80px_rgba(15,23,42,0.28)]">
+    <div className="permission-dialog-backdrop fixed inset-0 z-50 flex items-center justify-center bg-[#111827]/35 p-4 backdrop-blur-[2px]">
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        aria-describedby={req.summary ? summaryId : undefined}
+        tabIndex={-1}
+        onKeyDown={handleDialogKeyDown}
+        className="permission-dialog-surface flex max-h-[88vh] w-full max-w-3xl flex-col overflow-hidden rounded-xl border border-[#d7dbe2] bg-white shadow-[0_24px_80px_rgba(15,23,42,0.28)]"
+      >
         <header className="border-b border-[#eceff3] bg-[#fbfcfd] px-5 py-4">
           <div className="flex items-start justify-between gap-4">
             <div className="min-w-0">
-              <div className="text-[15px] font-semibold text-[#202124]">
+              <div id={titleId} className="text-[15px] font-semibold text-[#202124]">
                 {isEditTool ? "Confirm File Change" : "Approve Tool Call"}
               </div>
               <div className="mt-1 flex flex-wrap items-center gap-2 text-[12px] text-[#6f7782]">
@@ -75,7 +130,7 @@ export default function ConfirmDialog({ req, mode, onRespond }: Props) {
             </div>
           </div>
           {req.summary && (
-            <div className="mt-3 rounded-lg border border-[#e2e5ea] bg-white px-3 py-2 text-[13px] text-[#344054]">
+            <div id={summaryId} className="mt-3 rounded-lg border border-[#e2e5ea] bg-white px-3 py-2 text-[13px] text-[#344054]">
               {req.summary}
             </div>
           )}
@@ -130,32 +185,25 @@ export default function ConfirmDialog({ req, mode, onRespond }: Props) {
         </div>
 
         <footer className="border-t border-[#eceff3] bg-[#fbfcfd] px-5 py-4">
-          <div className="grid grid-cols-2 gap-2 rounded-lg bg-[#eef1f5] p-1 text-xs sm:grid-cols-4">
-            {scopeOptions.map((option) => (
-              <button
-                key={option.value}
-                type="button"
-                className={`rounded-md px-3 py-2 text-left transition ${
-                  scope === option.value ? "bg-white text-[#111827] shadow-sm" : "text-[#59616d] hover:text-[#202124]"
-                }`}
-                onClick={() => setScope(option.value)}
-              >
-                <span className="block font-medium">{option.label}</span>
-                <span className="mt-0.5 block truncate text-[11px] text-[#8a9099]">{option.detail}</span>
-              </button>
-            ))}
-          </div>
+          <SegmentedControl
+            value={scope}
+            options={scopeOptions.map((option) => ({ ...option, hint: option.detail }))}
+            onChange={setScope}
+            ariaLabel="Permission duration"
+            className="permission-scope-control"
+          />
           <div className="mt-4 flex justify-end gap-2">
             <button
+              ref={rejectRef}
               type="button"
-              className="cf-press inline-flex h-9 items-center justify-center rounded-md border border-[#d9d9d9] bg-white px-4 text-[13px] font-medium text-[#344054] hover:bg-[#f5f5f5]"
+              className="md-button md-button-outlined cf-press inline-flex h-9 items-center justify-center rounded-md border border-[#d9d9d9] bg-white px-4 text-[13px] font-medium text-[#344054] hover:bg-[#f5f5f5]"
               onClick={() => onRespond(false, scope)}
             >
               Reject
             </button>
             <button
               type="button"
-              className="cf-press inline-flex h-9 items-center justify-center rounded-md bg-[#111827] px-4 text-[13px] font-medium text-white hover:bg-[#2b3442]"
+              className="md-button md-button-filled cf-press inline-flex h-9 items-center justify-center rounded-md bg-[#111827] px-4 text-[13px] font-medium text-white hover:bg-[#2b3442]"
               onClick={() => onRespond(true, scope)}
             >
               {confirmLabel}

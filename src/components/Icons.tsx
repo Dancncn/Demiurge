@@ -40,6 +40,16 @@ export function ComposeIcon(props: IconProps) {
   );
 }
 
+export function ChatIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4Z" />
+      <path d="M8 9h8" />
+      <path d="M8 13h5" />
+    </Icon>
+  );
+}
+
 export function ArrowUpIcon(props: IconProps) {
   return (
     <Icon strokeWidth={2.2} {...props}>
@@ -305,12 +315,36 @@ export function MicIcon(props: IconProps) {
   );
 }
 
+export function MicOffIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <path d="m3 3 18 18" />
+      <path d="M9 9v2a3 3 0 0 0 4.9 2.3" />
+      <path d="M15 9.3V5a3 3 0 0 0-5.7-1.3" />
+      <path d="M17.3 16.1A7 7 0 0 1 5 11v-1" />
+      <path d="M19 10v1c0 .9-.17 1.77-.48 2.56" />
+      <path d="M12 18v4" />
+      <path d="M8 22h8" />
+    </Icon>
+  );
+}
+
 export function VolumeIcon(props: IconProps) {
   return (
     <Icon strokeWidth={1.8} {...props}>
       <path d="M11 5 6 9H3v6h3l5 4Z" />
       <path d="M15.5 8.5a5 5 0 0 1 0 7" />
       <path d="M18.5 5.5a9 9 0 0 1 0 13" />
+    </Icon>
+  );
+}
+
+export function VolumeOffIcon(props: IconProps) {
+  return (
+    <Icon strokeWidth={1.8} {...props}>
+      <path d="M11 5 6 9H3v6h3l5 4Z" />
+      <path d="m16 9 5 5" />
+      <path d="m21 9-5 5" />
     </Icon>
   );
 }

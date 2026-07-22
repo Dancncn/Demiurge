@@ -98,7 +98,7 @@ export function Select({
   }
 
   return (
-    <div ref={ref} className="relative">
+    <div ref={ref} className="md-select relative">
       <button
         type="button"
         disabled={disabled}
@@ -106,9 +106,9 @@ export function Select({
         aria-expanded={open}
         onClick={() => setOpen((v) => !v)}
         onKeyDown={onKeyDown}
-        className={`cf-press ${
+        className={`md-select-trigger cf-press ${
           triggerClassName ??
-          "flex h-8 w-full items-center gap-1.5 rounded-lg border border-[#e4e7ec] bg-[#fbfcfd] px-2.5 text-[13px] text-[#202124] outline-none transition hover:border-[#cfd5dd] hover:bg-white focus:border-[#bcc2cb] focus:bg-white focus:shadow-[0_0_0_3px_rgba(17,24,39,0.06)] disabled:cursor-not-allowed disabled:opacity-50"
+          "md-type-body-medium flex h-10 w-full items-center gap-1.5 rounded-lg border border-[#e4e7ec] bg-[#fbfcfd] px-2.5 text-[#202124] outline-none transition hover:border-[#cfd5dd] hover:bg-white focus:border-[#bcc2cb] focus:bg-white focus:shadow-[0_0_0_3px_rgba(17,24,39,0.06)] disabled:cursor-not-allowed disabled:opacity-50"
         }`}
       >
         {selected?.icon && <span className="shrink-0">{selected.icon}</span>}
@@ -151,8 +151,8 @@ export function Select({
               >
                 {o.icon && <span className="shrink-0">{o.icon}</span>}
                 <span className="min-w-0 flex-1">
-                  <span className="block truncate text-[13px] font-medium">{o.label}</span>
-                  {o.hint && <span className="mt-0.5 block truncate text-[11px] text-[#8a9099]">{o.hint}</span>}
+                  <span className="md-type-body-medium block truncate">{o.label}</span>
+                  {o.hint && <span className="md-type-label-small mt-0.5 block truncate text-[#8a9099]">{o.hint}</span>}
                 </span>
                 {active && <CheckIcon size={15} className="shrink-0 text-[#111827]" />}
               </button>

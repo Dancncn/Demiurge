@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import * as api from "./api";
-import type { Settings } from "./types";
+import { haltAudioPlayback } from "./audioPlayback";
+import type { Settings, VoiceStatus } from "./types";
 
 export interface StreamingTtsStatus {
   active: boolean;
@@ -15,8 +16,8 @@ export interface StreamingTtsStatus {
 const SENTENCE_END_RE = /[。！？!?；;]+["'”’）】》]*|\n{2,}/;
 const LONG_FRAGMENT_CHARS = 180;
 
-function ttsAvailable(settings: Settings | null) {
-  return !!settings?.voice_enabled && !!settings.voice_tts_backend && settings.voice_tts_backend !== "none";
+function ttsAvailable(settings: Settings | null, readiness: VoiceStatus | null) {
+  return !!settings?.voice_enabled && readiness?.enabled === true && readiness.tts_ready;
 }
 
 function takeSentence(buffer: string, flush: boolean): { sentence: string; rest: string } | null {
@@ -44,6 +45,8 @@ export function useStreamingTtsQueue(settings: Settings | null) {
   const generationRef = useRef(0);
   const activeRef = useRef(false);
   const mutedRef = useRef(false);
+  const readinessRef = useRef<VoiceStatus | null>(null);
+  const [available, setAvailable] = useState(false);
 
   const [status, setStatus] = useState<StreamingTtsStatus>({
     active: false,
@@ -69,6 +72,26 @@ export function useStreamingTtsQueue(settings: Settings | null) {
     }));
   }, []);
 
+  useEffect(() => {
+    let cancelled = false;
+    readinessRef.current = null;
+    setAvailable(false);
+    if (!settings?.voice_enabled) return;
+    void api
+      .voiceStatus()
+      .then((next) => {
+        if (cancelled) return;
+        readinessRef.current = next;
+        setAvailable(ttsAvailable(settingsRef.current, next));
+      })
+      .catch((error) => {
+        if (!cancelled) refreshStatus({ error: String(error) });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [settings, refreshStatus]);
+
   const stopAudio = useCallback(() => {
     generationRef.current += 1;
     const finishAudio = finishAudioRef.current;
@@ -78,8 +101,7 @@ export function useStreamingTtsQueue(settings: Settings | null) {
     if (audio) {
       audio.onended = null;
       audio.onerror = null;
-      audio.pause();
-      audio.src = "";
+      haltAudioPlayback(audio);
     }
     finishAudio?.();
   }, []);
@@ -92,7 +114,7 @@ export function useStreamingTtsQueue(settings: Settings | null) {
         const text = queueRef.current.shift() ?? "";
         if (!text.trim()) continue;
         const settings = settingsRef.current;
-        if (!ttsAvailable(settings)) {
+        if (!ttsAvailable(settings, readinessRef.current)) {
           refreshStatus({ error: "TTS backend is not ready.", speaking: false, currentText: "" });
           break;
         }
@@ -123,7 +145,6 @@ export function useStreamingTtsQueue(settings: Settings | null) {
               settle(() => reject(err instanceof Error ? err : new Error(String(err))));
             audioRef.current = audio;
             finishAudioRef.current = cancelPlayback;
-            audio.playbackRate = settings?.voice_speed || 1;
             audio.onended = () => settle(resolve);
             audio.onerror = () => failPlayback(new Error("Audio playback failed."));
             void audio.play().catch(failPlayback);
@@ -173,7 +194,7 @@ export function useStreamingTtsQueue(settings: Settings | null) {
       stopAudio();
       queueRef.current = [];
       bufferRef.current = "";
-      activeRef.current = active && ttsAvailable(settingsRef.current);
+      activeRef.current = active && ttsAvailable(settingsRef.current, readinessRef.current);
       refreshStatus({ speaking: false, currentText: "", error: "" });
     },
     [refreshStatus, stopAudio],
@@ -233,7 +254,7 @@ export function useStreamingTtsQueue(settings: Settings | null) {
   useEffect(() => stop, [stop]);
 
   return {
-    available: ttsAvailable(settings),
+    available,
     status,
     beginTurn,
     pushText,

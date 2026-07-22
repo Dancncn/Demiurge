@@ -23,6 +23,7 @@ import { Select } from "./Select";
 import { ContextMeter } from "./ContextMeter";
 import { findProvider, REASONING_EFFORTS } from "../lib/providers";
 import { useI18n } from "../lib/i18n";
+import { recordedAudioSizeError } from "../lib/voiceCapture";
 import type { PermissionMode, ProviderKind, ReasoningEffort, WorkspaceState } from "../lib/types";
 import { BranchSwitcher } from "./BranchSwitcher";
 
@@ -89,8 +90,9 @@ type Props = {
 };
 
 const ghostChip =
-  "flex h-7 max-w-[150px] items-center gap-1 rounded-md px-2 text-[12px] font-medium text-[#5f6368] outline-none transition hover:bg-[#eef1f5]";
-const ghostIcon = "cf-press grid size-7 shrink-0 place-items-center rounded-md text-[#6f7782] hover:bg-[#eef1f5]";
+  "md-button md-button-text flex h-7 max-w-[150px] items-center gap-1 rounded-md px-2 text-[12px] font-medium text-[#5f6368] outline-none transition hover:bg-[#eef1f5]";
+const ghostIcon =
+  "md-icon-button cf-press grid size-7 shrink-0 place-items-center rounded-md text-[#6f7782] hover:bg-[#eef1f5]";
 
 export function Composer({
   input,
@@ -190,6 +192,20 @@ export function Composer({
     voiceToastTimerRef.current = setTimeout(() => setVoiceToast(null), 2600);
   }
 
+  async function voiceCaptureReady() {
+    try {
+      const status = await api.voiceStatus();
+      if (!status.enabled || !status.ready) {
+        showVoiceToast(status.reason || t("composer.voiceBackendMissing"));
+        return false;
+      }
+      return true;
+    } catch (error) {
+      showVoiceToast(String(error) || t("composer.voiceBackendMissing"));
+      return false;
+    }
+  }
+
   // 释放当前占用的麦克风流（停止所有 track）。
   function releaseStream() {
     mediaStreamRef.current?.getTracks().forEach((track) => track.stop());
@@ -235,8 +251,9 @@ export function Composer({
 
   // 打开设备菜单：先触发一次授权以拿到 label，再枚举。
   async function openVoiceMenu() {
-    setMenuOpen(true);
     if (!voiceSupported) return;
+    if (!(await voiceCaptureReady())) return;
+    setMenuOpen(true);
     try {
       const probe = await navigator.mediaDevices.getUserMedia({ audio: true });
       probe.getTracks().forEach((t) => t.stop()); // 立即释放探测流
@@ -277,6 +294,11 @@ export function Composer({
   // 把录音 Blob 通过后端 STT 转写为文本并追加到输入框。
   async function transcribe(blob: Blob) {
     try {
+      const sizeError = recordedAudioSizeError(blob.size);
+      if (sizeError) {
+        showVoiceToast(sizeError);
+        return;
+      }
       const status = await api.voiceStatus();
       if (!status.ready) {
         showVoiceToast(status.reason || t("composer.voiceBackendMissing"));
@@ -305,6 +327,7 @@ export function Composer({
       showVoiceToast(t("composer.voiceUnsupported"));
       return;
     }
+    if (!(await voiceCaptureReady())) return;
     try {
       const constraints: MediaStreamConstraints = {
         audio: selectedDeviceId ? { deviceId: { exact: selectedDeviceId } } : true,
@@ -419,7 +442,7 @@ export function Composer({
     }
   }
 
-  const permissionTrigger = `flex h-7 items-center gap-1 rounded-md px-2 text-[12px] font-medium outline-none transition ${
+  const permissionTrigger = `md-button md-button-text flex h-7 items-center gap-1 rounded-md px-2 text-[12px] font-medium outline-none transition ${
     permissionMode === "bypass"
       ? "bg-[#fff0f0] text-[#b42318] hover:bg-[#ffe6e6]"
       : permissionMode === "plan"
@@ -428,7 +451,7 @@ export function Composer({
   }`;
 
   return (
-    <div className="shrink-0 px-4 pb-3 pt-2">
+    <div className="app-composer shrink-0 px-4 pb-3 pt-2">
       <form
         onSubmit={(event) => {
           event.preventDefault();
@@ -482,7 +505,7 @@ export function Composer({
           </div>
         )}
 
-        <div className="rounded-2xl border border-[#dfe3e8] bg-white px-1 py-1 shadow-[0_1px_3px_rgba(15,23,42,0.06)] transition focus-within:border-[#c2c8d0] focus-within:shadow-[0_2px_10px_rgba(15,23,42,0.08)]">
+        <div className="app-composer-input rounded-2xl border border-[#dfe3e8] bg-white px-1 py-1 shadow-[0_1px_3px_rgba(15,23,42,0.06)] transition focus-within:border-[#c2c8d0] focus-within:shadow-[0_2px_10px_rgba(15,23,42,0.08)]">
           {attachments.length > 0 && (
             <div className="mb-1 flex max-h-28 flex-wrap gap-2 overflow-y-auto px-2 pt-1">
               {attachments.map((attachment) => (
@@ -533,8 +556,8 @@ export function Composer({
         </div>
 
         {/* Control strip — separated from the input box; smaller, lighter buttons. */}
-        <div className="mt-1.5 flex items-center justify-between gap-2 px-0.5">
-          <div className="flex min-w-0 items-center gap-0.5">
+        <div className="app-composer-controls mt-1.5 flex items-center justify-between gap-2 px-0.5">
+          <div className="app-composer-controls-start flex min-w-0 items-center gap-0.5">
             <input
               ref={fileInputRef}
               type="file"
@@ -580,7 +603,7 @@ export function Composer({
                 aria-label={t("composer.voicePick")}
                 aria-haspopup="menu"
                 aria-expanded={menuOpen}
-                className="cf-press -ml-1 grid h-7 w-4 shrink-0 place-items-center rounded-md text-[#9aa1ab] hover:bg-[#eef1f5]"
+                className="md-icon-button md-icon-button-narrow cf-press -ml-1 grid h-7 w-4 shrink-0 place-items-center rounded-md text-[#9aa1ab] hover:bg-[#eef1f5]"
               >
                 <ChevronDownIcon
                   size={12}
@@ -637,7 +660,7 @@ export function Composer({
             />
           </div>
 
-          <div className="flex min-w-0 items-center gap-0.5">
+          <div className="app-composer-controls-end flex min-w-0 items-center gap-0.5">
             <Select
               value={model}
               onChange={onSetModel}
@@ -660,7 +683,7 @@ export function Composer({
               type={loading ? "button" : "submit"}
               onClick={loading ? onStop : undefined}
               disabled={!loading && !readyToSend}
-              className="cf-press ml-0.5 grid size-8 shrink-0 place-items-center rounded-full bg-[#111827] text-white hover:scale-105 hover:bg-[#2b3442] disabled:scale-100 disabled:bg-[#c7ccd4] disabled:hover:bg-[#c7ccd4]"
+              className="app-primary-action md-icon-button md-icon-button-filled cf-press ml-0.5 grid size-8 shrink-0 place-items-center rounded-full bg-[#111827] text-white hover:scale-105 hover:bg-[#2b3442] disabled:scale-100 disabled:bg-[#c7ccd4] disabled:hover:bg-[#c7ccd4]"
               aria-label={loading ? t("composer.stop") : t("composer.send")}
             >
               {loading ? <StopIcon size={14} /> : <ArrowUpIcon size={18} />}
