@@ -1,11 +1,13 @@
+use std::fmt::Display;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use futures_util::StreamExt;
+use futures_util::{pin_mut, Stream, StreamExt};
 use serde_json::{json, Value};
 
 use crate::agent::conversation::{FunctionCall, Message, ToolCall};
 use crate::store::Settings;
 
+use super::sse::{SseDecoder, SseEvent};
 use super::{
     merge_usage, normalize_finish_reason, require_api_key, AssistantTurn, ProviderAdapterKind,
     ProviderProfile, StreamDelta, StructuredOutputRequest, Usage,
@@ -37,7 +39,7 @@ pub async fn stream_completion_with_profile(
     cfg: &Settings,
     messages: &[Message],
     tools: &Value,
-    mut on_delta: impl FnMut(StreamDelta<'_>),
+    on_delta: impl FnMut(StreamDelta<'_>),
     cancel: &AtomicBool,
     profile: ProviderProfile,
 ) -> Result<AssistantTurn, String> {
@@ -64,30 +66,60 @@ pub async fn stream_completion_with_profile(
         return Err(format!("Gemini 返回 HTTP {code}：{txt}"));
     }
 
-    let mut stream = resp.bytes_stream();
-    let mut buf = Vec::<u8>::new();
-    let mut state = GeminiStreamState::default();
+    consume_gemini_stream(resp.bytes_stream(), on_delta, cancel).await
+}
 
-    while let Some(chunk) = stream.next().await {
+async fn consume_gemini_stream<S, B, E>(
+    stream: S,
+    mut on_delta: impl FnMut(StreamDelta<'_>),
+    cancel: &AtomicBool,
+) -> Result<AssistantTurn, String>
+where
+    S: Stream<Item = Result<B, E>>,
+    B: AsRef<[u8]>,
+    E: Display,
+{
+    pin_mut!(stream);
+    let mut decoder = SseDecoder::new();
+    let mut state = GeminiStreamState::default();
+    let mut terminated = false;
+
+    'outer: while let Some(chunk) = stream.next().await {
         if cancel.load(Ordering::Relaxed) {
             state.finish = "interrupted".to_string();
-            break;
+            return Ok(state.finish());
         }
         let bytes = chunk.map_err(|e| format!("读取 Gemini 流失败：{e}"))?;
-        buf.extend_from_slice(&bytes);
-        while let Some(pos) = buf.iter().position(|&b| b == b'\n') {
-            let line_bytes: Vec<u8> = buf.drain(..=pos).collect();
-            let line = String::from_utf8_lossy(&line_bytes);
-            let line = line.trim();
-            let Some(data) = line.strip_prefix("data:") else {
-                continue;
-            };
-            let data = data.trim();
-            if data.is_empty() {
-                continue;
+        for event in decoder
+            .push(bytes.as_ref())
+            .map_err(|error| format!("Invalid Gemini SSE framing: {error}"))?
+        {
+            if process_gemini_sse_event(&event, &mut state, &mut on_delta)? {
+                terminated = true;
+                break 'outer;
             }
-            parse_gemini_stream_data(data, &mut state, &mut on_delta);
         }
+    }
+
+    if cancel.load(Ordering::Relaxed) {
+        state.finish = "interrupted".to_string();
+        return Ok(state.finish());
+    }
+
+    if !terminated {
+        for event in decoder
+            .finish()
+            .map_err(|error| format!("Invalid Gemini SSE framing: {error}"))?
+        {
+            if process_gemini_sse_event(&event, &mut state, &mut on_delta)? {
+                terminated = true;
+                break;
+            }
+        }
+    }
+
+    if !terminated {
+        return Err("Gemini stream ended before protocol terminator finishReason".to_string());
     }
 
     Ok(state.finish())
@@ -202,6 +234,7 @@ struct GeminiStreamState {
     tool_calls: Vec<ToolCall>,
     finish: String,
     usage: Option<Usage>,
+    terminated: bool,
 }
 
 impl GeminiStreamState {
@@ -224,16 +257,34 @@ fn parse_gemini_stream_data(
     data: &str,
     state: &mut GeminiStreamState,
     on_delta: &mut impl FnMut(StreamDelta<'_>),
-) {
-    let Ok(v) = serde_json::from_str::<Value>(data) else {
-        return;
-    };
+) -> Result<(), String> {
+    let v = serde_json::from_str::<Value>(data)
+        .map_err(|error| format!("Invalid Gemini stream event: {error}; data={data}"))?;
+    if let Some(error) = v.get("error").filter(|error| !error.is_null()) {
+        let code = error.get("code").filter(|code| !code.is_null());
+        let status = error.get("status").and_then(Value::as_str);
+        let message = error.get("message").and_then(Value::as_str);
+        let mut details = Vec::new();
+        if let Some(status) = status {
+            details.push(status.to_string());
+        }
+        if let Some(code) = code {
+            details.push(format!("code={code}"));
+        }
+        if let Some(message) = message {
+            details.push(message.to_string());
+        }
+        if details.is_empty() {
+            details.push(error.to_string());
+        }
+        return Err(format!("Gemini stream error: {}", details.join(": ")));
+    }
     if let Some(usage) = parse_gemini_usage(&v["usageMetadata"]) {
         merge_usage(&mut state.usage, usage);
     }
 
     let Some(candidate) = v["candidates"].get(0) else {
-        return;
+        return Ok(());
     };
     if let Some(parts) = candidate["content"]["parts"].as_array() {
         for part in parts {
@@ -271,8 +322,32 @@ fn parse_gemini_stream_data(
         }
     }
     if let Some(finish) = candidate["finishReason"].as_str() {
-        state.finish = finish.to_string();
+        if !finish.is_empty() {
+            state.finish = finish.to_string();
+            state.terminated = true;
+        }
     }
+    Ok(())
+}
+
+fn process_gemini_sse_event(
+    event: &SseEvent,
+    state: &mut GeminiStreamState,
+    on_delta: &mut impl FnMut(StreamDelta<'_>),
+) -> Result<bool, String> {
+    let data = event.data.trim();
+    if data.is_empty() {
+        if event.event.as_deref() == Some("error") {
+            return Err("Gemini stream error without details".to_string());
+        }
+        return Ok(false);
+    }
+    if event.event.as_deref() == Some("error") {
+        return Err(format!("Gemini stream error: {data}"));
+    }
+
+    parse_gemini_stream_data(data, state, on_delta)?;
+    Ok(state.terminated)
 }
 
 fn parse_gemini_usage(v: &Value) -> Option<Usage> {
@@ -388,7 +463,8 @@ mod tests {
                     deltas.push_str(s);
                 }
             },
-        );
+        )
+        .unwrap();
         let turn = state.finish();
         assert_eq!(deltas, "hi");
         assert_eq!(turn.finish_reason, "tool_calls");
@@ -408,7 +484,8 @@ mod tests {
                     deltas.push_str(s);
                 }
             },
-        );
+        )
+        .unwrap();
         let turn = state.finish();
         assert_eq!(deltas, "visible");
         assert_eq!(turn.content, "visible");
@@ -421,10 +498,86 @@ mod tests {
             r#"{"usageMetadata":{"promptTokenCount":21,"candidatesTokenCount":5,"totalTokenCount":26}}"#,
             &mut state,
             &mut |_| {},
-        );
+        )
+        .unwrap();
         let usage = state.finish().usage.unwrap();
         assert_eq!(usage.input_tokens, Some(21));
         assert_eq!(usage.output_tokens, Some(5));
         assert_eq!(usage.total_tokens, Some(26));
+    }
+
+    #[tokio::test]
+    async fn gemini_sse_handles_byte_fragmentation_multiline_data_and_finish_tail() {
+        let input = concat!(
+            ": keep-alive\r\n",
+            "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"你\"}]},\r\n",
+            "data: \"finishReason\":\"STOP\"}]}"
+        );
+        let chunks = input
+            .as_bytes()
+            .iter()
+            .map(|byte| Ok::<_, &'static str>(vec![*byte]))
+            .collect::<Vec<_>>();
+        let cancel = AtomicBool::new(false);
+        let mut rendered = String::new();
+
+        let turn = consume_gemini_stream(
+            futures_util::stream::iter(chunks),
+            |delta| {
+                if let StreamDelta::Content(text) = delta {
+                    rendered.push_str(text);
+                }
+            },
+            &cancel,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(rendered, "你");
+        assert_eq!(turn.content, "你");
+        assert_eq!(turn.finish_reason, "stop");
+    }
+
+    #[tokio::test]
+    async fn gemini_stream_rejects_clean_eof_without_finish_reason() {
+        let stream = futures_util::stream::iter([Ok::<_, &'static str>(
+            b"data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"partial\"}]}}]}\n\n"
+                .to_vec(),
+        )]);
+        let cancel = AtomicBool::new(false);
+
+        let error = match consume_gemini_stream(stream, |_| {}, &cancel).await {
+            Ok(_) => panic!("clean EOF without finishReason must fail"),
+            Err(error) => error,
+        };
+
+        assert!(error.contains("finishReason"));
+    }
+
+    #[tokio::test]
+    async fn gemini_stream_rejects_malformed_json_with_diagnostics() {
+        let stream =
+            futures_util::stream::iter([Ok::<_, &'static str>(b"data: {not-json}\n\n".to_vec())]);
+        let cancel = AtomicBool::new(false);
+
+        let error = match consume_gemini_stream(stream, |_| {}, &cancel).await {
+            Ok(_) => panic!("malformed Gemini event must fail"),
+            Err(error) => error,
+        };
+
+        assert!(error.contains("Invalid Gemini stream event"));
+        assert!(error.contains("{not-json}"));
+    }
+
+    #[tokio::test]
+    async fn gemini_stream_allows_user_cancellation_without_finish_reason() {
+        let stream = futures_util::stream::empty::<Result<Vec<u8>, &'static str>>();
+        let cancel = AtomicBool::new(true);
+
+        let turn = consume_gemini_stream(stream, |_| {}, &cancel)
+            .await
+            .unwrap();
+
+        assert_eq!(turn.finish_reason, "interrupted");
     }
 }

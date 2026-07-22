@@ -14,7 +14,7 @@ use serde_json::json;
 
 use super::conversation::Message;
 use crate::llm;
-use crate::store::Settings;
+use crate::store::{self, Settings};
 
 const MAX_MEMORY_FILE_BYTES: u64 = 32 * 1024;
 const MAX_INPUT_CHARS: usize = 8_000;
@@ -89,7 +89,13 @@ pub fn panel_state(
     let scopes = scope_files
         .iter()
         .map(|scope| {
-            let raw = fs::read_to_string(&scope.path).unwrap_or_default();
+            let raw = read_memory_text(&scope.path).unwrap_or_else(|error| {
+                eprintln!(
+                    "Failed to load memory scope {}: {error}",
+                    scope.path.display()
+                );
+                String::new()
+            });
             let entries = parse_entries(scope.id, scope.label, &raw);
             let duplicates = audit_duplicates(&entries);
             MemoryScopeState {
@@ -142,8 +148,7 @@ pub fn add_entry(
         return Err("Memory text cannot be empty".to_string());
     }
     let clean_kind = normalize_kind(kind);
-    let mut lines = fs::read_to_string(&scope.path)
-        .unwrap_or_default()
+    let mut lines = read_memory_text(&scope.path)?
         .lines()
         .map(str::to_string)
         .collect::<Vec<_>>();
@@ -173,7 +178,7 @@ pub fn update_entry(
 ) -> Result<MemoryPanelState, String> {
     let scope = find_scope_file(data_dir, sandbox_dir, packs_dir, pack_id, session_id, id)?;
     let path = scope.path;
-    let raw = fs::read_to_string(&path).unwrap_or_default();
+    let raw = read_memory_text(&path)?;
     let mut lines = raw.lines().map(str::to_string).collect::<Vec<_>>();
     let entries = parse_entries(scope.id, scope.label, &raw);
     let entry = entries
@@ -209,7 +214,7 @@ pub fn delete_entry(
 ) -> Result<MemoryPanelState, String> {
     let scope = find_scope_file(data_dir, sandbox_dir, packs_dir, pack_id, session_id, id)?;
     let path = scope.path;
-    let raw = fs::read_to_string(&path).unwrap_or_default();
+    let raw = read_memory_text(&path)?;
     let mut lines = raw.lines().map(str::to_string).collect::<Vec<_>>();
     let entries = parse_entries(scope.id, scope.label, &raw);
     let entry = entries
@@ -238,7 +243,7 @@ pub fn apply_dedupe(
     session_id: &str,
 ) -> Result<MemoryPanelState, String> {
     for scope in scope_files(data_dir, sandbox_dir, packs_dir, pack_id, session_id) {
-        let raw = fs::read_to_string(&scope.path).unwrap_or_default();
+        let raw = read_memory_text(&scope.path)?;
         let entries = parse_entries(scope.id, scope.label, &raw);
         let duplicate_ids = audit_duplicates(&entries)
             .into_iter()
@@ -306,11 +311,10 @@ fn copy_memory_file(from: &Path, to: &Path) -> Result<(), String> {
     if !from.exists() {
         return Ok(());
     }
-    if let Some(parent) = to.parent() {
-        fs::create_dir_all(parent).map_err(|e| format!("创建目录失败：{e}"))?;
-    }
-    fs::copy(from, to).map_err(|e| format!("复制记忆文件失败：{e}"))?;
-    Ok(())
+    let contents = fs::read(from)
+        .map_err(|e| format!("Failed to read memory file {}: {e}", from.display()))?;
+    store::atomic_write(to, &contents, true)
+        .map_err(|e| format!("Failed to copy memory file to {}: {e}", to.display()))
 }
 
 pub async fn extract_and_update(
@@ -535,15 +539,44 @@ fn is_duplicate_key(a: &str, b: &str) -> bool {
 }
 
 fn write_lines(path: &Path, lines: Vec<String>) -> Result<(), String> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .map_err(|e| format!("Failed to create memory directory: {e}"))?;
-    }
     let mut next = lines.join("\n");
     if !next.is_empty() {
         next.push('\n');
     }
-    fs::write(path, next).map_err(|e| format!("Failed to write memory: {e}"))
+    store::atomic_write_text(path, &next, true)
+        .map_err(|e| format!("Failed to write memory {}: {e}", path.display()))
+}
+
+pub(super) fn read_memory_text(path: &Path) -> Result<String, String> {
+    match fs::read_to_string(path) {
+        Ok(raw) => Ok(raw),
+        Err(primary_error) => {
+            let backup = store::backup_path(path);
+            match fs::read_to_string(&backup) {
+                Ok(raw) => {
+                    if let Err(error) = store::atomic_write_text(path, &raw, false) {
+                        eprintln!(
+                            "Recovered memory from {} but failed to repair {}: {error}",
+                            backup.display(),
+                            path.display()
+                        );
+                    }
+                    Ok(raw)
+                }
+                Err(backup_error)
+                    if primary_error.kind() == std::io::ErrorKind::NotFound
+                        && backup_error.kind() == std::io::ErrorKind::NotFound =>
+                {
+                    Ok(String::new())
+                }
+                Err(backup_error) => Err(format!(
+                    "Failed to read memory {} ({primary_error}); backup {} also failed ({backup_error})",
+                    path.display(),
+                    backup.display()
+                )),
+            }
+        }
+    }
 }
 
 fn parse_extraction(content: &str) -> Result<MemoryExtraction, String> {
@@ -592,7 +625,7 @@ fn append_entries(
         }
     }
 
-    let existing = fs::read_to_string(&memory_path).unwrap_or_default();
+    let existing = read_memory_text(&memory_path)?;
     let mut seen = existing
         .lines()
         .map(normalize_for_dedupe)
@@ -611,9 +644,6 @@ fn append_entries(
         return Ok(());
     }
 
-    fs::create_dir_all(&memory_dir)
-        .map_err(|e| format!("Failed to create memory directory: {e}"))?;
-
     let mut next = existing;
     if next.trim().is_empty() {
         next.push_str("# Automatic memory\n");
@@ -629,7 +659,9 @@ fn append_entries(
         return Ok(());
     }
 
-    fs::write(&memory_path, next).map_err(|e| format!("Failed to write memory: {e}"))
+    debug_assert_eq!(memory_path.parent(), Some(memory_dir.as_path()));
+    store::atomic_write_text(&memory_path, &next, true)
+        .map_err(|e| format!("Failed to write memory {}: {e}", memory_path.display()))
 }
 
 fn normalize_kind(kind: &str) -> String {
@@ -759,6 +791,24 @@ mod tests {
             .unwrap();
         assert!(project.entries.is_empty());
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn unreadable_memory_recovers_from_the_previous_atomic_backup() {
+        let root = std::env::temp_dir().join(format!(
+            "demiurge_memory_recovery_{}",
+            crate::store::new_session_id()
+        ));
+        let path = root.join("memory.md");
+        store::atomic_write_text(&path, "# Memory\n\n- [user] original\n", true).unwrap();
+        store::atomic_write_text(&path, "# Memory\n\n- [user] current\n", true).unwrap();
+        fs::write(&path, [0xff, 0xfe, 0xfd]).unwrap();
+
+        let recovered = read_memory_text(&path).unwrap();
+        assert!(recovered.contains("original"));
+        assert_eq!(fs::read_to_string(&path).unwrap(), recovered);
+
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]

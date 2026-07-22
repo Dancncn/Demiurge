@@ -44,12 +44,14 @@ pub async fn run(_state: &crate::AppState, args: Value) -> Result<String, String
         .and_then(|v| v.to_str().ok())
         .unwrap_or("")
         .to_string();
-    let text = resp
-        .text()
+    let body_limit = safe_http::text_body_byte_limit(context_max);
+    let limited = safe_http::read_body_limited(resp, body_limit)
         .await
         .map_err(|e| format!("读取 HTTP GET 响应失败：{e}"))?;
+    let text = String::from_utf8_lossy(&limited.bytes).into_owned();
     let body = normalize_body(&content_type, &text);
-    let (body, truncated) = cap_chars_with_flag(body, context_max);
+    let (body, character_truncated) = cap_chars_with_flag(body, context_max);
+    let truncated = limited.truncated || character_truncated;
 
     Ok(format!(
         "HTTP GET result\n\nURL: {final_url}\nStatus: {status}\nContent-Type: {}\nTruncated: {truncated}\nTitle: {}\n\nBody:\n{}",

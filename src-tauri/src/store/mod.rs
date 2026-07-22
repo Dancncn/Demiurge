@@ -1,11 +1,13 @@
 //! 组件 9：持久化。设置 / 多会话写入磁盘，下次启动可恢复。
 //! 这就是 MVP 的全部「记忆」——不做向量 RAG。
-use std::fs;
-use std::path::Path;
+use std::fs::{self, OpenOptions};
+use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use crate::agent::conversation::{Conversation, Message};
 
@@ -56,6 +58,10 @@ fn default_language() -> String {
 
 fn default_theme() -> String {
     "system".to_string()
+}
+
+fn default_appearance() -> String {
+    "material_bloom".to_string()
 }
 
 fn default_auto_memory_enabled() -> bool {
@@ -327,6 +333,8 @@ pub struct Settings {
     pub language: String,
     #[serde(default = "default_theme")]
     pub theme: String,
+    #[serde(default = "default_appearance")]
+    pub appearance: String,
     #[serde(default)]
     pub launch_on_startup: bool,
     #[serde(default = "default_reasoning_effort")]
@@ -463,6 +471,7 @@ impl Default for Settings {
             context_budget_auto: true,
             language: default_language(),
             theme: default_theme(),
+            appearance: default_appearance(),
             launch_on_startup: false,
             reasoning_effort: default_reasoning_effort(),
             auto_memory_enabled: DEFAULT_AUTO_MEMORY_ENABLED,
@@ -527,6 +536,129 @@ pub fn now_millis() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0)
+}
+
+static ATOMIC_WRITE_SEQ: AtomicU64 = AtomicU64::new(1);
+
+pub(crate) fn backup_path(path: &Path) -> PathBuf {
+    let mut value = path.as_os_str().to_os_string();
+    value.push(".bak");
+    PathBuf::from(value)
+}
+
+pub(crate) fn atomic_write(path: &Path, contents: &[u8], keep_backup: bool) -> Result<(), String> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| format!("Path has no parent: {}", path.display()))?;
+    fs::create_dir_all(parent)
+        .map_err(|e| format!("Failed to create {}: {e}", parent.display()))?;
+
+    if keep_backup && path.is_file() {
+        let previous = fs::read(path)
+            .map_err(|e| format!("Failed to read {} before replacement: {e}", path.display()))?;
+        atomic_replace_bytes(&backup_path(path), &previous)?;
+    }
+
+    atomic_replace_bytes(path, contents)
+}
+
+pub(crate) fn atomic_write_text(
+    path: &Path,
+    contents: &str,
+    keep_backup: bool,
+) -> Result<(), String> {
+    atomic_write(path, contents.as_bytes(), keep_backup)
+}
+
+fn atomic_replace_bytes(path: &Path, contents: &[u8]) -> Result<(), String> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| format!("Path has no parent: {}", path.display()))?;
+    fs::create_dir_all(parent)
+        .map_err(|e| format!("Failed to create {}: {e}", parent.display()))?;
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("data");
+    let temp_path = parent.join(format!(
+        ".{file_name}.{}.{}.tmp",
+        std::process::id(),
+        ATOMIC_WRITE_SEQ.fetch_add(1, Ordering::Relaxed)
+    ));
+
+    let write_result = (|| -> Result<(), String> {
+        let mut file = OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&temp_path)
+            .map_err(|e| format!("Failed to create {}: {e}", temp_path.display()))?;
+        file.write_all(contents)
+            .map_err(|e| format!("Failed to write {}: {e}", temp_path.display()))?;
+        file.sync_all()
+            .map_err(|e| format!("Failed to flush {}: {e}", temp_path.display()))?;
+        drop(file);
+        replace_file(&temp_path, path)
+            .map_err(|e| format!("Failed to replace {}: {e}", path.display()))?;
+        if let Ok(dir) = fs::File::open(parent) {
+            let _ = dir.sync_all();
+        }
+        Ok(())
+    })();
+
+    if write_result.is_err() {
+        let _ = fs::remove_file(&temp_path);
+    }
+    write_result
+}
+
+#[cfg(windows)]
+fn replace_file(from: &Path, to: &Path) -> std::io::Result<()> {
+    use std::iter::once;
+    use std::os::windows::ffi::OsStrExt;
+
+    const MOVEFILE_REPLACE_EXISTING: u32 = 0x1;
+    const MOVEFILE_WRITE_THROUGH: u32 = 0x8;
+
+    #[link(name = "Kernel32")]
+    extern "system" {
+        fn MoveFileExW(existing: *const u16, target: *const u16, flags: u32) -> i32;
+    }
+
+    let from = from
+        .as_os_str()
+        .encode_wide()
+        .chain(once(0))
+        .collect::<Vec<_>>();
+    let to = to
+        .as_os_str()
+        .encode_wide()
+        .chain(once(0))
+        .collect::<Vec<_>>();
+    let replaced = unsafe {
+        MoveFileExW(
+            from.as_ptr(),
+            to.as_ptr(),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+        )
+    };
+    if replaced == 0 {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(unix)]
+fn replace_file(from: &Path, to: &Path) -> std::io::Result<()> {
+    fs::rename(from, to)
+}
+
+#[cfg(not(any(unix, windows)))]
+fn replace_file(from: &Path, to: &Path) -> std::io::Result<()> {
+    if to.exists() {
+        fs::remove_file(to)?;
+    }
+    fs::rename(from, to)
 }
 
 static SEQ: AtomicU64 = AtomicU64::new(1);
@@ -645,13 +777,31 @@ pub fn save_settings(dir: &Path, s: &Settings) -> Result<(), String> {
 /// 加载会话集合；若不存在则尝试从旧版单会话 conversation.json 迁移，否则建一个空会话。
 pub fn load_sessions(dir: &Path) -> SessionStore {
     let p = dir.join("sessions.json");
-    if let Some(store) = fs::read_to_string(&p)
-        .ok()
-        .and_then(|s| serde_json::from_str::<SessionStore>(&s).ok())
-    {
+    if let Ok(store) = read_session_store(&p) {
         let mut store = store;
         store.ensure_one();
         return store;
+    }
+
+    let backup = backup_path(&p);
+    if let Ok(mut recovered) = read_session_store(&backup) {
+        recovered.ensure_one();
+        if p.exists() {
+            let corrupt = dir.join(format!("sessions.json.corrupt-{}", now_millis()));
+            if let Err(error) = fs::copy(&p, &corrupt) {
+                eprintln!(
+                    "Failed to preserve corrupt session file {}: {error}",
+                    p.display()
+                );
+            }
+        }
+        match session_store_json(&recovered)
+            .and_then(|json| atomic_replace_bytes(&p, json.as_bytes()))
+        {
+            Ok(()) => eprintln!("Recovered sessions from {}", backup.display()),
+            Err(error) => eprintln!("Loaded session backup but failed to repair primary: {error}"),
+        }
+        return recovered;
     }
 
     // 迁移：旧版单会话
@@ -676,13 +826,42 @@ pub fn load_sessions(dir: &Path) -> SessionStore {
 
 pub fn save_sessions(dir: &Path, store: &SessionStore) -> Result<(), String> {
     let p = dir.join("sessions.json");
-    let json = serde_json::to_string_pretty(store).map_err(|e| e.to_string())?;
-    fs::write(&p, json).map_err(|e| e.to_string())
+    let json = session_store_json(store)?;
+    atomic_write_text(&p, &json, true)
+}
+
+fn read_session_store(path: &Path) -> Result<SessionStore, String> {
+    let raw =
+        fs::read_to_string(path).map_err(|e| format!("Failed to read {}: {e}", path.display()))?;
+    serde_json::from_str(&raw).map_err(|e| format!("Failed to parse {}: {e}", path.display()))
+}
+
+fn session_store_json(store: &SessionStore) -> Result<String, String> {
+    serde_json::to_string_pretty(&session_store_value(store)?).map_err(|e| e.to_string())
+}
+
+pub(crate) fn session_store_value(store: &SessionStore) -> Result<Value, String> {
+    let mut value = serde_json::to_value(store).map_err(|e| e.to_string())?;
+    let sessions = value
+        .get_mut("sessions")
+        .and_then(Value::as_array_mut)
+        .ok_or_else(|| "Serialized session store is missing sessions".to_string())?;
+    for (session_value, session) in sessions.iter_mut().zip(&store.sessions) {
+        let messages = session_value
+            .get_mut("messages")
+            .and_then(Value::as_array_mut)
+            .ok_or_else(|| format!("Serialized session {} is missing messages", session.id))?;
+        for (message_value, message) in messages.iter_mut().zip(&session.messages) {
+            *message_value = message.history_value();
+        }
+    }
+    Ok(value)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agent::conversation::{ToolExecutionRecord, ToolExecutionStatus};
 
     #[test]
     fn legacy_session_without_workspace_path_remains_compatible() {
@@ -697,6 +876,98 @@ mod tests {
 
         let encoded = serde_json::to_value(&session).unwrap();
         assert!(encoded.get("workspace_path").is_none());
+    }
+
+    #[test]
+    fn sessions_round_trip_tool_execution_metadata() {
+        let root =
+            std::env::temp_dir().join(format!("demiurge_session_metadata_{}", new_session_id()));
+        fs::create_dir_all(&root).unwrap();
+        let mut session = Session::new();
+        session.messages.push(Message::tool_result_with_execution(
+            "call-1",
+            "edit_file",
+            "updated",
+            ToolExecutionRecord {
+                status: ToolExecutionStatus::Ok,
+                error: None,
+                duration_ms: 17,
+                affected_paths: vec!["src/main.rs".to_string()],
+            },
+        ));
+        let expected_id = session.id.clone();
+        let store = SessionStore {
+            active: expected_id.clone(),
+            sessions: vec![session],
+        };
+
+        save_sessions(&root, &store).unwrap();
+        let loaded = load_sessions(&root);
+        let execution = loaded.get(&expected_id).unwrap().messages[0]
+            .tool_execution
+            .as_ref()
+            .unwrap();
+        assert_eq!(execution.status, ToolExecutionStatus::Ok);
+        assert_eq!(execution.duration_ms, 17);
+        assert_eq!(execution.affected_paths, vec!["src/main.rs"]);
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn corrupt_primary_sessions_recover_from_backup() {
+        let root =
+            std::env::temp_dir().join(format!("demiurge_session_recovery_{}", new_session_id()));
+        fs::create_dir_all(&root).unwrap();
+        let mut first = Session::new();
+        first.title = "recover me".to_string();
+        let first_id = first.id.clone();
+        let first_store = SessionStore {
+            active: first_id.clone(),
+            sessions: vec![first],
+        };
+        save_sessions(&root, &first_store).unwrap();
+
+        let mut second_store = first_store.clone();
+        second_store.sessions[0].title = "newer snapshot".to_string();
+        save_sessions(&root, &second_store).unwrap();
+        fs::write(root.join("sessions.json"), b"{not-json").unwrap();
+
+        let recovered = load_sessions(&root);
+        assert_eq!(recovered.get(&first_id).unwrap().title, "recover me");
+        assert!(serde_json::from_str::<SessionStore>(
+            &fs::read_to_string(root.join("sessions.json")).unwrap()
+        )
+        .is_ok());
+        assert!(fs::read_dir(&root).unwrap().any(|entry| {
+            entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with("sessions.json.corrupt-")
+        }));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn atomic_write_keeps_previous_version_and_leaves_no_temp_file() {
+        let root = std::env::temp_dir().join(format!("demiurge_atomic_{}", new_session_id()));
+        let path = root.join("memory.md");
+        atomic_write_text(&path, "first", true).unwrap();
+        atomic_write_text(&path, "second", true).unwrap();
+
+        assert_eq!(fs::read_to_string(&path).unwrap(), "second");
+        assert_eq!(fs::read_to_string(backup_path(&path)).unwrap(), "first");
+        assert!(!fs::read_dir(&root).unwrap().any(|entry| {
+            entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .ends_with(".tmp")
+        }));
+
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
@@ -740,6 +1011,7 @@ mod tests {
         assert!(settings.mcp_servers.is_empty());
         assert_eq!(settings.reasoning_effort, ReasoningEffort::Auto);
         assert_eq!(settings.theme, "system");
+        assert_eq!(settings.appearance, "material_bloom");
         assert!(!settings.launch_on_startup);
         assert!(!settings.companion_memory_extraction_enabled);
         assert_eq!(settings.companion_memory_extraction_scope, "recent_turn");

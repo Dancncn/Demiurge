@@ -47,7 +47,8 @@ pub async fn run_manual_dream(
     let packs_dir = state.packs_dir.lock().unwrap().clone();
     let memory_path =
         super::memory::project_memory_path(&sandbox_dir, &packs_dir, &settings.current_pack);
-    let current_memory = fs::read_to_string(&memory_path).unwrap_or_default();
+    let current_memory = super::memory::read_memory_text(&memory_path)
+        .map_err(|e| format!("Failed to read long-term memory: {e}"))?;
     let session_snapshot = current_session_snapshot(state, &sid);
     let source = build_source_bundle(
         &sandbox_dir,
@@ -163,10 +164,8 @@ pub async fn run_manual_dream(
         return Ok(());
     }
 
-    if let Some(parent) = memory_path.parent() {
-        fs::create_dir_all(parent).map_err(|e| format!("创建记忆目录失败：{e}"))?;
-    }
-    fs::write(&memory_path, next_memory).map_err(|e| format!("写入记忆失败：{e}"))?;
+    store::atomic_write_text(&memory_path, &next_memory, true)
+        .map_err(|e| format!("Failed to write consolidated memory: {e}"))?;
 
     emit_delta(
         &events,

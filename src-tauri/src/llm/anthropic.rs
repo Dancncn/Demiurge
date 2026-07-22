@@ -1,7 +1,8 @@
 use std::collections::BTreeMap;
+use std::fmt::Display;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use futures_util::StreamExt;
+use futures_util::{pin_mut, Stream, StreamExt};
 use serde_json::{json, Value};
 
 use crate::agent::conversation::{FunctionCall, Message, ToolCall};
@@ -39,7 +40,7 @@ pub async fn stream_completion_with_profile(
     cfg: &Settings,
     messages: &[Message],
     tools: &Value,
-    mut on_delta: impl FnMut(StreamDelta<'_>),
+    on_delta: impl FnMut(StreamDelta<'_>),
     cancel: &AtomicBool,
     profile: ProviderProfile,
 ) -> Result<AssistantTurn, String> {
@@ -67,32 +68,60 @@ pub async fn stream_completion_with_profile(
         return Err(format!("Anthropic 返回 HTTP {code}：{txt}"));
     }
 
-    let mut stream = resp.bytes_stream();
+    consume_anthropic_stream(resp.bytes_stream(), on_delta, cancel).await
+}
+
+async fn consume_anthropic_stream<S, B, E>(
+    stream: S,
+    mut on_delta: impl FnMut(StreamDelta<'_>),
+    cancel: &AtomicBool,
+) -> Result<AssistantTurn, String>
+where
+    S: Stream<Item = Result<B, E>>,
+    B: AsRef<[u8]>,
+    E: Display,
+{
+    pin_mut!(stream);
     let mut decoder = SseDecoder::new();
     let mut state = AnthropicStreamState::default();
-    let mut stopped = false;
+    let mut terminated = false;
 
     'outer: while let Some(chunk) = stream.next().await {
         if cancel.load(Ordering::Relaxed) {
             state.finish = "interrupted".to_string();
-            stopped = true;
-            break;
+            return Ok(state.finish());
         }
         let bytes = chunk.map_err(|e| format!("读取 Anthropic 流失败：{e}"))?;
-        for event in decoder.push(&bytes) {
+        for event in decoder
+            .push(bytes.as_ref())
+            .map_err(|error| format!("Invalid Anthropic SSE framing: {error}"))?
+        {
             if process_anthropic_sse_event(&event, &mut state, &mut on_delta)? {
-                stopped = true;
+                terminated = true;
                 break 'outer;
             }
         }
     }
 
-    if !stopped {
-        for event in decoder.finish() {
+    if cancel.load(Ordering::Relaxed) {
+        state.finish = "interrupted".to_string();
+        return Ok(state.finish());
+    }
+
+    if !terminated {
+        for event in decoder
+            .finish()
+            .map_err(|error| format!("Invalid Anthropic SSE framing: {error}"))?
+        {
             if process_anthropic_sse_event(&event, &mut state, &mut on_delta)? {
+                terminated = true;
                 break;
             }
         }
+    }
+
+    if !terminated {
+        return Err("Anthropic stream ended before protocol terminator message_stop".to_string());
     }
 
     Ok(state.finish())
@@ -586,7 +615,7 @@ mod tests {
         let mut stopped = false;
 
         for byte in input.as_bytes() {
-            for event in decoder.push(std::slice::from_ref(byte)) {
+            for event in decoder.push(std::slice::from_ref(byte)).unwrap() {
                 stopped = process_anthropic_sse_event(&event, &mut state, &mut |delta| {
                     if let StreamDelta::Content(text) = delta {
                         rendered.push_str(text);
@@ -596,7 +625,7 @@ mod tests {
                 assert!(!stopped, "message_stop has no delimiter and belongs to EOF");
             }
         }
-        for event in decoder.finish() {
+        for event in decoder.finish().unwrap() {
             stopped = process_anthropic_sse_event(&event, &mut state, &mut |_| {}).unwrap();
         }
 
@@ -604,6 +633,33 @@ mod tests {
         assert!(state.message_stopped);
         assert_eq!(rendered, "好");
         assert_eq!(state.finish().content, "好");
+    }
+
+    #[tokio::test]
+    async fn anthropic_stream_rejects_clean_eof_without_message_stop() {
+        let stream = futures_util::stream::iter([Ok::<_, &'static str>(
+            b"event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"partial\"}}\n\n".to_vec(),
+        )]);
+        let cancel = AtomicBool::new(false);
+
+        let error = match consume_anthropic_stream(stream, |_| {}, &cancel).await {
+            Ok(_) => panic!("clean EOF without message_stop must fail"),
+            Err(error) => error,
+        };
+
+        assert!(error.contains("message_stop"));
+    }
+
+    #[tokio::test]
+    async fn anthropic_stream_allows_user_cancellation_without_message_stop() {
+        let stream = futures_util::stream::empty::<Result<Vec<u8>, &'static str>>();
+        let cancel = AtomicBool::new(true);
+
+        let turn = consume_anthropic_stream(stream, |_| {}, &cancel)
+            .await
+            .unwrap();
+
+        assert_eq!(turn.finish_reason, "interrupted");
     }
 
     #[test]

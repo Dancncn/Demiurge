@@ -173,6 +173,29 @@ impl<'a> SessionTurnStore<'a> {
         });
     }
 
+    pub fn commit_compaction(
+        &self,
+        expected_messages: &[Message],
+        expected_summary: &Option<String>,
+        messages: Vec<Message>,
+        summary: Option<String>,
+    ) -> Result<bool, String> {
+        {
+            let mut store = self.state.sessions.lock().unwrap();
+            let session = store
+                .get_mut(&self.session_id)
+                .ok_or_else(|| "The target session no longer exists.".to_string())?;
+            if session.messages != expected_messages || &session.summary != expected_summary {
+                return Ok(false);
+            }
+            session.messages = messages;
+            session.summary = summary;
+            session.updated_at = store::now_millis();
+        }
+        self.state.persist_sessions();
+        Ok(true)
+    }
+
     fn mutate_and_persist(&self, mutate: impl FnOnce(&mut store::Session)) {
         let changed = {
             let mut store = self.state.sessions.lock().unwrap();
@@ -494,6 +517,48 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
         assert!(persisted, "sessions.json 应由后台写盘线程持久化");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn compaction_commit_rejects_a_stale_snapshot_without_losing_messages() {
+        let dir = std::env::temp_dir().join(format!(
+            "demiurge_session_compaction_{}",
+            store::new_session_id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let state = crate::AppState::new(reqwest::Client::new());
+        *state.data_dir.lock().unwrap() = dir.clone();
+
+        let mut session = store::Session::new();
+        session.messages = vec![Message::user("old"), Message::assistant_text("reply")];
+        let session_id = session.id.clone();
+        {
+            let mut sessions = state.sessions.lock().unwrap();
+            sessions.active = session_id.clone();
+            sessions.sessions.push(session);
+        }
+
+        let turn_store = SessionTurnStore::new(&state, session_id.clone());
+        let (snapshot, summary) = turn_store.snapshot();
+        turn_store.append_message(Message::user("concurrent"));
+        let committed = turn_store
+            .commit_compaction(
+                &snapshot,
+                &summary,
+                vec![Message::assistant_text("kept")],
+                Some("summary".to_string()),
+            )
+            .unwrap();
+
+        assert!(!committed);
+        let sessions = state.sessions.lock().unwrap();
+        let current = sessions.get(&session_id).unwrap();
+        assert_eq!(current.messages.len(), 3);
+        assert_eq!(current.messages[2].content.as_deref(), Some("concurrent"));
+        assert!(current.summary.is_none());
+        drop(sessions);
 
         let _ = std::fs::remove_dir_all(&dir);
     }

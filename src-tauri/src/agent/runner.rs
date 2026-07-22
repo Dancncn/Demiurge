@@ -6,7 +6,7 @@ use std::time::Instant;
 use serde_json::json;
 use tauri::{AppHandle, Emitter};
 
-use super::conversation::Message;
+use super::conversation::{Message, ToolExecutionRecord, ToolExecutionStatus};
 use super::{
     budget, context, custom, goal, memory, prompt, session_engine, summary, workflow_journal,
 };
@@ -265,31 +265,40 @@ pub async fn run_turn_with_options(
         }
 
         // 组装本轮请求消息：system + token-aware 裁剪后的历史。若裁剪掉旧消息，先滚动更新会话摘要。
-        let (mut msgs, mut session_summary) = session_store.snapshot();
-
-        let mut system = prompt::build_for_session_input(
-            state,
-            &sid,
-            &settings,
-            &persona_text,
-            session_summary.as_deref(),
-            &original_user_text,
-        );
-        if settings.permission_mode == store::PermissionMode::Plan {
-            apply_system_overlay(&mut system, Some(plan_mode_overlay()));
-        }
-        apply_system_overlay(&mut system, Some(&selected_agents.prompt_overlay));
-        apply_system_overlay(&mut system, options.system_overlay.as_deref());
-        let mut current_budget =
+        let (original_msgs, original_summary) = session_store.snapshot();
+        let mut msgs = original_msgs.clone();
+        let mut session_summary = original_summary.clone();
+        let build_system = |summary: Option<&str>| {
+            let mut system = prompt::build_for_session_input(
+                state,
+                &sid,
+                &settings,
+                &persona_text,
+                summary,
+                &original_user_text,
+            );
+            if settings.permission_mode == store::PermissionMode::Plan {
+                apply_system_overlay(&mut system, Some(plan_mode_overlay()));
+            }
+            apply_system_overlay(&mut system, Some(&selected_agents.prompt_overlay));
+            apply_system_overlay(&mut system, options.system_overlay.as_deref());
+            system
+        };
+        let mut system = build_system(session_summary.as_deref());
+        let current_budget =
             budget::history_budget_for_profile(&settings, profile, &system, &tools_schema, &msgs);
         let mut removed_messages = context::trim_collect_removed_by_tokens(
             &mut msgs,
             current_budget.history_budget_tokens,
         );
-        let mut should_persist_trim = !removed_messages.is_empty();
+        let mut compaction_ready = !removed_messages.is_empty();
 
-        if !removed_messages.is_empty() && !state.cancel.load(Ordering::Relaxed) {
-            if let Ok(next_summary) = summary::update_session_summary(
+        while !removed_messages.is_empty() {
+            if state.cancel.load(Ordering::Relaxed) {
+                compaction_ready = false;
+                break;
+            }
+            match summary::update_session_summary(
                 &state.http,
                 &settings,
                 session_summary.as_deref(),
@@ -298,42 +307,45 @@ pub async fn run_turn_with_options(
             )
             .await
             {
-                session_summary = next_summary;
-                session_store.replace_messages_and_summary(msgs.clone(), session_summary.clone());
-
-                system = prompt::build_for_session_input(
-                    state,
-                    &sid,
-                    &settings,
-                    &persona_text,
-                    session_summary.as_deref(),
-                    &original_user_text,
-                );
-                if settings.permission_mode == store::PermissionMode::Plan {
-                    apply_system_overlay(&mut system, Some(plan_mode_overlay()));
+                Ok(next_summary) => {
+                    if state.cancel.load(Ordering::Relaxed) || next_summary == session_summary {
+                        eprintln!(
+                            "Context summary did not advance; persisted history was kept unchanged."
+                        );
+                        compaction_ready = false;
+                        break;
+                    }
+                    session_summary = next_summary;
+                    system = build_system(session_summary.as_deref());
+                    let next_budget = budget::history_budget_for_profile(
+                        &settings,
+                        profile,
+                        &system,
+                        &tools_schema,
+                        &msgs,
+                    );
+                    removed_messages = context::trim_collect_removed_by_tokens(
+                        &mut msgs,
+                        next_budget.history_budget_tokens,
+                    );
                 }
-                apply_system_overlay(&mut system, Some(&selected_agents.prompt_overlay));
-                apply_system_overlay(&mut system, options.system_overlay.as_deref());
-                current_budget = budget::history_budget_for_profile(
-                    &settings,
-                    profile,
-                    &system,
-                    &tools_schema,
-                    &msgs,
-                );
-                removed_messages = context::trim_collect_removed_by_tokens(
-                    &mut msgs,
-                    current_budget.history_budget_tokens,
-                );
-                should_persist_trim = should_persist_trim || !removed_messages.is_empty();
-                if !removed_messages.is_empty() {
-                    session_store.replace_messages(msgs.clone());
+                Err(error) => {
+                    eprintln!(
+                        "Context summary update failed; persisted history was kept unchanged: {error}"
+                    );
+                    compaction_ready = false;
+                    break;
                 }
             }
         }
 
-        if should_persist_trim {
-            session_store.replace_messages(msgs.clone());
+        if compaction_ready {
+            let _ = session_store.commit_compaction(
+                &original_msgs,
+                &original_summary,
+                msgs.clone(),
+                session_summary.clone(),
+            )?;
         }
 
         let full: Vec<Message> = {
@@ -454,7 +466,7 @@ pub async fn run_turn_with_options(
 
             let sandbox_dir = state.sandbox_dir.lock().unwrap().clone();
             let packs_dir = state.packs_dir.lock().unwrap().clone();
-            let _ = memory::extract_and_update(
+            if let Err(error) = memory::extract_and_update(
                 &state.http,
                 &settings,
                 &sandbox_dir,
@@ -464,7 +476,10 @@ pub async fn run_turn_with_options(
                 &assistant_text,
                 &state.cancel,
             )
-            .await;
+            .await
+            {
+                eprintln!("Automatic memory extraction was not persisted: {error}");
+            }
             let data_dir = state.data_dir.lock().unwrap().clone();
             let _ = companion::extract_memory_to_queue(
                 &state.http,
@@ -497,10 +512,16 @@ pub async fn run_turn_with_options(
 
             // 已被用户中断：不再执行后续工具，但仍补一条结果以保持 tool_calls/结果配对
             if state.cancel.load(Ordering::Relaxed) {
-                push(Message::tool_result(
+                push(Message::tool_result_with_execution(
                     tc.id.clone(),
                     name,
                     "[已被用户中断，未执行]",
+                    ToolExecutionRecord {
+                        status: ToolExecutionStatus::Denied,
+                        error: Some("Interrupted before execution".to_string()),
+                        duration_ms: 0,
+                        affected_paths: Vec::new(),
+                    },
                 ));
                 continue;
             }
@@ -624,10 +645,18 @@ pub async fn run_turn_with_options(
 
             let interrupted = state.cancel.load(Ordering::Relaxed);
             let tool_started_at = Instant::now();
-            let (result, tool_ok, denied) = if !allowed && interrupted {
-                ("[Interrupted before execution]".to_string(), false, true)
+            let (result, execution_status, execution_error) = if !allowed && interrupted {
+                (
+                    "[Interrupted before execution]".to_string(),
+                    ToolExecutionStatus::Denied,
+                    Some("Interrupted before execution".to_string()),
+                )
             } else if !allowed {
-                ("[User denied this operation]".to_string(), false, true)
+                (
+                    "[User denied this operation]".to_string(),
+                    ToolExecutionStatus::Denied,
+                    Some("User denied this operation".to_string()),
+                )
             } else {
                 match tools::execute(state, &name, args.clone()).await {
                     Ok(s) => {
@@ -635,11 +664,13 @@ pub async fn run_turn_with_options(
                             let _ =
                                 app.emit("plan-updated", state.plan_state.lock().unwrap().clone());
                         }
-                        (s, true, false)
+                        (s, ToolExecutionStatus::Ok, None)
                     }
-                    Err(e) => (format!("Error: {e}"), false, false),
+                    Err(e) => (format!("Error: {e}"), ToolExecutionStatus::Failed, Some(e)),
                 }
             };
+            let tool_ok = execution_status == ToolExecutionStatus::Ok;
+            let denied = execution_status == ToolExecutionStatus::Denied;
             let duration_ms = tool_started_at.elapsed().as_millis() as u64;
             let error_hint = tool_error_hint(&permission_name, &result, tool_ok, denied);
             let source_quality = source_quality_hint(&permission_name, &result, tool_ok);
@@ -665,6 +696,10 @@ pub async fn run_turn_with_options(
                         "permission_target": permission_name.clone(),
                         "ok": tool_ok,
                         "denied": denied,
+                        "status": execution_status.clone(),
+                        "error": execution_error.clone(),
+                        "duration_ms": duration_ms,
+                        "affected_paths": affected_paths.clone(),
                         "result": truncate_ui(&result),
                     }),
                 );
@@ -674,7 +709,17 @@ pub async fn run_turn_with_options(
                 goal::add_estimated_tokens(state, &sid, &tc.function.arguments);
                 goal::add_estimated_tokens(state, &sid, &truncate_ui(&result));
             }
-            push(Message::tool_result(tc.id.clone(), name, result));
+            push(Message::tool_result_with_execution(
+                tc.id.clone(),
+                name,
+                result,
+                ToolExecutionRecord {
+                    status: execution_status,
+                    error: execution_error,
+                    duration_ms,
+                    affected_paths,
+                },
+            ));
         }
 
         // 工具执行阶段被中断：补齐配对后结束本轮

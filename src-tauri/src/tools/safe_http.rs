@@ -4,6 +4,7 @@
 //! addresses are then installed as reqwest DNS overrides so a second DNS lookup
 //! cannot swap in a private address between validation and the TCP connection.
 
+use futures_util::{pin_mut, Stream, StreamExt};
 use reqwest::{
     header::{HeaderValue, LOCATION},
     redirect::Policy,
@@ -11,6 +12,7 @@ use reqwest::{
 };
 use std::{
     collections::HashSet,
+    fmt::Display,
     future::Future,
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, ToSocketAddrs},
     time::Duration,
@@ -21,6 +23,15 @@ const DNS_TIMEOUT: Duration = Duration::from_secs(10);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 const READ_TIMEOUT: Duration = Duration::from_secs(30);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
+const TEXT_BODY_BYTES_PER_CHAR: usize = 16;
+const MIN_TEXT_BODY_BYTES: usize = 64 * 1024;
+const MAX_TEXT_BODY_BYTES: usize = 2 * 1024 * 1024;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct LimitedBody {
+    pub bytes: Vec<u8>,
+    pub truncated: bool,
+}
 
 #[derive(Debug)]
 struct ResolvedTarget {
@@ -42,6 +53,65 @@ pub(super) async fn get_public(
         send_public_hop(current, user_agent, accept)
     })
     .await
+}
+
+/// Converts a character budget into a conservative, bounded response budget.
+/// HTML markup can be substantially larger than its rendered text, so callers
+/// receive headroom without allowing an unbounded download.
+pub(super) fn text_body_byte_limit(context_max_characters: usize) -> usize {
+    context_max_characters
+        .saturating_mul(TEXT_BODY_BYTES_PER_CHAR)
+        .clamp(MIN_TEXT_BODY_BYTES, MAX_TEXT_BODY_BYTES)
+}
+
+/// Reads at most `max_bytes` into memory and stops polling as soon as a chunk
+/// proves that the response is larger. The returned flag distinguishes a body
+/// truncated at the network boundary from later character-level truncation.
+pub(super) async fn read_body_limited(
+    response: Response,
+    max_bytes: usize,
+) -> Result<LimitedBody, String> {
+    collect_stream_limited(response.bytes_stream(), max_bytes).await
+}
+
+async fn collect_stream_limited<S, B, E>(stream: S, max_bytes: usize) -> Result<LimitedBody, String>
+where
+    S: Stream<Item = Result<B, E>>,
+    B: AsRef<[u8]>,
+    E: Display,
+{
+    pin_mut!(stream);
+    let mut bytes = Vec::with_capacity(max_bytes.min(MIN_TEXT_BODY_BYTES));
+    let mut truncated = false;
+
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|error| format!("读取公开 URL 响应流失败：{error}"))?;
+        let chunk = chunk.as_ref();
+        if chunk.is_empty() {
+            continue;
+        }
+
+        let remaining = max_bytes.saturating_sub(bytes.len());
+        if chunk.len() > remaining {
+            bytes.extend_from_slice(&chunk[..remaining]);
+            truncated = true;
+            break;
+        }
+        bytes.extend_from_slice(chunk);
+
+        if bytes.len() == max_bytes {
+            while let Some(next) = stream.next().await {
+                let next = next.map_err(|error| format!("读取公开 URL 响应流失败：{error}"))?;
+                if !next.as_ref().is_empty() {
+                    truncated = true;
+                    break;
+                }
+            }
+            break;
+        }
+    }
+
+    Ok(LimitedBody { bytes, truncated })
 }
 
 /// Runs the redirect state machine with one caller-supplied hop sender.
@@ -341,6 +411,51 @@ mod tests {
         },
         thread,
     };
+
+    #[tokio::test]
+    async fn bounded_reader_collects_fragmented_body_without_false_truncation() {
+        let stream = futures_util::stream::iter([
+            Ok::<_, &'static str>(b"ab".to_vec()),
+            Ok(b"c".to_vec()),
+            Ok(b"d".to_vec()),
+        ]);
+
+        let body = collect_stream_limited(stream, 4).await.unwrap();
+
+        assert_eq!(body.bytes, b"abcd");
+        assert!(!body.truncated);
+    }
+
+    #[tokio::test]
+    async fn bounded_reader_stops_after_the_first_oversized_chunk() {
+        let stream = futures_util::stream::iter([
+            Ok::<_, &'static str>(b"abcdef".to_vec()),
+            Err("must not poll after truncation"),
+        ]);
+
+        let body = collect_stream_limited(stream, 4).await.unwrap();
+
+        assert_eq!(body.bytes, b"abcd");
+        assert!(body.truncated);
+    }
+
+    #[tokio::test]
+    async fn bounded_reader_reports_transport_errors_before_the_limit() {
+        let stream = futures_util::stream::iter([
+            Ok::<_, &'static str>(b"ab".to_vec()),
+            Err("connection reset"),
+        ]);
+
+        let error = collect_stream_limited(stream, 8).await.unwrap_err();
+
+        assert!(error.contains("connection reset"));
+    }
+
+    #[test]
+    fn text_body_budget_has_explicit_lower_and_upper_bounds() {
+        assert_eq!(text_body_byte_limit(1), MIN_TEXT_BODY_BYTES);
+        assert_eq!(text_body_byte_limit(usize::MAX), MAX_TEXT_BODY_BYTES);
+    }
 
     #[test]
     fn rejects_non_public_ipv4_ranges() {

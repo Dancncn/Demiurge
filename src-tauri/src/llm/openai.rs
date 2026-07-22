@@ -1,7 +1,8 @@
 use std::collections::BTreeMap;
+use std::fmt::Display;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use futures_util::StreamExt;
+use futures_util::{pin_mut, Stream, StreamExt};
 use serde_json::{json, Value};
 
 use crate::agent::conversation::{FunctionCall, Message, ToolCall};
@@ -18,7 +19,7 @@ pub async fn stream_completion_with_profile(
     cfg: &Settings,
     messages: &[Message],
     tools: &Value,
-    mut on_delta: impl FnMut(StreamDelta<'_>),
+    on_delta: impl FnMut(StreamDelta<'_>),
     cancel: &AtomicBool,
     profile: ProviderProfile,
 ) -> Result<AssistantTurn, String> {
@@ -41,32 +42,60 @@ pub async fn stream_completion_with_profile(
         return Err(format!("LLM 返回 HTTP {code}：{txt}"));
     }
 
-    let mut stream = resp.bytes_stream();
+    consume_openai_stream(resp.bytes_stream(), on_delta, cancel).await
+}
+
+async fn consume_openai_stream<S, B, E>(
+    stream: S,
+    mut on_delta: impl FnMut(StreamDelta<'_>),
+    cancel: &AtomicBool,
+) -> Result<AssistantTurn, String>
+where
+    S: Stream<Item = Result<B, E>>,
+    B: AsRef<[u8]>,
+    E: Display,
+{
+    pin_mut!(stream);
     let mut decoder = SseDecoder::new();
     let mut state = OpenAiStreamState::default();
-    let mut stopped = false;
+    let mut terminated = false;
 
     'outer: while let Some(chunk) = stream.next().await {
         if cancel.load(Ordering::Relaxed) {
             state.finish = "interrupted".to_string();
-            stopped = true;
-            break;
+            return Ok(state.finish());
         }
-        let bytes = chunk.map_err(|e| format!("读取流失败：{e}"))?;
-        for event in decoder.push(&bytes) {
+        let bytes = chunk.map_err(|e| format!("读取 OpenAI 流失败：{e}"))?;
+        for event in decoder
+            .push(bytes.as_ref())
+            .map_err(|error| format!("Invalid OpenAI SSE framing: {error}"))?
+        {
             if process_openai_sse_event(&event, &mut state, &mut on_delta)? {
-                stopped = true;
+                terminated = true;
                 break 'outer;
             }
         }
     }
 
-    if !stopped {
-        for event in decoder.finish() {
+    if cancel.load(Ordering::Relaxed) {
+        state.finish = "interrupted".to_string();
+        return Ok(state.finish());
+    }
+
+    if !terminated {
+        for event in decoder
+            .finish()
+            .map_err(|error| format!("Invalid OpenAI SSE framing: {error}"))?
+        {
             if process_openai_sse_event(&event, &mut state, &mut on_delta)? {
+                terminated = true;
                 break;
             }
         }
+    }
+
+    if !terminated {
+        return Err("OpenAI stream ended before protocol terminator [DONE]".to_string());
     }
 
     Ok(state.finish())
@@ -490,7 +519,7 @@ mod tests {
         let mut stopped = false;
 
         for byte in input.as_bytes() {
-            for event in decoder.push(std::slice::from_ref(byte)) {
+            for event in decoder.push(std::slice::from_ref(byte)).unwrap() {
                 stopped = process_openai_sse_event(&event, &mut state, &mut |delta| {
                     if let StreamDelta::Content(text) = delta {
                         rendered.push_str(text);
@@ -500,7 +529,7 @@ mod tests {
                 assert!(!stopped, "[DONE] has no event delimiter and belongs to EOF");
             }
         }
-        for event in decoder.finish() {
+        for event in decoder.finish().unwrap() {
             stopped = process_openai_sse_event(&event, &mut state, &mut |_| {}).unwrap();
         }
 
@@ -509,6 +538,47 @@ mod tests {
         let turn = state.finish();
         assert_eq!(turn.content, "你");
         assert_eq!(turn.finish_reason, "stop");
+    }
+
+    #[tokio::test]
+    async fn openai_stream_rejects_clean_eof_without_done_marker() {
+        let stream = futures_util::stream::iter([Ok::<_, &'static str>(
+            b"data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n\n".to_vec(),
+        )]);
+        let cancel = AtomicBool::new(false);
+
+        let error = match consume_openai_stream(stream, |_| {}, &cancel).await {
+            Ok(_) => panic!("clean EOF without [DONE] must fail"),
+            Err(error) => error,
+        };
+
+        assert!(error.contains("[DONE]"));
+    }
+
+    #[tokio::test]
+    async fn openai_stream_reports_transport_interruption() {
+        let stream = futures_util::stream::iter([Err::<Vec<u8>, _>("socket closed")]);
+        let cancel = AtomicBool::new(false);
+
+        let error = match consume_openai_stream(stream, |_| {}, &cancel).await {
+            Ok(_) => panic!("transport interruption must fail"),
+            Err(error) => error,
+        };
+
+        assert!(error.contains("OpenAI"));
+        assert!(error.contains("socket closed"));
+    }
+
+    #[tokio::test]
+    async fn openai_stream_allows_user_cancellation_without_done_marker() {
+        let stream = futures_util::stream::empty::<Result<Vec<u8>, &'static str>>();
+        let cancel = AtomicBool::new(true);
+
+        let turn = consume_openai_stream(stream, |_| {}, &cancel)
+            .await
+            .unwrap();
+
+        assert_eq!(turn.finish_reason, "interrupted");
     }
 
     #[test]

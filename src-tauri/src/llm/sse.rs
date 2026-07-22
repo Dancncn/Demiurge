@@ -6,18 +6,82 @@
 //! an event after its blank-line delimiter (or when [`SseDecoder::finish`] is
 //! called at EOF).
 
+use std::fmt;
+
+const MAX_SSE_LINE_BYTES: usize = 256 * 1024;
+const MAX_SSE_EVENT_BYTES: usize = 1024 * 1024;
+const MAX_SSE_PENDING_BYTES: usize = 2 * 1024 * 1024;
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct SseEvent {
     pub event: Option<String>,
     pub data: String,
 }
 
+#[derive(Clone, Copy, Debug)]
+struct SseLimits {
+    line_bytes: usize,
+    event_bytes: usize,
+    pending_bytes: usize,
+}
+
+impl Default for SseLimits {
+    fn default() -> Self {
+        Self {
+            line_bytes: MAX_SSE_LINE_BYTES,
+            event_bytes: MAX_SSE_EVENT_BYTES,
+            pending_bytes: MAX_SSE_PENDING_BYTES,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum SseDecodeError {
+    LineTooLong { actual: usize, limit: usize },
+    EventTooLarge { actual: usize, limit: usize },
+    PendingBufferTooLarge { actual: usize, limit: usize },
+}
+
+impl SseDecodeError {
+    #[cfg(test)]
+    fn kind(&self) -> &'static str {
+        match self {
+            Self::LineTooLong { .. } => "line",
+            Self::EventTooLarge { .. } => "event",
+            Self::PendingBufferTooLarge { .. } => "buffer",
+        }
+    }
+}
+
+impl fmt::Display for SseDecodeError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::LineTooLong { actual, limit } => write!(
+                formatter,
+                "SSE line is {actual} bytes, exceeding the {limit} bytes limit"
+            ),
+            Self::EventTooLarge { actual, limit } => write!(
+                formatter,
+                "SSE event data is {actual} bytes, exceeding the {limit} bytes limit"
+            ),
+            Self::PendingBufferTooLarge { actual, limit } => write!(
+                formatter,
+                "SSE pending buffer is {actual} bytes, exceeding the {limit} bytes limit"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for SseDecodeError {}
+
 #[derive(Debug)]
 pub(super) struct SseDecoder {
     buffer: Vec<u8>,
     event: Option<String>,
     data_lines: Vec<String>,
+    event_data_bytes: usize,
     at_stream_start: bool,
+    limits: SseLimits,
 }
 
 impl Default for SseDecoder {
@@ -26,7 +90,9 @@ impl Default for SseDecoder {
             buffer: Vec::new(),
             event: None,
             data_lines: Vec::new(),
+            event_data_bytes: 0,
             at_stream_start: true,
+            limits: SseLimits::default(),
         }
     }
 }
@@ -36,43 +102,69 @@ impl SseDecoder {
         Self::default()
     }
 
+    #[cfg(test)]
+    fn with_limits(line_bytes: usize, event_bytes: usize, pending_bytes: usize) -> Self {
+        Self {
+            limits: SseLimits {
+                line_bytes,
+                event_bytes,
+                pending_bytes,
+            },
+            ..Self::default()
+        }
+    }
+
     /// Adds an arbitrary transport chunk and returns all complete SSE events.
-    pub fn push(&mut self, chunk: &[u8]) -> Vec<SseEvent> {
+    pub fn push(&mut self, chunk: &[u8]) -> Result<Vec<SseEvent>, SseDecodeError> {
+        let pending = self.pending_bytes().saturating_add(chunk.len());
+        if pending > self.limits.pending_bytes {
+            return Err(SseDecodeError::PendingBufferTooLarge {
+                actual: pending,
+                limit: self.limits.pending_bytes,
+            });
+        }
         self.buffer.extend_from_slice(chunk);
         self.drain_complete_lines()
     }
 
     /// Flushes an event whose final line or blank-line delimiter was omitted.
-    pub fn finish(&mut self) -> Vec<SseEvent> {
-        let mut events = if self.buffer.is_empty() {
-            Vec::new()
-        } else {
-            // A synthetic LF makes the final unterminated line consumable. It
-            // also completes a CR that arrived as the last byte of the stream.
-            self.buffer.push(b'\n');
-            self.drain_complete_lines()
-        };
+    pub fn finish(&mut self) -> Result<Vec<SseEvent>, SseDecodeError> {
+        let mut events = Vec::new();
+        if !self.buffer.is_empty() {
+            let mut tail = std::mem::take(&mut self.buffer);
+            if tail.last() == Some(&b'\r') {
+                tail.pop();
+            }
+            self.ensure_line_limit(tail.len())?;
+            let line = String::from_utf8_lossy(&tail).into_owned();
+            if let Some(event) = self.process_line(&line)? {
+                events.push(event);
+            }
+        }
 
         if let Some(event) = self.dispatch_event() {
             events.push(event);
         }
-        events
+        Ok(events)
     }
 
-    fn drain_complete_lines(&mut self) -> Vec<SseEvent> {
+    fn drain_complete_lines(&mut self) -> Result<Vec<SseEvent>, SseDecodeError> {
         let mut events = Vec::new();
         while let Some((line_len, ending_len)) = next_line(&self.buffer) {
+            self.ensure_line_limit(line_len)?;
             let consumed = line_len + ending_len;
             let line = String::from_utf8_lossy(&self.buffer[..line_len]).into_owned();
             self.buffer.drain(..consumed);
-            if let Some(event) = self.process_line(&line) {
+            if let Some(event) = self.process_line(&line)? {
                 events.push(event);
             }
         }
-        events
+        self.ensure_line_limit(self.buffer.len())?;
+        self.ensure_pending_limit()?;
+        Ok(events)
     }
 
-    fn process_line(&mut self, line: &str) -> Option<SseEvent> {
+    fn process_line(&mut self, line: &str) -> Result<Option<SseEvent>, SseDecodeError> {
         let line = if self.at_stream_start {
             self.at_stream_start = false;
             line.strip_prefix('\u{feff}').unwrap_or(line)
@@ -81,32 +173,77 @@ impl SseDecoder {
         };
 
         if line.is_empty() {
-            return self.dispatch_event();
+            return Ok(self.dispatch_event());
         }
         if line.starts_with(':') {
-            return None;
+            return Ok(None);
         }
 
         let (field, value) = line.split_once(':').unwrap_or((line, ""));
         let value = value.strip_prefix(' ').unwrap_or(value);
         match field {
             "event" => self.event = Some(value.to_string()),
-            "data" => self.data_lines.push(value.to_string()),
+            "data" => {
+                let separator_bytes = usize::from(!self.data_lines.is_empty());
+                let actual = self
+                    .event_data_bytes
+                    .saturating_add(separator_bytes)
+                    .saturating_add(value.len());
+                if actual > self.limits.event_bytes {
+                    return Err(SseDecodeError::EventTooLarge {
+                        actual,
+                        limit: self.limits.event_bytes,
+                    });
+                }
+                self.event_data_bytes = actual;
+                self.data_lines.push(value.to_string());
+            }
             // `id`, `retry`, and extension fields do not affect payload
             // decoding in these stateless HTTP streams.
             _ => {}
         }
-        None
+        self.ensure_pending_limit()?;
+        Ok(None)
     }
 
     fn dispatch_event(&mut self) -> Option<SseEvent> {
         let event = self.event.take();
         if self.data_lines.is_empty() {
+            self.event_data_bytes = 0;
             return None;
         }
         let data = self.data_lines.join("\n");
         self.data_lines.clear();
+        self.event_data_bytes = 0;
         Some(SseEvent { event, data })
+    }
+
+    fn pending_bytes(&self) -> usize {
+        self.buffer
+            .len()
+            .saturating_add(self.event_data_bytes)
+            .saturating_add(self.event.as_ref().map_or(0, String::len))
+    }
+
+    fn ensure_line_limit(&self, actual: usize) -> Result<(), SseDecodeError> {
+        if actual > self.limits.line_bytes {
+            return Err(SseDecodeError::LineTooLong {
+                actual,
+                limit: self.limits.line_bytes,
+            });
+        }
+        Ok(())
+    }
+
+    fn ensure_pending_limit(&self) -> Result<(), SseDecodeError> {
+        let actual = self.pending_bytes();
+        if actual > self.limits.pending_bytes {
+            return Err(SseDecodeError::PendingBufferTooLarge {
+                actual,
+                limit: self.limits.pending_bytes,
+            });
+        }
+        Ok(())
     }
 }
 
@@ -139,9 +276,9 @@ mod tests {
         let mut events = Vec::new();
 
         for byte in input {
-            events.extend(decoder.push(std::slice::from_ref(byte)));
+            events.extend(decoder.push(std::slice::from_ref(byte)).unwrap());
         }
-        events.extend(decoder.finish());
+        events.extend(decoder.finish().unwrap());
 
         assert_eq!(
             events,
@@ -155,10 +292,13 @@ mod tests {
     #[test]
     fn flushes_final_event_without_a_line_ending() {
         let mut decoder = SseDecoder::new();
-        assert!(decoder.push(b"event: tail\ndata: final").is_empty());
+        assert!(decoder
+            .push(b"event: tail\ndata: final")
+            .unwrap()
+            .is_empty());
 
         assert_eq!(
-            decoder.finish(),
+            decoder.finish().unwrap(),
             vec![SseEvent {
                 event: Some("tail".to_string()),
                 data: "final".to_string(),
@@ -169,8 +309,10 @@ mod tests {
     #[test]
     fn accepts_cr_line_endings_and_ignores_fields_without_data() {
         let mut decoder = SseDecoder::new();
-        let mut events = decoder.push(b"event: ignored\r\rdata: one\r\rdata: two\r\r");
-        events.extend(decoder.finish());
+        let mut events = decoder
+            .push(b"event: ignored\r\rdata: one\r\rdata: two\r\r")
+            .unwrap();
+        events.extend(decoder.finish().unwrap());
 
         assert_eq!(
             events,
@@ -190,9 +332,41 @@ mod tests {
     #[test]
     fn strips_only_one_optional_space_after_data_field() {
         let mut decoder = SseDecoder::new();
-        let events = decoder.push(b"data:  leading\n\ndata:no-leading\n\n");
+        let events = decoder
+            .push(b"data:  leading\n\ndata:no-leading\n\n")
+            .unwrap();
 
         assert_eq!(events[0].data, " leading");
         assert_eq!(events[1].data, "no-leading");
+    }
+
+    #[test]
+    fn rejects_a_line_that_exceeds_the_configured_limit() {
+        let mut decoder = SseDecoder::with_limits(8, 64, 128);
+
+        let error = decoder.push(b"data: 1234").unwrap_err();
+
+        assert_eq!(error.kind(), "line");
+        assert!(error.to_string().contains("8 bytes"));
+    }
+
+    #[test]
+    fn rejects_multiline_event_data_that_exceeds_the_configured_limit() {
+        let mut decoder = SseDecoder::with_limits(64, 5, 128);
+
+        let error = decoder.push(b"data: abc\ndata: def\n\n").unwrap_err();
+
+        assert_eq!(error.kind(), "event");
+        assert!(error.to_string().contains("5 bytes"));
+    }
+
+    #[test]
+    fn rejects_an_incoming_chunk_that_exceeds_the_pending_buffer_limit() {
+        let mut decoder = SseDecoder::with_limits(64, 64, 8);
+
+        let error = decoder.push(b": 123456789").unwrap_err();
+
+        assert_eq!(error.kind(), "buffer");
+        assert!(error.to_string().contains("8 bytes"));
     }
 }

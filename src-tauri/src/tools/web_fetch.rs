@@ -70,10 +70,11 @@ async fn fetch_direct(url: &str, context_max: usize) -> Result<FetchDocument, St
         .and_then(|v| v.to_str().ok())
         .unwrap_or("")
         .to_ascii_lowercase();
-    let text = resp
-        .text()
+    let body_limit = safe_http::text_body_byte_limit(context_max);
+    let limited = safe_http::read_body_limited(resp, body_limit)
         .await
         .map_err(|e| format!("读取 WebFetch 响应失败：{e}"))?;
+    let text = String::from_utf8_lossy(&limited.bytes).into_owned();
     let (title, content) = if content_type.contains("html") || looks_like_html(&text) {
         (
             extract_title(&text).unwrap_or_else(|| title_from_url(&final_url)),
@@ -92,7 +93,8 @@ async fn fetch_direct(url: &str, context_max: usize) -> Result<FetchDocument, St
         )
     };
 
-    let (content, truncated) = cap_chars_with_flag(content, context_max);
+    let (content, character_truncated) = cap_chars_with_flag(content, context_max);
+    let truncated = limited.truncated || character_truncated;
     Ok(FetchDocument {
         url: final_url,
         title,

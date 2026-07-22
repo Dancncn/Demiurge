@@ -2,7 +2,7 @@ use serde::Serialize;
 use tauri::AppHandle;
 
 use super::{budget, conversation::Message, session_engine, summary};
-use crate::{llm, store};
+use crate::llm;
 
 const MANUAL_KEEP_RECENT: usize = 12;
 
@@ -78,9 +78,9 @@ pub async fn compact_session(
     }
 
     let sid = session_id.to_string();
-    let (removed, existing_summary) = {
-        let mut storeg = state.sessions.lock().unwrap();
-        let Some(session) = storeg.get_mut(&sid) else {
+    let (original_messages, existing_summary) = {
+        let storeg = state.sessions.lock().unwrap();
+        let Some(session) = storeg.get(&sid) else {
             return Err("当前会话不存在".to_string());
         };
         let split_at = session.messages.len().saturating_sub(keep_recent);
@@ -101,10 +101,12 @@ pub async fn compact_session(
                 },
             });
         }
-        let removed = drain_prefix_preserving_pairs(&mut session.messages, split_at);
-        session.updated_at = store::now_millis();
-        (removed, session.summary.clone())
+        (session.messages.clone(), session.summary.clone())
     };
+
+    let mut next_messages = original_messages.clone();
+    let split_at = next_messages.len().saturating_sub(keep_recent);
+    let removed = drain_prefix_preserving_pairs(&mut next_messages, split_at);
 
     if removed.is_empty() {
         return Ok(CompactResult {
@@ -121,15 +123,23 @@ pub async fn compact_session(
         &state.cancel,
     )
     .await?;
-
-    {
-        let mut storeg = state.sessions.lock().unwrap();
-        if let Some(session) = storeg.get_mut(&sid) {
-            session.summary = next_summary;
-            session.updated_at = store::now_millis();
-        }
+    if state.cancel.load(std::sync::atomic::Ordering::Relaxed) || next_summary == existing_summary {
+        return Err(
+            "Compaction summary was interrupted or empty; original messages were kept.".to_string(),
+        );
     }
-    state.persist_sessions();
+
+    let turn_store = session_engine::SessionTurnStore::new(state, sid.clone());
+    if !turn_store.commit_compaction(
+        &original_messages,
+        &existing_summary,
+        next_messages,
+        next_summary,
+    )? {
+        return Err(
+            "The conversation changed while it was being compacted; retry safely.".to_string(),
+        );
+    }
 
     Ok(CompactResult {
         removed_messages: removed.len(),
@@ -174,5 +184,45 @@ mod tests {
         let removed = drain_prefix_preserving_pairs(&mut messages, 2);
         assert_eq!(removed.len(), 3);
         assert_eq!(messages.first().unwrap().role, "user");
+    }
+
+    #[tokio::test]
+    async fn summary_failure_leaves_the_original_session_untouched() {
+        let root = std::env::temp_dir().join(format!(
+            "demiurge_compact_failure_{}",
+            crate::store::new_session_id()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let state = crate::AppState::new(reqwest::Client::new());
+        *state.data_dir.lock().unwrap() = root.clone();
+        let mut settings = crate::store::Settings::default();
+        settings.api_key = "test-only".to_string();
+        settings.base_url = "http://127.0.0.1:9".to_string();
+        *state.settings.lock().unwrap() = settings;
+
+        let mut session = crate::store::Session::new();
+        session.messages = vec![
+            Message::user("one"),
+            Message::assistant_text("two"),
+            Message::user("three"),
+            Message::assistant_text("four"),
+        ];
+        let session_id = session.id.clone();
+        let original = session.messages.clone();
+        {
+            let mut sessions = state.sessions.lock().unwrap();
+            sessions.active = session_id.clone();
+            sessions.sessions.push(session);
+        }
+
+        let result = compact_session(&state, &session_id, 2).await;
+        assert!(result.is_err());
+        let sessions = state.sessions.lock().unwrap();
+        let current = sessions.get(&session_id).unwrap();
+        assert_eq!(current.messages, original);
+        assert!(current.summary.is_none());
+        drop(sessions);
+
+        let _ = std::fs::remove_dir_all(root);
     }
 }
