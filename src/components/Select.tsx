@@ -1,4 +1,11 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
+import { useEffect, useId, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import {
+  computeSelectMenuPlacement,
+  type SelectAlignment,
+  type SelectDirection,
+  type SelectMenuPlacement,
+} from "../lib/selectPosition";
 import { ChevronDownIcon, CheckIcon } from "./Icons";
 
 export interface SelectOption {
@@ -21,7 +28,7 @@ export function Select({
   triggerClassName,
   buttonContent,
   align = "left",
-  direction = "down",
+  direction = "auto",
   disabled,
 }: {
   value: string;
@@ -30,20 +37,24 @@ export function Select({
   placeholder?: string;
   triggerClassName?: string;
   buttonContent?: ReactNode;
-  align?: "left" | "right";
-  direction?: "down" | "up";
+  align?: SelectAlignment;
+  direction?: SelectDirection;
   disabled?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   // 键盘导航的高亮索引（↑↓ 移动、Enter 选择）。打开时默认指向当前选中项。
   const [highlight, setHighlight] = useState(-1);
+  const [placement, setPlacement] = useState<SelectMenuPlacement | null>(null);
   const ref = useRef<HTMLDivElement | null>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+  const listboxId = useId();
   const selected = options.find((o) => o.value === value);
 
   useEffect(() => {
     if (!open) return;
     const onDown = (e: MouseEvent) => {
-      if (!ref.current?.contains(e.target as Node)) setOpen(false);
+      const target = e.target as Node;
+      if (!ref.current?.contains(target) && !menuRef.current?.contains(target)) setOpen(false);
     };
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") setOpen(false);
@@ -65,6 +76,58 @@ export function Select({
       setHighlight(-1);
     }
   }, [open, options, value]);
+
+  useLayoutEffect(() => {
+    if (!open) {
+      setPlacement(null);
+      return;
+    }
+
+    const trigger = ref.current;
+    const menu = menuRef.current;
+    if (!trigger || !menu) return;
+
+    const updatePlacement = () => {
+      const triggerRect = trigger.getBoundingClientRect();
+      const menuRect = menu.getBoundingClientRect();
+      const next = computeSelectMenuPlacement({
+        trigger: triggerRect,
+        menu: {
+          width: Math.max(menuRect.width, triggerRect.width),
+          height: menu.scrollHeight,
+        },
+        viewport: {
+          width: document.documentElement.clientWidth,
+          height: document.documentElement.clientHeight,
+        },
+        align,
+        direction,
+      });
+      setPlacement((current) =>
+        current &&
+        current.direction === next.direction &&
+        current.top === next.top &&
+        current.left === next.left &&
+        current.maxHeight === next.maxHeight &&
+        current.minWidth === next.minWidth &&
+        current.maxWidth === next.maxWidth
+          ? current
+          : next,
+      );
+    };
+
+    updatePlacement();
+    const observer = new ResizeObserver(updatePlacement);
+    observer.observe(trigger);
+    observer.observe(menu);
+    window.addEventListener("resize", updatePlacement);
+    window.addEventListener("scroll", updatePlacement, true);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", updatePlacement);
+      window.removeEventListener("scroll", updatePlacement, true);
+    };
+  }, [align, direction, open, options]);
 
   function onKeyDown(e: React.KeyboardEvent<HTMLButtonElement>) {
     if (disabled) return;
@@ -104,6 +167,7 @@ export function Select({
         disabled={disabled}
         aria-haspopup="listbox"
         aria-expanded={open}
+        aria-controls={open ? listboxId : undefined}
         onClick={() => setOpen((v) => !v)}
         onKeyDown={onKeyDown}
         className={`md-select-trigger cf-press ${
@@ -120,13 +184,24 @@ export function Select({
           className={`shrink-0 text-[#9aa1ab] transition-transform duration-150 ${open ? "rotate-180" : ""}`}
         />
       </button>
-      {open && (
+      {open && createPortal(
         <div
+          ref={menuRef}
+          id={listboxId}
           role="listbox"
-          aria-activedescendant={highlight >= 0 ? `sel-opt-${highlight}` : undefined}
-          className={`cf-menu-in cf-dropdown absolute z-30 max-h-[300px] min-w-full overflow-y-auto p-1 ${
-            align === "right" ? "right-0" : "left-0"
-          } ${direction === "up" ? "bottom-[calc(100%+4px)]" : "top-[calc(100%+4px)]"}`}
+          aria-activedescendant={highlight >= 0 ? `${listboxId}-option-${highlight}` : undefined}
+          data-direction={placement?.direction}
+          className="md-select-menu cf-menu-in cf-dropdown fixed z-[1000] overflow-y-auto p-1"
+          style={
+            {
+              top: placement?.top ?? 0,
+              left: placement?.left ?? 0,
+              minWidth: placement?.minWidth,
+              maxWidth: placement?.maxWidth,
+              maxHeight: placement?.maxHeight ?? 300,
+              visibility: placement ? "visible" : "hidden",
+            } satisfies CSSProperties
+          }
         >
           {options.map((o, i) => {
             const active = o.value === value;
@@ -134,7 +209,7 @@ export function Select({
             return (
               <button
                 key={o.value}
-                id={`sel-opt-${i}`}
+                id={`${listboxId}-option-${i}`}
                 type="button"
                 role="option"
                 aria-selected={active}
@@ -159,7 +234,7 @@ export function Select({
             );
           })}
         </div>
-      )}
+      , document.body)}
     </div>
   );
 }

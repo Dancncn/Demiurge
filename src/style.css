@@ -674,6 +674,10 @@ select:focus {
   transform-origin: top center;
 }
 
+.md-select-menu[data-direction="up"] {
+  transform-origin: bottom center;
+}
+
 .cf-dropdown {
   border: 1px solid #e4e7ec;
   border-radius: 10px;
@@ -2536,6 +2540,223 @@ html[data-window="widgets"] #app {
 
 .widgets-tool-surface > section {
   background: transparent !important;
+}
+
+/* ---- Live2D panel and detached transparent window ---- */
+.live2d-keep-alive,
+.live2d-panel {
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+}
+
+.live2d-panel {
+  color: var(--md-on-surface, #2b2529);
+  background: var(--md-surface-low, #faf7f9);
+}
+
+.live2d-toolbar {
+  padding: 0 12px;
+  border-bottom: 1px solid var(--md-outline-variant, #ded7e1);
+  background: var(--md-surface, #ffffff);
+}
+
+.live2d-toolbar-title {
+  min-width: 72px;
+  color: var(--md-on-surface, #2b2529);
+  letter-spacing: 0;
+}
+
+.live2d-follow-toggle,
+.live2d-scale-control {
+  color: var(--md-on-surface-variant, #685e65);
+}
+
+.live2d-scale-control input {
+  accent-color: var(--md-primary, #c44782);
+}
+
+.live2d-stage {
+  overflow: hidden;
+  background: var(--md-surface-low, #faf7f9);
+}
+
+.live2d-loading-surface,
+.live2d-error-surface,
+.live2d-debug {
+  border: 1px solid var(--md-outline-variant, #ded7e1);
+  border-radius: 8px;
+  color: var(--md-on-surface-variant, #685e65);
+  background: color-mix(in srgb, var(--md-surface, #ffffff) 94%, transparent);
+  box-shadow: 0 2px 8px color-mix(in srgb, var(--md-shadow, rgba(64, 42, 55, 0.14)) 70%, transparent);
+}
+
+.live2d-loading-surface {
+  width: min(320px, calc(100% - 40px));
+  padding: 14px 16px;
+}
+
+.live2d-progress {
+  height: 4px;
+  margin-top: 10px;
+  overflow: hidden;
+  border-radius: 2px;
+  background: var(--md-surface-high, #eee7eb);
+}
+
+.live2d-progress > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--md-primary, #c44782);
+  transition: width 180ms ease;
+}
+
+.live2d-error-surface {
+  min-width: min(320px, calc(100% - 40px));
+  padding: 16px;
+}
+
+html[data-window="live2d"],
+html[data-window="live2d"] body,
+html[data-window="live2d"] #app {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: transparent !important;
+}
+
+.live2d-window-shell,
+.live2d-window-shell .live2d-panel,
+.live2d-window-shell .live2d-stage {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: transparent;
+}
+
+.live2d-window-shell .live2d-toolbar {
+  height: 44px;
+  margin: 8px 8px 0;
+  padding: 0 8px 0 12px;
+  border: 1px solid var(--md-outline-variant, #ded7e1);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--md-surface, #ffffff) 92%, transparent);
+  box-shadow: 0 3px 10px color-mix(in srgb, var(--md-shadow, rgba(64, 42, 55, 0.14)) 78%, transparent);
+  transition: height 300ms cubic-bezier(0.4, 0, 0.2, 1),
+              margin 300ms cubic-bezier(0.4, 0, 0.2, 1),
+              padding 300ms cubic-bezier(0.4, 0, 0.2, 1),
+              border-width 300ms cubic-bezier(0.4, 0, 0.2, 1),
+              opacity 260ms ease;
+}
+
+.live2d-window-shell .live2d-toolbar-title {
+  align-self: stretch;
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  cursor: move;
+}
+
+.live2d-window-shell .live2d-scale-control span {
+  display: none;
+}
+
+/* ---- Live2D window-mode toolbar animations ---- */
+
+/* Collapsed state: shrink to zero height + fade out */
+.live2d-window-shell .live2d-toolbar.is-collapsed {
+  height: 0;
+  margin: 0;
+  padding-top: 0;
+  padding-bottom: 0;
+  border-width: 0;
+  opacity: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+/* The collapsed button group collapses with the toolbar itself —
+   each button fades to invisible so they don't peek through. */
+.live2d-window-shell .live2d-toolbar.is-collapsed .md-icon-button,
+.live2d-window-shell .live2d-toolbar.is-collapsed .live2d-scale-control,
+.live2d-window-shell .live2d-toolbar.is-collapsed .live2d-follow-toggle {
+  opacity: 0;
+}
+
+/* Auto-hide indicator: a small semi-transparent dot near the top-right of
+   the viewport, only visible when the toolbar is collapsed. Tapping the stage
+   anywhere reveals the toolbar again. */
+.live2d-window-shell .live2d-stage::after {
+  content: "";
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--md-on-surface, #2b2529) 18%, transparent);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 260ms ease;
+  z-index: 5;
+}
+
+/* Only show the dot when the toolbar is gone */
+.live2d-window-shell .live2d-panel.is-window .live2d-toolbar.is-collapsed ~ .live2d-stage::after {
+  opacity: 1;
+}
+
+/* Fade the dot out after a few seconds of no interaction —
+   matches TOOLBAR_AUTO_HIDE_MS + 2s grace period */
+@keyframes live2d-dot-pulse {
+  0%, 80% { opacity: 1; }
+  100% { opacity: 0.12; }
+}
+
+.live2d-window-shell .live2d-panel.is-window .live2d-toolbar.is-collapsed ~ .live2d-stage::after {
+  animation: live2d-dot-pulse 6s ease-in-out infinite;
+}
+
+.live2d-window-shell .live2d-loading-surface,
+.live2d-window-shell .live2d-error-surface {
+  background: color-mix(in srgb, var(--md-surface, #ffffff) 90%, transparent);
+}
+
+.live2d-window-standby {
+  display: grid;
+  width: calc(100% - 16px);
+  min-height: 44px;
+  margin: 8px;
+  place-items: center;
+  padding: 8px 12px;
+  border: 1px solid var(--md-outline-variant, #ded7e1);
+  border-radius: 8px;
+  color: var(--md-on-surface-variant, #685e65);
+  background: color-mix(in srgb, var(--md-surface, #ffffff) 92%, transparent);
+  font-size: 12px;
+  cursor: move;
+}
+
+@media (max-width: 420px) {
+  .live2d-toolbar {
+    gap: 4px;
+    padding-right: 8px;
+    padding-left: 8px;
+  }
+
+  .live2d-toolbar-title {
+    min-width: 56px;
+  }
+
+  .live2d-follow-toggle span,
+  .live2d-scale-control span {
+    display: none;
+  }
+
+  .live2d-scale-control input {
+    width: 68px;
+  }
 }
 
 @media (max-width: 460px) {

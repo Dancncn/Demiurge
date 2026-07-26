@@ -21,7 +21,7 @@
 
 ---
 
-> 文档状态：2026-07-26 已按当前实现复核。验证基线为前端 35 项测试、生产构建和 Rust 287 项测试通过；真正音频字节流、Computer Use 执行闭环与 Live2D 桌宠扩展仍在路线图中。
+> 文档状态：2026-07-26 已按当前实现复核。验证基线为前端 43 项测试、生产构建和 Rust 287 项测试通过；真正音频字节流、Computer Use 执行闭环与 Live2D 桌宠交互扩展仍在路线图中。
 
 ## 这是什么
 
@@ -34,7 +34,7 @@ Demiurge 是一个桌面伴侣 Agent 的“空引擎”。它不绑定具体角�
 - **可控安全**：写文件、shell、打开路径、截图/OCR 等敏感操作走确认门；文件工具被限制在当前会话项目根；角色卡可声明 permission 偏好，在用户规则与工具默认之间形成可配置 overlay。
 - **可持续推进**：`/goal` 可以设置长期目标，普通回合结束后继续自动驱动，直到完成、暂停、阻塞或预算耗尽。
 - **Lorebook 向量召回**：本地 BM25 稀疏检索 + 远程 embedding 稠密检索 + RRF 混合融合，chunk 向量按 provider+维度缓存；`/recall` 与设置面板可视化命中关键词、score、索引状态。
-- **Live2D 面板**：角色包可挂载 Cubism 4/5 模型（`untitled-pixi-live2d-engine` + PixiJS v8），在应用内渲染带 idle 物理/眨眼/呼吸的 Live2D 面板，支持缩放与拖拽。文件夹导入会在临时目录复制、规范化并验证全部模型引用，成功后才替换旧模型。需先运行 `npm run fetch:cubism-core` 取回 Live2D Cubism Core（私有运行时，不入库）。
+- **Live2D 面板与独立窗口**：角色包可挂载 Cubism 4/5 模型（`untitled-pixi-live2d-engine` + PixiJS v8），支持 idle 物理/眨眼/呼吸、缩放、拖拽和可持久化的鼠标跟随开关。主面板首次访问后保持 WebGL 实例，独立透明置顶窗口隐藏后暂停 ticker、再次呼出复用模型。文件夹导入会在临时目录规范化并验证全部引用；运行时通过 Tauri asset protocol 直接加载模型资源。需先运行 `npm run fetch:cubism-core` 取回 Live2D Cubism Core（私有运行时，不入库）。
 
 ## 功能概览
 
@@ -96,7 +96,7 @@ Demiurge 是一个桌面伴侣 Agent 的“空引擎”。它不绑定具体角�
 ### Voice 与素材接口
 
 - Voice：语音输入（STT/ASR）已接入云端转写后端；语音输出支持云端与本地服务、语速/情感参数、连接测试、失败降级，以及按句切分的播放队列、静音和立即打断。STT/TTS 载荷有大小上限；当前是流式文本驱动的分句合成，不是音频字节边接收边播放。默认安装包不分发本地语音模型权重。
-- 角色包素材字段：avatar、Live2D（已实现，经后端受检 bundle 转成前端 blob/data URL）、voice（预留）等。
+- 角色包素材字段：avatar、Live2D（已实现；受检路径经 Tauri asset protocol 直接加载，model3 内引用改写为完整 asset URL）、voice（预留）等。
 
 ## 快速开始
 

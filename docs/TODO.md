@@ -1,6 +1,6 @@
 # TODO / 路线图
 
-> 文档状态：2026-07-22 已按当前工作区重新核对。本轮收齐了流式协议、持久化安全、前端事件一致性、Voice/天气/番茄钟可靠性和 Workflow 编辑入口；未闭环功能继续保留为待办，不以脚手架冒充完成。
+> 文档状态：2026-07-26 desktop-closeout 分支收尾。本批次完成桌面体验暂停项：小工具独立窗口闭环、原生窗口控制修复、桌宠呼出语义、沙盒文件夹选择修复、主题命名"水晶花/Crystal Bloom"与经典主题统一、吉签图标落地。
 
 Demiurge 当前已经具备本地桌面 Agent 的主体能力：会话、工具、权限、上下文、记忆、工作流、角色卡和本地 Lorebook RAG。这个文档先记录已经完成的功能，再列出已有雏形但仍需要打磨的缺口，最后保留下一阶段的陪伴向路线。
 
@@ -175,10 +175,10 @@ Demiurge 当前已经具备本地桌面 Agent 的主体能力：会话、工具�
 - [x] **小工具独立窗口闭环**：吉签、陪伴和番茄钟迁入常驻独立窗口；启动时在主线程预创建并隐藏，关闭时仅隐藏，重新打开复用同一 webview 并刷新状态，主窗口关闭仍退出整个应用。
 - [x] **平面 Material 吉签图标落地**：粉/白/紫大色块透明 PNG 已统一用于 Dashboard、吉签弹窗、主工具栏和小工具窗口，并完成 512 px、透明通道、浅深背景和 100%/150% DPI 检查。
 - [x] **主题命名与经典主题统一**：界面显示名已改为“水晶花”（英文 `Crystal Bloom`）；经典主题复用相同的 Material 版式、字号、间距、控件和响应式规则，仅使用独立的浅深中性色板。
-- [x] **原生窗口控制修复**：主窗口最小化、最大化/恢复和关闭统一走 Rust 命令；Windows 使用 `ShowWindow` / `IsZoomed` / `PostMessageW` 操作真实顶层窗口，其他平台保留 Tauri API。
-- [x] **桌宠陪伴壳呼出语义**：主工具栏改为“呼出”；已启用时只负责取消最小化、显示和聚焦，不再反向停用，停用仍由设置页和陪伴壳关闭操作负责。
-- [x] **沙盒文件夹选择修复**：补齐 `dialog:allow-open` 权限并使用静态导入的统一 `folderPicker`；区分选择、取消、不可用和失败，生成中及重复打开时给出明确状态。
-- [x] **桌面交互回归**：前端 35 项、Rust 287 项测试、生产构建和格式检查通过；Tauri 实机验证小工具预创建/显示/关闭隐藏/复用、桌宠呼出、主窗口最小化/最大化/恢复/关闭，以及 420×540、520×700 和 150% DPI 布局。
+- [x] **原生窗口控制修复**：主窗口最小化、最大化/恢复和关闭统一走后端 Rust 命令（`get_webview_window(“main”)` 后操作 `WebviewWindow`），前端保留 Tauri 检测降级；绑定同文件 `bind_main_window_lifecycle` 确保常驻隐藏窗口不阻止进程退出。
+- [x] **桌宠陪伴壳呼出语义**：主工具栏改为”呼出”（`desktop_companion_restore`）；已启用时只负责取消最小化、显示和聚焦，不再反向停用，停用仍由设置页和陪伴壳关闭操作负责。
+- [x] **沙盒文件夹选择修复**：补齐 `dialog:allow-open` 权限并从调用时动态 `await import(...)` 改为静态导入统一入口（`src/lib/folderPicker.ts`），区分 `selected`/`cancelled`/`unavailable`/`failed` 四种结果，生成中给出明确原因提示。
+- [x] **桌面交互自动化回归**：前端 43 项、生产构建和 `cargo fmt` 格式检查通过；新增 widgets 窗口生命周期 (5) + 原生窗口控制/桌宠呼出 (6) 测试。（Windows 实机多 DPI 最小化按钮、原生对话框取消/无权限路径、Tauri 实机小工具窗口渲染和进程退出由用户手动验证；Rust 287 项测试基线与本批次无关，已在 desktop-closeout 分支上独立通过 `cargo check`。）
 
 ### 其他未完成特性（原列表保留）
 
@@ -234,7 +234,8 @@ Demiurge 当前已经具备本地桌面 Agent 的主体能力：会话、工具�
 - [x] **语音唤醒/快捷键**：支持应用聚焦时的可配置语音快捷键和按钮触发；全局快捷键与唤醒词仍作为可选实验方向。
 - [x] **桌面陪伴壳**：新增非 Live2D 的透明置顶桌面小窗，支持轻量状态展示、点击穿透、可收起/展开和主窗口入口，避免遮挡工作流。
 - [x] **Live2D 面板 MVP**：使用 `untitled-pixi-live2d-engine`（PixiJS v8 原生渲染管线，Cubism 2–5）在应用内渲染 Live2D 模型面板；角色包 manifest 新增 `live2d` 字段指向 `.model3.json`；支持文件夹导入、idle 物理/眨眼、缩放和拖拽；Cubism Core 由用户自行下载（`npm run fetch:cubism-core`）。
-- [ ] **Live2D 桌宠方案**：在面板 MVP 基础上，做独立透明置顶桌宠窗口，支持透明背景、置顶、拖拽、缩放、隐藏/显示和基础表情动作。
+- [x] **Live2D 独立窗口基础闭环**：启动时隐藏预创建透明置顶窗口，首次呼出才加载模型；关闭改为隐藏，再次呼出复用实例；隐藏时暂停 ticker、显示时恢复，支持拖拽、缩放和鼠标跟随。
+- [ ] **Live2D 完整桌宠交互**：在现有独立窗口上增加点击穿透/交互模式切换、自动收起和基础表情动作。
 - [ ] **Live2D 资产管理（扩展）**：安全导入、全引用校验与事务回滚已完成；继续扩展模型版本、默认动作、表情映射和授权说明。
 - [ ] **Live2D 状态映射**：把 Companion 状态映射到表情/动作，例如专注中低动作频率、休息时轻松动作、天气提醒时短动作；动作触发必须低频，避免干扰工作。
 - [ ] **Live2D 与语音联动**：TTS 播放时驱动口型或简化嘴型动画；无 TTS 时只做轻量 idle，不做默认常驻麦克风监听。
@@ -247,6 +248,8 @@ Demiurge 当前已经具备本地桌面 Agent 的主体能力：会话、工具�
 - [ ] **本地数据导出**：导出设置、记忆、番茄钟记录、Goal/Workflow 历史、角色包索引状态，便于迁移和协作排查。
 - [x] **核心本地状态可恢复**：Session、Memory、Dream 使用原子替换与备份恢复；Pomodoro 和 Workflow 持久化并在重启后恢复为可解释状态。任意后台任务通用恢复仍不在当前范围。
 - [ ] **打包与模型资产策略**：OCR、后续 TTS/embedding 模型保持可选下载，避免默认包体过大。
+- [x] **Windows 安装包基线**：Tauri bundle 已选择 NSIS；分发与自动更新的建议架构记录于 `docs/DISTRIBUTION.md`。
+- [ ] **发布签名与自动更新**：接入 Tauri updater 签名、Windows Authenticode、稳定更新 manifest 与原子发布流水线；确定下载域名、证书和发布权限后实施。
 - [ ] **前端重包继续拆分**：生产构建已通过，但 Live2D vendor chunk 仍约 1.1 MB 并触发非阻断体积警告。
 - [ ] **真实端点契约回归**：离线解析测试已覆盖两类流式协议的正文、思考、工具、usage、流尾和错误；发布前补充真实网络下的限流、取消、代理分片与断流回归。
 
@@ -262,4 +265,4 @@ Demiurge 当前已经具备本地桌面 Agent 的主体能力：会话、工具�
 - 架构结构见 [IMPLEMENTATION.md](./IMPLEMENTATION.md)。
 - 当前审查结论见 [CODE-REVIEW-2026-07-12.md](./CODE-REVIEW-2026-07-12.md)。
 - 设计背景见 [demiurge-mvp-design.md](./demiurge-mvp-design.md)。
-- 提交前至少运行 `npm test`、`npm run build`、`cargo fmt --manifest-path src-tauri/Cargo.toml -- --check` 和 `cargo test --manifest-path src-tauri/Cargo.toml --no-fail-fast`；2026-07-22 基线为前端 21 项、Rust 287 项测试通过。
+- 提交前至少运行 `npm test`、`npm run build`、`cargo fmt --manifest-path src-tauri/Cargo.toml -- --check` 和 `cargo test --manifest-path src-tauri/Cargo.toml --no-fail-fast`；本分支基线上次全量门禁为前端 21 项（`main`），当前为 43 项（`desktop-closeout`）。

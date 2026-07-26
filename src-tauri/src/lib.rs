@@ -44,6 +44,10 @@ const DESKTOP_COMPANION_COLLAPSED_HEIGHT: u32 = 64;
 const WIDGETS_WINDOW_LABEL: &str = "widgets";
 const WIDGETS_WINDOW_WIDTH: f64 = 520.0;
 const WIDGETS_WINDOW_HEIGHT: f64 = 700.0;
+const LIVE2D_WINDOW_LABEL: &str = "live2d";
+const LIVE2D_VISIBILITY_EVENT: &str = "live2d-visibility-changed";
+const LIVE2D_WINDOW_WIDTH: f64 = 430.0;
+const LIVE2D_WINDOW_HEIGHT: f64 = 640.0;
 
 /// 全局共享状态。路径类字段在 setup() 里填充（需要 AppHandle 才能拿到 app_data_dir）。
 pub struct AppState {
@@ -444,6 +448,31 @@ fn create_widgets_window(app: &AppHandle) -> Result<tauri::WebviewWindow, String
     Ok(window)
 }
 
+/// Live2D 挂件窗口只预创建透明 webview，不在隐藏阶段加载模型。前端在窗口首次
+/// 获得焦点后才挂载 Live2DPanel，避免拖慢主窗口启动；后续隐藏时保留渲染资源。
+fn create_live2d_window(app: &AppHandle) -> Result<tauri::WebviewWindow, String> {
+    let window = tauri::WebviewWindowBuilder::new(
+        app,
+        LIVE2D_WINDOW_LABEL,
+        tauri::WebviewUrl::App("index.html".into()),
+    )
+    .title("Demiurge - Live2D")
+    .inner_size(LIVE2D_WINDOW_WIDTH, LIVE2D_WINDOW_HEIGHT)
+    .min_inner_size(300.0, 420.0)
+    .resizable(true)
+    .decorations(false)
+    .transparent(true)
+    .shadow(false)
+    .always_on_top(true)
+    .skip_taskbar(true)
+    .visible(false)
+    .center()
+    .build()
+    .map_err(|e| format!("Failed to create Live2D window: {e}"))?;
+    bind_live2d_window_lifecycle(&window);
+    Ok(window)
+}
+
 /// 小工具窗口常驻存活：关闭按钮只隐藏窗口，webview 保持已渲染状态，
 /// 下次打开可以瞬时恢复，也避免重建时再次踩到空白窗口问题。
 fn bind_widgets_window_lifecycle(window: &tauri::WebviewWindow) {
@@ -452,6 +481,19 @@ fn bind_widgets_window_lifecycle(window: &tauri::WebviewWindow) {
         if let tauri::WindowEvent::CloseRequested { api, .. } = event {
             api.prevent_close();
             if let Some(window) = app.get_webview_window(WIDGETS_WINDOW_LABEL) {
+                let _ = window.hide();
+            }
+        }
+    });
+}
+
+fn bind_live2d_window_lifecycle(window: &tauri::WebviewWindow) {
+    let app = window.app_handle().clone();
+    window.on_window_event(move |event| {
+        if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+            api.prevent_close();
+            if let Some(window) = app.get_webview_window(LIVE2D_WINDOW_LABEL) {
+                let _ = window.emit(LIVE2D_VISIBILITY_EVENT, false);
                 let _ = window.hide();
             }
         }
@@ -483,6 +525,22 @@ fn show_widgets_window(window: &tauri::WebviewWindow) -> Result<(), String> {
     window
         .set_focus()
         .map_err(|e| format!("Failed to focus widgets window: {e}"))?;
+    Ok(())
+}
+
+fn show_live2d_window(window: &tauri::WebviewWindow) -> Result<(), String> {
+    window
+        .unminimize()
+        .map_err(|e| format!("Failed to restore Live2D window: {e}"))?;
+    window
+        .show()
+        .map_err(|e| format!("Failed to show Live2D window: {e}"))?;
+    window
+        .emit(LIVE2D_VISIBILITY_EVENT, true)
+        .map_err(|e| format!("Failed to resume Live2D rendering: {e}"))?;
+    window
+        .set_focus()
+        .map_err(|e| format!("Failed to focus Live2D window: {e}"))?;
     Ok(())
 }
 
@@ -881,6 +939,22 @@ async fn open_widgets_window(app: AppHandle) -> Result<(), String> {
         }
     })
     .map_err(|e| format!("Failed to schedule widgets window creation: {e}"))
+}
+
+#[tauri::command]
+async fn open_live2d_window(app: AppHandle) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window(LIVE2D_WINDOW_LABEL) {
+        return show_live2d_window(&window);
+    }
+
+    let handle = app.clone();
+    app.run_on_main_thread(move || {
+        let result = create_live2d_window(&handle).and_then(|window| show_live2d_window(&window));
+        if let Err(e) = result {
+            eprintln!("Demiurge Live2D window warning: {e}");
+        }
+    })
+    .map_err(|e| format!("Failed to schedule Live2D window creation: {e}"))
 }
 
 #[tauri::command]
@@ -3139,6 +3213,9 @@ pub fn run() {
             if let Err(e) = create_widgets_window(app.handle()) {
                 eprintln!("Demiurge widgets window startup warning: {e}");
             }
+            if let Err(e) = create_live2d_window(app.handle()) {
+                eprintln!("Demiurge Live2D window startup warning: {e}");
+            }
             agent::workflow_runtime::hydrate_persisted_runs(state.inner());
             pomodoro::hydrate(app.handle().clone(), state.inner());
             // 保证落盘一次（迁移/初始化后）
@@ -3234,6 +3311,7 @@ pub fn run() {
             desktop_companion_restore,
             desktop_companion_show_main,
             open_widgets_window,
+            open_live2d_window,
             pomodoro_state,
             pomodoro_start,
             pomodoro_pause,

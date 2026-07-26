@@ -156,7 +156,7 @@ Demiurge/
 | `tools/shell.rs` | shell 风险分类、policy state、standard/strict/sandboxed isolation、平台 process containment 和 sandbox wrapper | `run()` / `preview()` / `policy_state()` |
 | `permission/mod.rs` | turn-owned 权限上下文、Session/Project/User 分层规则、confirm 往返、原子规则持久化与带身份审计 | `context_for_session()` / `decide_for_mode()` / `confirm()` |
 | `pack/mod.rs` | 角色包加载、manifest 校验、头像 data URL 读取、zip 导入校验与默认包落地 | `list_packs()` / `load_pack()` / `import_zip()` |
-| `pack/live2d.rs` | Live2D staging 导入、全 FileReferences containment/ASCII 重写、目录+manifest 回滚提交与受检 bundle | `import_live2d_folder()` / `live2d_bundle()` |
+| `pack/live2d.rs` | Live2D staging 导入、全 FileReferences containment/ASCII 重写、目录+manifest 回滚提交与受检路径解析 | `import_live2d_folder()` / `resolve_live2d_model_path()` |
 | `store/mod.rs` | settings、sessions、权限规则等持久化；会话采用临时文件原子替换、上一版本备份与损坏恢复 | `Settings` / `SessionStore` / `atomic_write_text()` |
 
 ## 前端模块
@@ -176,6 +176,8 @@ Demiurge/
 | `components/PomodoroCard.tsx` | 聊天页番茄钟控制面板，支持任务绑定、暂停/继续/跳过、中断原因、桌面通知和节奏摘要 |
 | `components/VoiceCallPanel.tsx` | 第一阶段语音通话面板：接通/挂断、静音、时长、按键说话、简单 VAD 端点检测、STT → LLM → 流式 TTS 和本地半双工打断 |
 | `components/DesktopCompanionShell.tsx` | 独立透明桌面陪伴壳窗口：展示头像、陪伴状态、天气/建议、置顶、点击穿透、收起/展开和权限边界状态 |
+| `components/Live2DPanel.tsx` / `Live2DWindowShell.tsx` | asset protocol 直载模型、分阶段进度、主面板 keep-alive，以及隐藏时暂停 ticker 的独立透明 Live2D 窗口 |
+| `components/Select.tsx` / `lib/selectPosition.ts` | body portal 下拉菜单；按视口可用空间自动向上/向下展开并限制高度与水平边界 |
 | `components/Markdown.tsx` | 轻量 Markdown 入口，通过 `React.lazy` 延迟加载完整渲染器 |
 | `components/MarkdownRenderer.tsx` | GFM、代码块、highlight.js、KaTeX 与 Mermaid 渲染；流式尾部词片段淡入并尊重 reduced-motion |
 | `components/ToolCard.tsx` | tool-start/tool-end 展示；编辑工具显示受影响文件活动、可展开详情、差异与回滚提示 |
@@ -303,6 +305,8 @@ Companion memory 走独立的用户确认链路：手动陪伴建议和授权后
 语音通话当前是第一阶段回合制体验：点击电话按钮或语音快捷键打开面板，接通后按键说话，录音结束走 STT，转写文本进入当前会话，assistant 流式回答同步进入 TTS 队列。面板显示接通/挂断、静音、时长和 TTS 队列状态，并在开始录音前停止当前 TTS，形成本地半双工打断。简单 VAD 用音量阈值检测端点；通话记忆归档与 Live2D 口型/动作联动尚未接入。
 
 桌面陪伴壳是非 Live2D 的独立 Tauri webview window，label 为 `desktop_companion`。`lib.rs` 根据 `Settings` 中的 `desktop_companion_enabled / always_on_top / click_through / collapsed` 创建或隐藏透明无边框窗口，并用 `set_ignore_cursor_events` 实现点击穿透。`main.tsx` 根据当前窗口 label 渲染 `DesktopCompanionShell` 或主应用；陪伴壳展示当前角色头像、陪伴 focus/mood、天气/建议摘要、置顶/穿透/收起控制、主窗口入口和屏幕/麦克风/位置状态。
+
+Live2D 另有 label 为 `live2d` 的透明置顶窗口。启动时只隐藏预创建 webview，首次呼出后才加载模型；关闭请求改为隐藏，模型、纹理和 WebGL 实例继续复用。Rust 显隐事件驱动 `Live2DPanel.active`：隐藏时 `ticker.stop()`，再次显示时 `ticker.start()`，避免后台持续占用 GPU。主窗口内的 Live2D 面板首次访问后也保持挂载，切换对话/图像视图只暂停和恢复 ticker，不重复请求模型资源。
 
 ## Pomodoro / Focus Rhythm
 
@@ -523,7 +527,7 @@ npm run build
 npm test
 ```
 
-前端体积治理集中在 `vite.config.ts` 和重模块入口：`manualChunks` 将 Mermaid diagram chunks、Mermaid parser、Cytoscape/D3/graph layout、Markdown/KaTeX/highlight、PDF.js 和 JSZip 分离；`components/Markdown.tsx` 只保留轻量 Suspense 入口，完整渲染器在消息区域需要时加载；PDF/ZIP 解析也按需导入。2026-07-22 的生产构建通过，但仍对约 1.1 MB 的 Live2D vendor chunk 给出非阻断体积警告；这属于已知性能优化项，不应描述为零 warning。
+前端体积治理集中在 `vite.config.ts` 和重模块入口：`manualChunks` 将 Mermaid diagram chunks、Mermaid parser、Cytoscape/D3/graph layout、Markdown/KaTeX/highlight、PDF.js 和 JSZip 分离；`components/Markdown.tsx` 只保留轻量 Suspense 入口，完整渲染器在消息区域需要时加载；PDF/ZIP 解析也按需导入。2026-07-26 的生产构建通过，但仍对约 1.1 MB 的 Live2D vendor chunk 给出非阻断体积警告；这属于已知性能优化项，不应描述为零 warning。
 
 Rust 测试：
 
@@ -531,10 +535,12 @@ Rust 测试：
 cargo test --manifest-path src-tauri/Cargo.toml
 ```
 
-2026-07-22 验证结果：21 项前端测试与 287 项 Rust 测试全部通过；`npm run build` 和 `cargo fmt --check` 通过。生产构建仍有约 1.1 MB 的 Live2D vendor chunk 非阻断体积警告；供应商专项只覆盖离线解析与请求体契约，发布前仍应执行真实端点网络契约测试。
+2026-07-26 验证结果：43 项前端测试与 287 项 Rust 测试全部通过；`npm run build` 和 `cargo fmt --check` 通过。图像面板的分辨率菜单另在 1100×680 本地页面中验证为 body portal、靠近底边时自动向上且完整位于视口内。生产构建仍有约 1.1 MB 的 Live2D vendor chunk 非阻断体积警告；Rust 仍有两个既有未使用方法警告；供应商专项只覆盖离线解析与请求体契约，发布前仍应执行真实端点网络契约测试。
 
 Tauri 打包：
 
 ```bash
 npm run tauri build
 ```
+
+当前 Windows bundle 目标为 NSIS，尚未接入 updater 与发布签名。腾讯服务器/Gitea 的建议分发拓扑、匿名下载边界、Tauri updater 签名和 Authenticode 区别见 [`DISTRIBUTION.md`](DISTRIBUTION.md)。

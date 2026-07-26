@@ -155,6 +155,7 @@ export const mainWindowClose = () => invoke<void>("main_window_close");
 export const desktopCompanionRestore = () => invoke<void>("desktop_companion_restore");
 export const desktopCompanionShowMain = () => invoke<void>("desktop_companion_show_main");
 export const openWidgetsWindow = () => invoke<void>("open_widgets_window");
+export const openLive2dWindow = () => invoke<void>("open_live2d_window");
 export const pomodoroState = () => invoke<PomodoroPanelState>("pomodoro_state");
 export const pomodoroStart = (request: PomodoroStartRequest) =>
   invoke<PomodoroPanelState>("pomodoro_start", { request });

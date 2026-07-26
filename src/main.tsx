@@ -3,6 +3,7 @@ import ReactDOM from "react-dom/client";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import App from "./App";
 import DesktopCompanionShell from "./components/DesktopCompanionShell";
+import Live2DWindowShell from "./components/Live2DWindowShell";
 import WidgetsWindowShell from "./components/WidgetsWindowShell";
 import { LanguageProvider } from "./lib/i18n";
 import "@fontsource-variable/inter";
@@ -15,9 +16,12 @@ import "./style.css";
 const requestedWindowLabel = new URLSearchParams(window.location.search).get("window");
 const currentWindowLabel =
   requestedWindowLabel || ("__TAURI_INTERNALS__" in window ? getCurrentWindow().label : "main");
+document.documentElement.dataset.window = currentWindowLabel;
 const Root =
   currentWindowLabel === "desktop_companion"
     ? DesktopCompanionShell
+    : currentWindowLabel === "live2d"
+      ? Live2DWindowShell
     : currentWindowLabel === "widgets"
       ? WidgetsWindowShell
       : App;

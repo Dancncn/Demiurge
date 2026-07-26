@@ -1,14 +1,14 @@
-# 19 — Live2D 面板（MVP）
+# 19 — Live2D 面板与独立窗口
 
-> 审阅状态（2026-07-12）：应用内面板与资源 bundle 已复核；文件夹导入现已具备全引用 containment、staging 验证和失败回滚。生产构建中的 Live2D vendor 约 1.1 MB，仍触发非阻断体积警告；语音播放队列已实现，但口型/动作联动仍未实现。
+> 审阅状态（2026-07-26）：模型改为通过 Tauri asset protocol 直接加载，不再把整套模型转成 base64 经 IPC 传输；应用内面板保持挂载，独立透明置顶窗口按需首次加载并在隐藏时暂停 ticker。生产构建中的 Live2D vendor 约 1.1 MB，仍触发非阻断体积警告；口型/动作联动仍未实现。
 
-本篇讲 Demiurge 如何把一个 Cubism 4/5 Live2D 模型挂到角色包上、在应用内渲染出来，以及当前 MVP 的边界与待打磨项。面向想扩展桌宠外壳或接 TTS 口型同步的协作者。
+本篇讲 Demiurge 如何把一个 Cubism 4/5 Live2D 模型挂到角色包上，在应用内面板和独立透明窗口中复用渲染资源，以及当前边界与待打磨项。
 
 > 面向用户的功能介绍见 [README.md](../../README.md)；路线图与下一步见 [TODO.md](../TODO.md) 的 P4 段；角色包清单字段细节见 [14-pack-system](14-pack-system.md)。
 
 ## 1. 方案定位
 
-Live2D 是角色包的**可选素材**，与 `avatar`（静态头像）并列。当前落地的是「应用内面板 MVP」：在主窗口里开一个 Live2D 视图，挂载模型、跑 idle 物理/眨眼/呼吸，支持缩放和拖拽。**透明置顶桌宠窗口、TTS 口型同步、动作播放**都是后续阶段，本文末尾「待打磨」一节列出。
+Live2D 是角色包的**可选素材**，与 `avatar`（静态头像）并列。当前已落地应用内常驻面板和独立透明置顶窗口：模型运行 idle 物理/眨眼/呼吸，支持缩放、拖拽、鼠标跟随开关、重载和窗口隐藏/复用。**点击穿透、TTS 口型同步、表情/动作状态映射**仍是后续阶段。
 
 ## 2. 关键选型与为什么
 
@@ -22,16 +22,16 @@ Live2D 是角色包的**可选素材**，与 `avatar`（静态头像）并列。
 
 本项目用 Vite 6 + React 18，配 Pixi v8 最顺，故选本库。安装：`pixi.js@^8`、`@pixi/sound@^6`（引擎 peer，SoundManager 在模块加载期就引用）、`untitled-pixi-live2d-engine`。
 
-### 2.2 资源加载：后端受检 bundle + 前端 blob/data URL
+### 2.2 资源加载：受检路径 + Tauri asset protocol
 
-Live2D 模型是 `.model3.json` + `.moc3` + 纹理 + 物理/Pose/DisplayInfo/UserData/表情/动作/声音的引用图。清单仍只保存 model3 相对路径，不把大模型内联进 manifest；真正打开面板时走专用 bundle：
+Live2D 模型是 `.model3.json` + `.moc3` + 纹理 + 物理/Pose/DisplayInfo/UserData/表情/动作/声音的引用图。清单只保存 model3 相对路径，不把大模型内联进 manifest；打开面板时直接从本地 asset URL 加载：
 
-- `pack_live2d_bundle` 先 canonicalize model 文件与模型根，再解析 `FileReferences`。Moc、Textures、Physics、Pose、DisplayInfo、UserData、Expressions.File、Motions.File/Sound 都必须通过同一个便携路径 + canonical containment 解析器。
-- 后端只读取模型根内的普通文件，把每项资源作为 `{ path, mime, base64 }` 返回。绝对路径、盘符/UNC、`.`/`..`、链接逃逸、缺失或类型错误会在文件字节进入 IPC 前失败。
-- `createLive2DBlobModelUrl` 把图片做成带 MIME 的 data URL，把 moc/json/audio 做成 blob URL；随后按资源 map 重写 model3 的每个引用，再把重写后的 model3 本身做成 blob URL。
-- `Live2DPanel` 把这个 model blob URL 交给引擎。模型加载完成或失败/重载时统一 revoke blob URL，不把磁盘绝对路径当作浏览器资源基址。
+- `resolve_pack_live2d_path` 先在后端 canonicalize 包根和 model 文件，复用导入阶段的 containment 边界，只返回当前角色包内已验证模型的绝对路径。
+- `createLive2DAssetModelUrl` 用 `convertFileSrc` 生成 model3 的 asset URL，读取 JSON 后把 Moc、纹理、Physics、Pose、DisplayInfo、UserData、表情、动作与声音引用全部改写为完整 asset URL。
+- 改写完整 URL 是 Windows WebView 的必要条件：若保留 model3 内相对引用，纹理会相对 asset host 的错误目录解析并返回 403。
+- `.model3.json`、`.moc3`、纹理和 physics 由 WebView 直接读取，不再把整个资源图编码为 JSON/base64 走 IPC；重写后的 model3 仅生成一个小型 blob URL，并在失败、重载或卸载时 revoke。
 
-仓库仍保留 Tauri asset protocol 配置和 `resolve_pack_live2d_path` 兼容命令，但当前面板主路径使用受检 bundle；安全结论不能依赖 WebView 对本地 asset URL 的编码行为。
+asset protocol scope 只放行应用数据目录的 `packs/**`；导入时仍会对全部 model3 引用做便携路径、普通文件和 canonical containment 校验。旧 `pack_live2d_bundle` 命令保留供兼容与测试使用，但不再位于渲染主路径。
 
 ### 2.3 Cubism Core：私有运行时，用户自取，动态注入
 
@@ -71,18 +71,23 @@ Pixi v8 + 引擎 + `@pixi/sound` 体积大（构建后 `vendor-live2d` chunk 约
        └─ 前端刷新 packs + manifest JSON 编辑器
 
 侧栏 > Live2D
-  └─ Live2DPanel 挂载（React.lazy + Suspense）
+  └─ Live2DPanel 首次访问后保持挂载（React.lazy + Suspense）
        └─ loadModel()
-            ├─ invoke pack_live2d_bundle(packId) → model JSON + base64 assets
-            ├─ createLive2DBlobModelUrl() → 重写全部引用的 model blob URL
-            └─ loadLive2DModel(blobUrl, canvas)
+            ├─ invoke resolve_pack_live2d_path(packId) → 受检 model3 绝对路径
+            ├─ createLive2DAssetModelUrl() → 完整 asset URL 引用 + 小型 model blob URL
+            └─ loadLive2DModel(modelUrl, canvas)
                  ├─ ensureCubismCore() → 动态注入 live2dcubismcore.min.js
                  ├─ 动态 import pixi.js + untitled-pixi-live2d-engine/cubism
                  ├─ extensions.add(Live2DPlugin)（仅首次，模块级守卫）
                  ├─ await app.init({ preference:"webgl", backgroundAlpha:0, resizeTo })
                  ├─ configureCubismSDK({ memorySizeMB:128 })
                  └─ Live2DModel.from(url, { textureOptions:{lod:false}, autoUpdate:true })
-                      └─ 引擎读取已重写为 blob/data URL 的资源，不再解析磁盘相对路径
+                       └─ 引擎通过完整 asset URL 读取 moc、纹理、physics 等本地资源
+
+独立 Live2D 窗口
+  ├─ Tauri 启动时隐藏预创建透明 webview，首次呼出才挂载模型
+  ├─ 关闭请求改为 hide，保留 WebGL、模型和纹理实例
+  └─ live2d-visibility-changed → 隐藏 ticker.stop() / 显示 ticker.start()
 ```
 
 ## 4. 关键文件
@@ -97,9 +102,10 @@ Pixi v8 + 引擎 + `@pixi/sound` 体积大（构建后 `vendor-live2d` chunk 约
 | 移除 | `src-tauri/src/pack/live2d.rs` `remove_live2d` |
 | Tauri 命令 | `import_pack_live2d_folder` / `resolve_pack_live2d_path` / `pack_live2d_bundle` / `remove_pack_live2d` |
 | dialog 权限 | `src-tauri/capabilities/default.json` `dialog:default` |
-| bundle URL 改写 | `src/lib/live2d.ts` `createLive2DBlobModelUrl` |
+| asset URL 改写 | `src/lib/live2d.ts` `createLive2DAssetModelUrl` / `rewriteModelReferences` |
 | 引擎初始化 | `src/lib/live2d.ts` `ensureCubismCore` / `loadLive2DModel` |
-| 面板组件 | `src/components/Live2DPanel.tsx`（bundle、canvas 生命周期、缩放、拖拽、重载） |
+| 面板组件 | `src/components/Live2DPanel.tsx`（canvas/ticker 生命周期、进度、鼠标跟随、缩放、拖拽、重载） |
+| 独立窗口壳 | `src/components/Live2DWindowShell.tsx` + `src-tauri/src/lib.rs`（隐藏预创建、显隐事件、实例复用） |
 | 设置 UI | `src/components/SettingsDialog.tsx` Live2D 导入/移除区域 |
 | Cubism Core 下载 | `scripts/fetch-cubism-core.mjs` |
 | bundle 隔离 | `vite.config.ts` `manualChunks`（`vendor-live2d`）+ `src/App.tsx` `React.lazy` |
@@ -115,14 +121,14 @@ Pixi v8 + 引擎 + `@pixi/sound` 体积大（构建后 `vendor-live2d` chunk 约
 
 ## 6. 限制与待打磨
 
-### 6.1 当前 MVP 不做
-- **透明置顶桌宠窗口**：独立 OS 窗口、`transparent` + `alwaysOnTop` + `set_ignore_cursor_events` 点击穿透、可收起/展开。技术上 Tauri 2 在 Win11 完全可行（无需额外 Cargo feature），但需要第二个 Vite 入口 + 独立 capability + 透明窗口配置，工作量另开一轮。见 TODO P4「Live2D 桌宠方案」。
+### 6.1 当前版本不做
+- **完整桌宠交互**：独立透明置顶窗口已经实现，但仍保留工具栏和鼠标交互，没有点击穿透、自动收起、Companion 状态到表情/动作的映射。
 - **口型同步**：`model3.json` 的 `LipSync` 组为空（`Ids: []`），且本项目 TTS adapter 已接通但 Live2D lip-sync 尚未接入。lip-sync 待接入时，要么给 `LipSync` 组补 `ParamMouthOpen` 让 `model.speak(audioUrl)` 自动驱动，要么每帧 `model.internalModel.coreModel.setParameterValueById("ParamMouthOpen", v)` 手动驱动。
 - **动作播放**：`model3.json` 无 `Motions` 字段，引擎不合成 idle 动作。当前靠 CubismBreath + 自动眨眼 + `physics3.json` 让模型「活着」，但没有全身 idle 动画。要真动作需作者 `.motion3.json` 并在 model3.json 加 `Idle` 组。
-- **眨眼/呼吸开关**：面板只有缩放和重载，没暴露眨眼/呼吸 toggle（引擎 API 不支持 factory option 级开关，要在 `internalModel` 上改，留到下一轮）。
+- **眨眼/呼吸开关**：当前已提供鼠标跟随开关，但眨眼/呼吸仍未暴露 toggle（引擎 API 不支持 factory option 级开关，要在 `internalModel` 上改）。
 
 ### 6.2 已知风险点
-- **大纹理与 IPC 体积**：bundle 把资源 base64 送到前端，且当前关闭 LOD。4096² RGBA 纹理展开约 64 MB/张，超大模型虽然受 200 MB/200 文件导入上限约束，仍可能放大 IPC、内存和 GPU 压力。
+- **大纹理与 GPU 体积**：资源已不再经 base64 IPC，但当前关闭 LOD。4096² RGBA 纹理展开约 64 MB/张，超大模型仍可能放大 WebView 内存和 GPU 压力；独立窗口隐藏时会停 ticker，但保留纹理以换取再次呼出的低延迟。
 - **进程异常退出的隐藏备份**：普通函数错误会执行目录/manifest 回滚；若进程在极短的 rename 提交窗口被强制终止，包目录可能留下 `.live2d-*.bak/.tmp`，后续可增加启动恢复/清理日志进一步加固崩溃一致性。
 - **Cubism Core 缺失**：用户未跑 `npm run fetch:cubism-core` 时，`ensureCubismCore` 的 `onerror` 会抛「Failed to load Cubism Core. Run: npm run fetch:cubism-core」，面板进 error 态。
 - **License**：Cubism Core 受 Live2D Proprietary Software License 约束（非商业免费，商业需 Release License）。本项目不分发该文件，由用户自行下载接受许可。
@@ -136,11 +142,12 @@ Pixi v8 + 引擎 + `@pixi/sound` 体积大（构建后 `vendor-live2d` chunk 约
 - Moc、纹理、Physics、Expression、Motion、Sound 的非 ASCII 文件全部在 staging 内改名并重写，bundle 可完整读取；
 - 源 symlink 与已有模型引用 symlink 逃逸均拒绝；
 - 故意让 manifest 提交失败，验证新目录被移除、旧目录和旧 manifest 恢复且无临时 artifact。
+- 前端回归覆盖 asset URL/完整引用改写、阶段进度、主面板 keep-alive、独立窗口透明配置与隐藏/显示 ticker 生命周期；下拉菜单定位另有纯几何测试。
 
 `remove_live2d` 的显式删除成功/失败分支仍可补独立行为测试；它不影响本次不可信导入的安全闭环。
 
 ## 7. 扩展指引
 
 - **接 TTS 口型同步**：TTS adapter 已就绪（dashscope + gpt-sovits 双后端），lip-sync 待接入。在 `Live2DPanel` 里订阅 TTS 音频事件，用 `model.internalModel.coreModel.setParameterValueById("ParamMouthOpen", rms)` 每帧驱动；或给 model3.json 的 `LipSync` 组补 `ParamMouthOpen` 后调 `model.speak(audioUrl)`。
-- **桌宠窗口**：在 `tauri.conf.json` 加第二个 window（`label: "pet"`，`transparent/decorations:false/alwaysOnTop:true/skipTaskbar:true`），新建 `src/pet.tsx` 只挂 Pixi+Live2D，加 `capabilities/pet.json`，用 `app.emit_to("pet", ...)` 从 agent 循环驱动表情。主窗口保持普通装饰窗口不变。
+- **扩展桌宠窗口**：现有 `live2d` 窗口已承担透明置顶与资源复用；后续可增加点击穿透/交互模式切换，并用定向事件从 agent 循环驱动表情和动作。
 - **状态映射**：Companion 的 `focus`/`mood` 状态变化时，通过 `model.internalModel` 调参数或播动作，低频触发，避免干扰工作。

@@ -328,6 +328,7 @@ export default function App() {
   const [activeId, setActiveId] = useState("");
   const [navigationPending, setNavigationPending] = useState(true);
   const [activeView, setActiveView] = useState<AppView>("chat");
+  const [live2dMounted, setLive2dMounted] = useState(false);
   const [settingsInitialTab, setSettingsInitialTab] = useState<SettingsTab>("general");
   const [previewTheme, setPreviewTheme] = useState<AppTheme | null>(null);
   const [previewAppearance, setPreviewAppearance] = useState<AppAppearance | null>(null);
@@ -559,6 +560,32 @@ export default function App() {
     document.addEventListener("contextmenu", preventContextMenu);
     return () => document.removeEventListener("contextmenu", preventContextMenu);
   }, []);
+
+  useEffect(() => {
+    const currentPack = packs.find((pack) => pack.id === settings?.current_pack);
+    if (!currentPack?.live2d) return;
+    let cancelled = false;
+    const preload = () => {
+      void import("./lib/live2d").then((module) => {
+        if (!cancelled) {
+          // Preloading is opportunistic — old engine bundles may not export it.
+          try { module.preloadLive2DEngine?.(); } catch { /* optional */ }
+        }
+      });
+    };
+    let cancelPreload: () => void;
+    if (typeof window.requestIdleCallback === "function") {
+      const idleId = window.requestIdleCallback(preload, { timeout: 4_000 });
+      cancelPreload = () => window.cancelIdleCallback(idleId);
+    } else {
+      const timeoutId = globalThis.setTimeout(preload, 1_500);
+      cancelPreload = () => globalThis.clearTimeout(timeoutId);
+    }
+    return () => {
+      cancelled = true;
+      cancelPreload();
+    };
+  }, [packs, settings?.current_pack]);
 
   // 每日吉签：应用启动时若启用自动弹窗、今日尚未抽签且未主动忽略，弹出引导抽签。
   useEffect(() => {
@@ -1181,6 +1208,11 @@ export default function App() {
     );
   }
 
+  function navigateToView(view: AppView) {
+    if (view === "live2d") setLive2dMounted(true);
+    setActiveView(view);
+  }
+
   function openSettings(tab: SettingsTab = "general") {
     setSettingsInitialTab(tab);
     setActiveView("settings");
@@ -1415,7 +1447,7 @@ export default function App() {
                     type="button"
                     onClick={() => {
                       setTitleMenuOpen(null);
-                      setActiveView(view as AppView);
+                      navigateToView(view as AppView);
                     }}
                     className={`cf-menu-item flex w-full items-center justify-between gap-2 ${
                       activeView === view ? "is-active" : ""
@@ -1550,7 +1582,7 @@ export default function App() {
           busy={appBusy}
           navigationPending={navigationPending}
           onToggle={() => setSidebarOpen((v) => !v)}
-          onViewChange={setActiveView}
+          onViewChange={navigateToView}
           onNewChat={handleNewChat}
           onSelectSession={handleSelectSession}
           onRenameSession={handleRenameSession}
@@ -1863,20 +1895,7 @@ export default function App() {
           ) : activeView === "skills" ? (
             <SkillsPanel />
           ) : activeView === "live2d" ? (
-            settings ? (
-              <Suspense
-                fallback={
-                  <div className="grid flex-1 place-items-center text-[13px] text-[#8a9099]">
-                    {t("live2d.loading")}
-                  </div>
-                }
-              >
-                <Live2DPanel
-                  packId={settings.current_pack}
-                  onOpenSettings={() => openSettings("persona")}
-                />
-              </Suspense>
-            ) : null
+            null
           ) : settings ? (
             <SettingsDialog
               open
@@ -1892,6 +1911,27 @@ export default function App() {
               onAgentPanelChange={setAgentPanel}
             />
           ) : null}
+          {settings && live2dMounted && (
+            <div
+              className={`live2d-keep-alive min-h-0 flex-1 ${
+                activeView === "live2d" ? "flex" : "hidden"
+              }`}
+            >
+              <Suspense
+                fallback={
+                  <div className="grid flex-1 place-items-center text-[13px] text-[#8a9099]">
+                    {t("live2d.loading")}
+                  </div>
+                }
+              >
+                <Live2DPanel
+                  packId={settings.current_pack}
+                  active={activeView === "live2d"}
+                  onOpenSettings={() => openSettings("persona")}
+                />
+              </Suspense>
+            </div>
+          )}
         </div>
       </section>
       </div>
