@@ -1,16 +1,20 @@
-// Live2D 引擎单例初始化模块。
+// Live2D engine singleton and asset URL bridge.
 //
-// 所有 pixi.js 与 untitled-pixi-live2d-engine 的 import 都是动态的，
-// 确保它们只会在用户打开 Live2D 面板时才加载，不进入主 bundle。
+// All pixi.js / untitled-pixi-live2d-engine imports are dynamic so they only
+// land in the vendor-live2d chunk when the user actually opens the panel.
 //
-// Cubism Core（live2dcubismcore.min.js）是 Live2D 私有运行时（WASM 内嵌），
-// 许可证禁止再分发，由用户通过 `npm run fetch:cubism-core` 自行下载到 public/core/，
-// 运行时由本模块动态注入 <script> 标签加载。
+// Cubism Core (live2dcubismcore.min.js) is a proprietary WASM runtime gated by
+// the Live2D Proprietary Software License.  Users self-download it via
+// `npm run fetch:cubism-core`; this module injects it as a <script> tag at
+// runtime and throws a friendly error when it is missing.
+
+import { convertFileSrc } from "@tauri-apps/api/core";
 import type { Live2DBundle } from "./types";
 
-// 模块级守卫：Live2DPlugin 只注册一次（面板重挂/重载时复用）。
+// Module-level guards: Live2DPlugin is registered once, reloads reuse it.
 let engineInitialized = false;
 let coreLoading: Promise<void> | null = null;
+let engineLoading: ReturnType<typeof loadEngineModules> | null = null;
 
 declare global {
   interface Window {
@@ -18,7 +22,6 @@ declare global {
   }
 }
 
-/** 动态加载 Cubism Core 脚本（若尚未加载）。多次调用会复用同一个 Promise。 */
 export function ensureCubismCore(): Promise<void> {
   if (typeof window !== "undefined" && window.Live2DCubismCore) return Promise.resolve();
   if (coreLoading) return coreLoading;
@@ -45,10 +48,15 @@ export interface Live2DLoadResult {
   model: Live2DModelLike;
 }
 
+export type Live2DLoadStage = "core" | "engine" | "renderer" | "model" | "ready";
+export type Live2DProgressListener = (progress: number, stage: Live2DLoadStage) => void;
+
 export interface Live2DBlobModelUrl {
   url: string;
   revoke(): void;
 }
+
+// ----------------------------------------------------------------- heap-free model-url builders
 
 function normalizePackPath(path: string) {
   return path.replaceAll("\\", "/");
@@ -61,32 +69,33 @@ function base64ToBytes(data: string) {
   return bytes;
 }
 
-function rewritePath(value: unknown, assetUrls: Map<string, string>, label: string) {
+type AssetResolver = (path: string, label: string) => string;
+
+function rewritePath(value: unknown, resolveAsset: AssetResolver, label: string) {
   if (typeof value !== "string" || !value.trim()) return value;
-  const key = normalizePackPath(value);
-  const url = assetUrls.get(key);
-  if (!url) throw new Error(`Live2D bundle missing resource: ${label} -> ${value}`);
-  return url;
+  return resolveAsset(value, label);
 }
 
-function rewriteModelReferences(model: Record<string, unknown>, assetUrls: Map<string, string>) {
+function rewriteModelReferences(model: Record<string, unknown>, resolveAsset: AssetResolver) {
   const refs = model.FileReferences;
   if (!refs || typeof refs !== "object") return;
   const fileRefs = refs as Record<string, unknown>;
 
   for (const key of ["Moc", "Physics", "Pose", "DisplayInfo", "UserData"]) {
-    if (key in fileRefs) fileRefs[key] = rewritePath(fileRefs[key], assetUrls, key);
+    if (key in fileRefs) fileRefs[key] = rewritePath(fileRefs[key], resolveAsset, key);
   }
 
   if (Array.isArray(fileRefs.Textures)) {
-    fileRefs.Textures = fileRefs.Textures.map((path, index) => rewritePath(path, assetUrls, `Textures[${index}]`));
+    fileRefs.Textures = fileRefs.Textures.map((path, index) =>
+      rewritePath(path, resolveAsset, `Textures[${index}]`),
+    );
   }
 
   if (Array.isArray(fileRefs.Expressions)) {
     for (const expression of fileRefs.Expressions) {
       if (expression && typeof expression === "object" && "File" in expression) {
         const entry = expression as Record<string, unknown>;
-        entry.File = rewritePath(entry.File, assetUrls, "Expressions.File");
+        entry.File = rewritePath(entry.File, resolveAsset, "Expressions.File");
       }
     }
   }
@@ -97,21 +106,21 @@ function rewriteModelReferences(model: Record<string, unknown>, assetUrls: Map<s
       for (const motion of motions) {
         if (!motion || typeof motion !== "object") continue;
         const entry = motion as Record<string, unknown>;
-        if ("File" in entry) entry.File = rewritePath(entry.File, assetUrls, "Motions.File");
-        if ("Sound" in entry) entry.Sound = rewritePath(entry.Sound, assetUrls, "Motions.Sound");
+        if ("File" in entry) entry.File = rewritePath(entry.File, resolveAsset, "Motions.File");
+        if ("Sound" in entry) entry.Sound = rewritePath(entry.Sound, resolveAsset, "Motions.Sound");
       }
     }
   }
 }
 
+/** In-app (base64 bundle) path — kept for compatibility but the primary
+  * rendering path now uses the direct asset URL via createLive2DAssetModelUrl. */
 export function createLive2DBlobModelUrl(bundle: Live2DBundle): Live2DBlobModelUrl {
   const urls: string[] = [];
   const assetUrls = new Map<string, string>();
 
   for (const asset of bundle.assets) {
     const mime = asset.mime || "application/octet-stream";
-    // Pixi's texture loader detects images by file extension or data-URL MIME.
-    // A plain blob: URL has neither, so Assets.load() may resolve to null.
     const url = mime.startsWith("image/")
       ? `data:${mime};base64,${asset.data}`
       : URL.createObjectURL(new Blob([base64ToBytes(asset.data)], { type: mime }));
@@ -121,46 +130,76 @@ export function createLive2DBlobModelUrl(bundle: Live2DBundle): Live2DBlobModelU
 
   try {
     const model = JSON.parse(bundle.model_json) as Record<string, unknown>;
-    rewriteModelReferences(model, assetUrls);
+    rewriteModelReferences(model, (path, label) => {
+      const url = assetUrls.get(normalizePackPath(path));
+      if (!url) throw new Error(`Live2D bundle missing resource: ${label} -> ${path}`);
+      return url;
+    });
     const modelUrl = URL.createObjectURL(
-      new Blob([JSON.stringify(model)], {
-        type: "application/json",
-      }),
+      new Blob([JSON.stringify(model)], { type: "application/json" }),
     );
     urls.push(modelUrl);
-    return {
-      url: modelUrl,
-      revoke() {
-        for (const url of urls) URL.revokeObjectURL(url);
-      },
-    };
+    return { url: modelUrl, revoke() { for (const url of urls) URL.revokeObjectURL(url); } };
   } catch (error) {
     for (const url of urls) URL.revokeObjectURL(url);
     throw error;
   }
 }
 
-/**
- * Live2D 面板实际调用的 Pixi Application 子集（动态 import 的真实类型较重，
- * 这里只声明用到的方法/字段，以获得基本类型安全而不引入全量类型依赖）。
- * destroy / addChild 采用宽松入参，确保 pixi 的 Application / Container
- * 可结构化赋值到本接口而不触发严格函数类型冲突。
- */
+function stripWindowsExtendedPath(path: string) {
+  return path.replace(/^\\\\\?\\/, "");
+}
+
+function resolveModelAssetPath(modelPath: string, relativePath: string) {
+  const normalizedModel = stripWindowsExtendedPath(modelPath).replaceAll("\\", "/");
+  const normalizedRelative = relativePath.replaceAll("\\", "/");
+  if (/^[a-zA-Z]:\//.test(normalizedRelative) || normalizedRelative.startsWith("/")) {
+    throw new Error(`Live2D resource must use a relative path: ${relativePath}`);
+  }
+
+  const parts = normalizedModel.split("/");
+  parts.pop();
+  for (const part of normalizedRelative.split("/")) {
+    if (!part || part === ".") continue;
+    if (part === "..") {
+      if (parts.length <= 1) throw new Error(`Live2D resource escapes its model directory: ${relativePath}`);
+      parts.pop();
+    } else {
+      parts.push(part);
+    }
+  }
+  return parts.join("\\");
+}
+
+/** Direct Tauri asset-protocol URL — textures and moc stay on disk; only the
+  * rewritten model JSON becomes a small blob URL for the loader. */
+export async function createLive2DAssetModelUrl(modelPath: string): Promise<Live2DBlobModelUrl> {
+  const normalizedModelPath = stripWindowsExtendedPath(modelPath);
+  const response = await fetch(convertFileSrc(normalizedModelPath));
+  if (!response.ok) {
+    throw new Error(`Live2D model settings request failed (${response.status}).`);
+  }
+  const model = (await response.json()) as Record<string, unknown>;
+  rewriteModelReferences(model, (path) =>
+    convertFileSrc(resolveModelAssetPath(normalizedModelPath, path)),
+  );
+  const modelUrl = URL.createObjectURL(
+    new Blob([JSON.stringify(model)], { type: "application/json" }),
+  );
+  return { url: modelUrl, revoke() { URL.revokeObjectURL(modelUrl); } };
+}
+
+// ----------------------------------------------------------------- subset type declarations
+
 export interface Live2DPixiApp {
-  // 方法语法 → 参数按双变比较，pixi Application 的 destroy / Container.addChild
-  // 可结构化赋值到本接口（否则 strictFunctionTypes 下严格逆变会失败）。
   destroy(...args: unknown[]): void;
   render?: () => void;
   renderer?: { resize(width: number, height: number): void };
-  ticker?: { maxFPS: number };
+  ticker?: { maxFPS: number; start(): void; stop(): void };
   stage: { addChild(child: unknown): unknown };
   screen: { width: number; height: number };
 }
 
-/**
- * Live2D 模型实际调用的成员子集。anchor / position / scale 都是 Pixi 的
- * ObservablePoint，这里只暴露用到的 set(...)；x / y 为可读写坐标。
- */
 export interface Live2DModelLike {
   anchor: { set(x: number, y?: number): void };
   position: { set(x: number, y?: number): void };
@@ -169,38 +208,57 @@ export interface Live2DModelLike {
   height: number;
   x: number;
   y: number;
+  automator?: { autoFocus: boolean };
+  focus?(x: number, y: number, instant?: boolean): void;
   internalModel?: {
     width?: number;
     height?: number;
     originalWidth?: number;
     originalHeight?: number;
   };
+  textures?: Array<{ source?: unknown } | null>;
 }
 
-/**
- * 初始化 Pixi v8 + Live2D 引擎并加载模型。
- *
- * 注意：extensions.add(Live2DPlugin) 必须在 app.init() 之前注册（否则 live2d 渲染管线不会安装）；
- * preference 必须为 'webgl'（Live2D 渲染管线仅 WebGL）；
- * Application 在 Pixi v8 是异步的，需 await app.init()。
- */
-export async function loadLive2DModel(
-  modelUrl: string,
-  canvas: HTMLCanvasElement,
-): Promise<Live2DLoadResult> {
+// ----------------------------------------------------------------- engine bootstrap
+
+async function loadEngineModules() {
   await ensureCubismCore();
+  return Promise.all([import("pixi.js"), import("untitled-pixi-live2d-engine/cubism")]);
+}
 
-  const [{ Application, extensions }, { configureCubismSDK, Live2DModel, Live2DPlugin }] =
-    await Promise.all([import("pixi.js"), import("untitled-pixi-live2d-engine/cubism")]);
-
-  // 复杂/4096 纹理模型需要更大工作内存（默认 16MB 容易不够）。
-  configureCubismSDK({ memorySizeMB: 128 });
+async function ensureLive2DEngine(onProgress?: Live2DProgressListener) {
+  onProgress?.(18, "core");
+  engineLoading ??= loadEngineModules();
+  const modules = await engineLoading;
+  const [{ extensions }, { configureCubismSDK, Live2DPlugin }] = modules;
+  onProgress?.(48, "engine");
 
   if (!engineInitialized) {
+    configureCubismSDK({ memorySizeMB: 128 });
     extensions.add(Live2DPlugin);
     engineInitialized = true;
   }
+  return modules;
+}
 
+export async function preloadLive2DEngine(): Promise<void> {
+  await ensureLive2DEngine();
+}
+
+export function setMouseFollowEnabled(model: Live2DModelLike, enabled: boolean) {
+  if (model.automator) model.automator.autoFocus = enabled;
+  if (!enabled) model.focus?.(0, 0);
+}
+
+export async function loadLive2DModel(
+  modelUrl: string,
+  canvas: HTMLCanvasElement,
+  mouseFollow = true,
+  onProgress?: Live2DProgressListener,
+): Promise<Live2DLoadResult> {
+  const [{ Application }, { Live2DModel }] = await ensureLive2DEngine(onProgress);
+
+  onProgress?.(58, "renderer");
   const app = new Application();
   await app.init({
     canvas,
@@ -213,9 +271,11 @@ export async function loadLive2DModel(
   });
   app.ticker.maxFPS = 30;
 
+  onProgress?.(72, "model");
   const model = await Live2DModel.from(modelUrl, {
     textureOptions: { lod: false },
     autoUpdate: true,
+    autoFocus: mouseFollow,
   });
   const missingTextureIndex = model.textures.findIndex((texture) => !texture?.source);
   if (missingTextureIndex >= 0) {
@@ -224,5 +284,6 @@ export async function loadLive2DModel(
     throw new Error(`Live2D texture ${missingTextureIndex + 1} failed to load.`);
   }
 
+  onProgress?.(100, "ready");
   return { app, model };
 }

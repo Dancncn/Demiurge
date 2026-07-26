@@ -55,6 +55,7 @@ import { LorebookRecallPanel } from "./pack-editor/LorebookRecallPanel";
 import { PROVIDER_OPTIONS, PROVIDER_ICON_SET, modelContextWindow, autoContextBudget } from "../lib/providers";
 import { useI18n, type TFunction } from "../lib/i18n";
 import { isAutoPromptEnabled, setAutoPromptEnabled } from "../lib/fortune";
+import { pickFolder, type FolderPickOutcome } from "../lib/folderPicker";
 
 interface Props {
   open: boolean;
@@ -1106,10 +1107,28 @@ export default function SettingsDialog({
     setLive2dImportStatus("");
     setLive2dImportFailed(false);
     try {
-      const { open } = await import("@tauri-apps/plugin-dialog");
-      const selected = await open({ directory: true, multiple: false });
-      if (typeof selected !== "string" || !selected) return;
-      const updated = await api.importPackLive2dFolder(form.current_pack, selected);
+      let selected: FolderPickOutcome;
+      try {
+        selected = await pickFolder(t("settings.persona.live2dImport"));
+      } catch (err) {
+        setLive2dImportFailed(true);
+        setLive2dImportStatus(t("settings.persona.chooseFolderFailed", { error: String(err) }));
+        return;
+      }
+      if (selected.status === "unavailable") {
+        setLive2dImportFailed(true);
+        setLive2dImportStatus(t("workspace.desktopOnly"));
+        return;
+      }
+      if (selected.status === "failed") {
+        // 插件权限缺失 / 对话框拉起失败：必须给出可见原因，不能静默失效。
+        setLive2dImportFailed(true);
+        setLive2dImportStatus(t("settings.persona.chooseFolderFailed", { error: selected.error }));
+        return;
+      }
+      // 用户取消选择：不是错误，安静返回。
+      if (selected.status === "cancelled") return;
+      const updated = await api.importPackLive2dFolder(form.current_pack, selected.path);
       const nextPacks = await api.listPacks();
       onPacksChange(nextPacks);
       setPackManifestJson(await api.readPackManifestJson(updated.id));

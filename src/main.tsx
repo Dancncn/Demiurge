@@ -3,6 +3,8 @@ import ReactDOM from "react-dom/client";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import App from "./App";
 import DesktopCompanionShell from "./components/DesktopCompanionShell";
+import Live2DWindowShell from "./components/Live2DWindowShell";
+import WidgetsWindowShell from "./components/WidgetsWindowShell";
 import { LanguageProvider } from "./lib/i18n";
 import "@fontsource-variable/inter";
 import "@fontsource-variable/jetbrains-mono";
@@ -11,8 +13,18 @@ import "@fontsource-variable/jetbrains-mono";
 import "./assets/fonts/misans-subset.css";
 import "./style.css";
 
-const currentWindowLabel = "__TAURI_INTERNALS__" in window ? getCurrentWindow().label : "main";
-const Root = currentWindowLabel === "desktop_companion" ? DesktopCompanionShell : App;
+const requestedWindowLabel = new URLSearchParams(window.location.search).get("window");
+const currentWindowLabel =
+  requestedWindowLabel || ("__TAURI_INTERNALS__" in window ? getCurrentWindow().label : "main");
+document.documentElement.dataset.window = currentWindowLabel;
+const Root =
+  currentWindowLabel === "desktop_companion"
+    ? DesktopCompanionShell
+    : currentWindowLabel === "live2d"
+      ? Live2DWindowShell
+    : currentWindowLabel === "widgets"
+      ? WidgetsWindowShell
+      : App;
 
 ReactDOM.createRoot(document.getElementById("app") as HTMLElement).render(
   <React.StrictMode>

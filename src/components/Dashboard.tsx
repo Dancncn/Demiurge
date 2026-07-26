@@ -165,15 +165,7 @@ export function Dashboard({ greeting, onOpenFortune }: { greeting: string; onOpe
             className="dashboard-fortune cf-lift flex min-h-[180px] w-full flex-col items-start rounded-lg border border-[#e6e9ee] bg-white p-4 text-left shadow-[0_1px_3px_rgba(15,23,42,0.05)]"
           >
             <span className="dashboard-fortune-icon grid size-11 shrink-0 place-items-center rounded-lg bg-[#fde8f3]">
-              <svg viewBox="0 0 64 84" width="22" height="28" aria-hidden>
-                <path d="M10 30 Q10 26 14 26 L50 26 Q54 26 54 30 L50 76 Q50 80 46 80 L18 80 Q14 80 14 76 Z" fill="#8b3a2e" />
-                <ellipse cx="32" cy="28" rx="22" ry="4.5" fill="#5e221b" />
-                <g fill="#3a2a1e">
-                  <rect x="20" y="4" width="3" height="26" rx="1.5" />
-                  <rect x="29" y="2" width="3" height="28" rx="1.5" />
-                  <rect x="38" y="6" width="3" height="24" rx="1.5" />
-                </g>
-              </svg>
+              <img src="/fortune-icon.png" alt="" className="size-9 object-contain" />
             </span>
             <span className="mt-4 min-w-0">
               <span className="md-type-title-small block font-semibold text-[#202124]">{t("fortune.cardTitle")}</span>

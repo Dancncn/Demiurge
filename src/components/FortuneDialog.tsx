@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { useI18n } from "../lib/i18n";
-import { SparklesIcon } from "./Icons";
+import { CloseIcon, SparklesIcon } from "./Icons";
 import {
   drawFortune,
   findEntry,
@@ -26,35 +26,12 @@ function prefersReducedMotion(): boolean {
 /** 摇签筒图标。guide 态加 cf-breathe 呼吸，shaking 态加 cf-shake 摇晃。 */
 function FortuneTube({ className }: { className?: string }) {
   return (
-    <svg viewBox="0 0 64 84" width="76" height="100" aria-hidden className={className}>
-      <defs>
-        <linearGradient id="cf-tube" x1="0" y1="0" x2="1" y2="0">
-          <stop offset="0" stopColor="#a14a3a" />
-          <stop offset="0.5" stopColor="#8b3a2e" />
-          <stop offset="1" stopColor="#6e2a22" />
-        </linearGradient>
-      </defs>
-      <g fill="#3a2a1e">
-        <rect x="20" y="4" width="3" height="26" rx="1.5" />
-        <rect x="29" y="2" width="3" height="28" rx="1.5" />
-        <rect x="38" y="6" width="3" height="24" rx="1.5" />
-      </g>
-      <path
-        d="M10 30 Q10 26 14 26 L50 26 Q54 26 54 30 L50 76 Q50 80 46 80 L18 80 Q14 80 14 76 Z"
-        fill="url(#cf-tube)"
-      />
-      <ellipse cx="32" cy="28" rx="22" ry="4.5" fill="#5e221b" />
-      <ellipse cx="32" cy="27" rx="20" ry="3.5" fill="#2a1a12" />
-      <rect x="14" y="48" width="36" height="3" fill="#5e221b" opacity="0.55" />
-    </svg>
-  );
-}
-
-function CloseIcon({ size = 18 }: { size?: number }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-      <path d="M6 6l12 12M18 6L6 18" />
-    </svg>
+    <img
+      src="/fortune-icon.png"
+      alt=""
+      aria-hidden
+      className={`fortune-tube h-[82px] w-[82px] object-contain ${className ?? ""}`}
+    />
   );
 }
 
