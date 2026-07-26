@@ -846,23 +846,6 @@ html[data-resolved-theme="dark"] .cf-menu-item.is-highlighted {
   transform-origin: 50% 80%;
 }
 
-/* ---- Header utility popover ---- */
-.toy-panel > button,
-.toy-panel > section {
-  border: 1px solid #eceff3;
-  border-radius: 10px;
-  background: #fff;
-  margin: 0;
-}
-
-.toy-panel > * + * {
-  margin-top: 8px;
-}
-
-.toy-panel > section {
-  padding: 10px;
-}
-
 /* ---- Markdown 正文 ---- */
 .markdown-body {
   overflow-wrap: anywhere;
@@ -1261,7 +1244,7 @@ html[data-resolved-theme="dark"] .cf-menu-item.is-highlighted {
   }
 }
 
-/* ---- Material Bloom appearance ---- */
+/* ---- Appearance palettes; layout and components are shared below. ---- */
 html[data-appearance="material_bloom"] {
   --md-primary: #c44782;
   --md-on-primary: #ffffff;
@@ -1328,10 +1311,76 @@ html[data-appearance="material_bloom"][data-resolved-theme="dark"] {
   --accent: var(--md-primary);
 }
 
-html[data-appearance="material_bloom"] .md-button,
-html[data-appearance="material_bloom"] .md-icon-button,
-html[data-appearance="material_bloom"] .md-segment,
-html[data-appearance="material_bloom"] .md-select-trigger {
+html[data-appearance="classic"] {
+  --md-primary: #4f5d6b;
+  --md-on-primary: #ffffff;
+  --md-primary-container: #e2e8ef;
+  --md-on-primary-container: #25313c;
+  --md-secondary: #65717d;
+  --md-on-secondary: #ffffff;
+  --md-secondary-container: #e7ebef;
+  --md-on-secondary-container: #29333c;
+  --md-tertiary: #70777f;
+  --md-tertiary-container: #eaedf0;
+  --md-surface: #ffffff;
+  --md-surface-lowest: #ffffff;
+  --md-surface-low: #f8f9fa;
+  --md-surface-container: #f1f3f5;
+  --md-surface-high: #e8ebee;
+  --md-on-surface: #24282c;
+  --md-on-surface-variant: #60676e;
+  --md-outline: #7a8289;
+  --md-outline-variant: #d8dde1;
+  --md-shadow: rgba(42, 47, 52, 0.14);
+  --md-shell: #f7f8f9;
+  --bg: #f7f8f9;
+  --sidebar: #f1f3f5;
+  --sidebar-hover: #e4e8eb;
+  --text: var(--md-on-surface);
+  --muted: var(--md-on-surface-variant);
+  --border: var(--md-outline-variant);
+  --composer: var(--md-surface-lowest);
+  --bubble: var(--md-primary-container);
+  --accent: var(--md-primary);
+}
+
+html[data-appearance="classic"][data-resolved-theme="dark"] {
+  --md-primary: #bdc7d1;
+  --md-on-primary: #27323c;
+  --md-primary-container: #3b4650;
+  --md-on-primary-container: #e2e8ee;
+  --md-secondary: #b7c0c8;
+  --md-on-secondary: #29323a;
+  --md-secondary-container: #3b444c;
+  --md-on-secondary-container: #dce2e7;
+  --md-tertiary: #c0c6cc;
+  --md-tertiary-container: #40464c;
+  --md-surface: #181a1c;
+  --md-surface-lowest: #121416;
+  --md-surface-low: #1e2124;
+  --md-surface-container: #25292d;
+  --md-surface-high: #30353a;
+  --md-on-surface: #eceff1;
+  --md-on-surface-variant: #c7cdd2;
+  --md-outline: #92999f;
+  --md-outline-variant: #454b50;
+  --md-shadow: rgba(0, 0, 0, 0.38);
+  --md-shell: #1b1e20;
+  --bg: #1b1e20;
+  --sidebar: #212529;
+  --sidebar-hover: #32373c;
+  --text: var(--md-on-surface);
+  --muted: var(--md-on-surface-variant);
+  --border: var(--md-outline-variant);
+  --composer: var(--md-surface-lowest);
+  --bubble: var(--md-primary-container);
+  --accent: var(--md-primary);
+}
+
+html[data-appearance] .md-button,
+html[data-appearance] .md-icon-button,
+html[data-appearance] .md-segment,
+html[data-appearance] .md-select-trigger {
   position: relative;
   overflow: hidden;
   color: var(--md-on-surface-variant);
@@ -1339,7 +1388,7 @@ html[data-appearance="material_bloom"] .md-select-trigger {
     transform 120ms ease;
 }
 
-html[data-appearance="material_bloom"] .md-button {
+html[data-appearance] .md-button {
   display: inline-flex;
   min-height: 40px;
   align-items: center;
@@ -1350,43 +1399,43 @@ html[data-appearance="material_bloom"] .md-button {
   font-weight: 600;
 }
 
-html[data-appearance="material_bloom"] .md-button-filled {
+html[data-appearance] .md-button-filled {
   border-color: transparent !important;
   background: var(--md-primary) !important;
   color: var(--md-on-primary) !important;
   box-shadow: 0 2px 7px color-mix(in srgb, var(--md-primary) 24%, transparent);
 }
 
-html[data-appearance="material_bloom"] .md-button-filled:hover:not(:disabled) {
+html[data-appearance] .md-button-filled:hover:not(:disabled) {
   background: color-mix(in srgb, var(--md-primary) 90%, #000000) !important;
   box-shadow: 0 4px 11px color-mix(in srgb, var(--md-primary) 30%, transparent);
 }
 
-html[data-appearance="material_bloom"] .md-button-outlined {
+html[data-appearance] .md-button-outlined {
   border: 1px solid var(--md-outline) !important;
   background: transparent !important;
   color: var(--md-primary) !important;
 }
 
-html[data-appearance="material_bloom"] .md-button-outlined:hover:not(:disabled),
-html[data-appearance="material_bloom"] .md-button-text:hover:not(:disabled) {
+html[data-appearance] .md-button-outlined:hover:not(:disabled),
+html[data-appearance] .md-button-text:hover:not(:disabled) {
   background: color-mix(in srgb, var(--md-primary) 9%, transparent) !important;
 }
 
-html[data-appearance="material_bloom"] .md-button-text {
+html[data-appearance] .md-button-text {
   border-color: transparent !important;
   background: transparent !important;
   color: var(--md-primary) !important;
   box-shadow: none !important;
 }
 
-html[data-appearance="material_bloom"] .md-button-tonal {
+html[data-appearance] .md-button-tonal {
   border-color: transparent !important;
   background: var(--md-secondary-container) !important;
   color: var(--md-on-secondary-container) !important;
 }
 
-html[data-appearance="material_bloom"] .md-icon-button {
+html[data-appearance] .md-icon-button {
   display: grid;
   width: 40px !important;
   height: 40px !important;
@@ -1397,85 +1446,85 @@ html[data-appearance="material_bloom"] .md-icon-button {
   background: transparent;
 }
 
-html[data-appearance="material_bloom"] .md-icon-button:hover:not(:disabled) {
+html[data-appearance] .md-icon-button:hover:not(:disabled) {
   background: color-mix(in srgb, var(--md-on-surface) 8%, transparent) !important;
   color: var(--md-on-surface) !important;
 }
 
-html[data-appearance="material_bloom"] .md-icon-button[aria-pressed="true"] {
+html[data-appearance] .md-icon-button[aria-pressed="true"] {
   background: var(--md-secondary-container) !important;
   color: var(--md-on-secondary-container) !important;
 }
 
-html[data-appearance="material_bloom"] .md-icon-button-tonal {
+html[data-appearance] .md-icon-button-tonal {
   background: var(--md-primary-container) !important;
   color: var(--md-on-primary-container) !important;
 }
 
-html[data-appearance="material_bloom"] .md-icon-button-filled {
+html[data-appearance] .md-icon-button-filled {
   background: var(--md-primary) !important;
   color: var(--md-on-primary) !important;
 }
 
-html[data-appearance="material_bloom"] .md-icon-button-narrow {
+html[data-appearance] .md-icon-button-narrow {
   width: 20px !important;
   min-width: 20px;
 }
 
-html[data-appearance="material_bloom"] .md-button:disabled,
-html[data-appearance="material_bloom"] .md-icon-button:disabled {
+html[data-appearance] .md-button:disabled,
+html[data-appearance] .md-icon-button:disabled {
   box-shadow: none !important;
   opacity: 0.42;
 }
 
-html[data-appearance="material_bloom"] .md-segmented {
+html[data-appearance] .md-segmented {
   border-color: var(--md-outline);
   background: var(--md-surface-lowest);
 }
 
-html[data-appearance="material_bloom"] .md-segment {
+html[data-appearance] .md-segment {
   border-color: var(--md-outline);
   color: var(--md-on-surface-variant);
 }
 
-html[data-appearance="material_bloom"] .md-segment.is-selected {
+html[data-appearance] .md-segment.is-selected {
   background: var(--md-primary-container);
   color: var(--md-on-primary-container);
 }
 
-html[data-appearance="material_bloom"] .md-select-trigger:focus-visible {
+html[data-appearance] .md-select-trigger:focus-visible {
   outline: 3px solid color-mix(in srgb, var(--md-primary) 16%, transparent);
   outline-offset: 1px;
 }
 
-html[data-appearance="material_bloom"] .md-text-field {
+html[data-appearance] .md-text-field {
   border-color: var(--md-outline-variant) !important;
   border-radius: 8px !important;
   background: var(--md-surface-lowest) !important;
   color: var(--md-on-surface) !important;
 }
 
-html[data-appearance="material_bloom"] .md-text-field:focus {
+html[data-appearance] .md-text-field:focus {
   border-color: var(--md-primary) !important;
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--md-primary) 13%, transparent) !important;
 }
 
-html[data-appearance="material_bloom"] .md-switch:checked {
+html[data-appearance] .md-switch:checked {
   background: var(--md-primary) !important;
 }
 
-html[data-appearance="material_bloom"] .app-shell {
+html[data-appearance] .app-shell {
   background: var(--md-shell) !important;
   color: var(--md-on-surface) !important;
 }
 
-html[data-appearance="material_bloom"] .app-titlebar {
+html[data-appearance] .app-titlebar {
   position: relative;
   border-bottom-color: var(--md-outline-variant);
   background: color-mix(in srgb, var(--md-surface-low) 94%, transparent);
 }
 
-html[data-appearance="material_bloom"] .app-titlebar::after {
+html[data-appearance] .app-titlebar::after {
   position: absolute;
   right: 0;
   bottom: -1px;
@@ -1486,67 +1535,67 @@ html[data-appearance="material_bloom"] .app-titlebar::after {
   pointer-events: none;
 }
 
-html[data-appearance="material_bloom"] .app-titlebar-brand,
-html[data-appearance="material_bloom"] .app-title-menu-button,
-html[data-appearance="material_bloom"] .app-window-controls button {
+html[data-appearance] .app-titlebar-brand,
+html[data-appearance] .app-title-menu-button,
+html[data-appearance] .app-window-controls button {
   color: var(--md-on-surface-variant);
 }
 
-html[data-appearance="material_bloom"] .app-titlebar-brand img {
+html[data-appearance] .app-titlebar-brand img {
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--md-primary) 30%, transparent);
 }
 
-html[data-appearance="material_bloom"] .app-title-menu-button:hover,
-html[data-appearance="material_bloom"] .app-title-menu-button.is-active,
-html[data-appearance="material_bloom"] .app-window-controls button:hover,
-html[data-appearance="material_bloom"] .app-mobile-navigation-toggle:hover {
+html[data-appearance] .app-title-menu-button:hover,
+html[data-appearance] .app-title-menu-button.is-active,
+html[data-appearance] .app-window-controls button:hover,
+html[data-appearance] .app-mobile-navigation-toggle:hover {
   background: var(--md-surface-high);
   color: var(--md-on-surface);
 }
 
-html[data-appearance="material_bloom"] .app-sidebar,
-html[data-appearance="material_bloom"] .settings-sidebar {
+html[data-appearance] .app-sidebar,
+html[data-appearance] .settings-sidebar {
   border-color: var(--md-outline-variant) !important;
   background: color-mix(in srgb, var(--md-surface-container) 94%, transparent) !important;
 }
 
-html[data-appearance="material_bloom"] .app-content-frame {
+html[data-appearance] .app-content-frame {
   padding-top: 7px;
   padding-right: 7px;
   padding-bottom: 7px;
 }
 
-html[data-appearance="material_bloom"] .app-workspace-surface {
+html[data-appearance] .app-workspace-surface {
   border-color: color-mix(in srgb, var(--md-outline-variant) 90%, transparent) !important;
   background: var(--md-surface) !important;
   box-shadow: 0 8px 28px var(--md-shadow);
 }
 
-html[data-appearance="material_bloom"] .app-chat-toolbar {
+html[data-appearance] .app-chat-toolbar {
   border-color: var(--md-outline-variant) !important;
   background: color-mix(in srgb, var(--md-surface-low) 92%, transparent) !important;
 }
 
-html[data-appearance="material_bloom"] .app-nav-item,
-html[data-appearance="material_bloom"] .app-session-item,
-html[data-appearance="material_bloom"] .app-settings-entry,
-html[data-appearance="material_bloom"] .settings-nav-item {
+html[data-appearance] .app-nav-item,
+html[data-appearance] .app-session-item,
+html[data-appearance] .app-settings-entry,
+html[data-appearance] .settings-nav-item {
   position: relative;
   overflow: hidden;
   border-radius: 7px;
 }
 
-html[data-appearance="material_bloom"] .app-nav-item.is-active,
-html[data-appearance="material_bloom"] .app-session-item.is-active,
-html[data-appearance="material_bloom"] .app-settings-entry.is-active,
-html[data-appearance="material_bloom"] .settings-nav-item.is-selected {
+html[data-appearance] .app-nav-item.is-active,
+html[data-appearance] .app-session-item.is-active,
+html[data-appearance] .app-settings-entry.is-active,
+html[data-appearance] .settings-nav-item.is-selected {
   background: var(--md-primary-container) !important;
   color: var(--md-on-primary-container) !important;
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--md-primary) 16%, transparent);
 }
 
-html[data-appearance="material_bloom"] .app-nav-item.is-active::before,
-html[data-appearance="material_bloom"] .settings-nav-item.is-selected::before {
+html[data-appearance] .app-nav-item.is-active::before,
+html[data-appearance] .settings-nav-item.is-selected::before {
   position: absolute;
   top: 7px;
   bottom: 7px;
@@ -1557,29 +1606,29 @@ html[data-appearance="material_bloom"] .settings-nav-item.is-selected::before {
   content: "";
 }
 
-html[data-appearance="material_bloom"] .app-message-list,
-html[data-appearance="material_bloom"] .settings-content {
+html[data-appearance] .app-message-list,
+html[data-appearance] .settings-content {
   background: var(--md-surface) !important;
 }
 
-html[data-appearance="material_bloom"] .app-user-message {
+html[data-appearance] .app-user-message {
   border: 1px solid color-mix(in srgb, var(--md-primary) 14%, transparent);
   background: var(--md-primary-container) !important;
   color: var(--md-on-primary-container) !important;
 }
 
-html[data-appearance="material_bloom"] .app-composer {
+html[data-appearance] .app-composer {
   background: color-mix(in srgb, var(--md-surface) 96%, transparent);
 }
 
-html[data-appearance="material_bloom"] .app-composer-input {
+html[data-appearance] .app-composer-input {
   border-color: var(--md-outline-variant) !important;
   border-radius: 8px !important;
   background: var(--md-surface-lowest) !important;
   box-shadow: 0 2px 8px color-mix(in srgb, var(--md-shadow) 70%, transparent);
 }
 
-html[data-appearance="material_bloom"] .app-composer-input:focus-within {
+html[data-appearance] .app-composer-input:focus-within {
   border-color: var(--md-primary) !important;
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--md-primary) 15%, transparent);
 }
@@ -1626,16 +1675,16 @@ html[data-appearance="material_bloom"] .app-composer-input:focus-within {
   }
 }
 
-html[data-appearance="material_bloom"] .app-primary-action,
-html[data-appearance="material_bloom"] .settings-save {
+html[data-appearance] .app-primary-action,
+html[data-appearance] .settings-save {
   border: 1px solid color-mix(in srgb, var(--md-primary) 65%, transparent);
   background: var(--md-primary) !important;
   color: var(--md-on-primary) !important;
   box-shadow: 0 3px 9px color-mix(in srgb, var(--md-primary) 28%, transparent);
 }
 
-html[data-appearance="material_bloom"] .app-primary-action:disabled,
-html[data-appearance="material_bloom"] .settings-save:disabled {
+html[data-appearance] .app-primary-action:disabled,
+html[data-appearance] .settings-save:disabled {
   border-color: var(--md-outline-variant);
   background: var(--md-surface-high) !important;
   color: var(--md-outline) !important;
@@ -1643,322 +1692,322 @@ html[data-appearance="material_bloom"] .settings-save:disabled {
   animation: none;
 }
 
-html[data-appearance="material_bloom"] .dashboard-panel,
-html[data-appearance="material_bloom"] .dashboard-fortune {
+html[data-appearance] .dashboard-panel,
+html[data-appearance] .dashboard-fortune {
   border-color: var(--md-outline-variant) !important;
   border-radius: 8px !important;
   background: var(--md-surface-lowest) !important;
   box-shadow: 0 3px 14px color-mix(in srgb, var(--md-shadow) 65%, transparent);
 }
 
-html[data-appearance="material_bloom"] .dashboard-metric {
+html[data-appearance] .dashboard-metric {
   border-color: color-mix(in srgb, var(--md-outline-variant) 82%, transparent) !important;
   background: var(--md-surface-low) !important;
 }
 
-html[data-appearance="material_bloom"] .dashboard-fortune > span:first-child {
+html[data-appearance] .dashboard-fortune > span:first-child {
   background: var(--md-primary-container) !important;
   color: var(--md-primary) !important;
 }
 
-html[data-appearance="material_bloom"] .dashboard-fortune > span:last-child {
+html[data-appearance] .dashboard-fortune > span:last-child {
   color: var(--md-primary) !important;
 }
 
-html[data-appearance="material_bloom"] .settings-shell {
+html[data-appearance] .settings-shell {
   background: var(--md-surface-container) !important;
 }
 
-html[data-appearance="material_bloom"] .appearance-option.is-selected {
+html[data-appearance] .appearance-option.is-selected {
   border-color: var(--md-primary) !important;
   background: var(--md-primary-container) !important;
   color: var(--md-on-primary-container) !important;
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--md-primary) 12%, transparent);
 }
 
-html[data-appearance="material_bloom"] .cf-dropdown {
+html[data-appearance] .cf-dropdown {
   border-color: var(--md-outline-variant);
   border-radius: 8px;
   background: color-mix(in srgb, var(--md-surface-lowest) 97%, transparent);
   box-shadow: 0 10px 28px var(--md-shadow), 0 1px 0 color-mix(in srgb, var(--md-outline) 16%, transparent);
 }
 
-html[data-appearance="material_bloom"] .cf-menu-item {
+html[data-appearance] .cf-menu-item {
   color: var(--md-on-surface-variant);
 }
 
-html[data-appearance="material_bloom"] .cf-menu-item:hover,
-html[data-appearance="material_bloom"] .cf-menu-item.is-highlighted {
+html[data-appearance] .cf-menu-item:hover,
+html[data-appearance] .cf-menu-item.is-highlighted {
   background: var(--md-surface-container);
   color: var(--md-on-surface);
 }
 
-html[data-appearance="material_bloom"] .cf-menu-item.is-active {
+html[data-appearance] .cf-menu-item.is-active {
   background: var(--md-primary-container);
   color: var(--md-on-primary-container);
 }
 
-html[data-appearance="material_bloom"] input,
-html[data-appearance="material_bloom"] textarea,
-html[data-appearance="material_bloom"] select {
+html[data-appearance] input,
+html[data-appearance] textarea,
+html[data-appearance] select {
   caret-color: var(--md-primary);
 }
 
-html[data-appearance="material_bloom"] input:focus,
-html[data-appearance="material_bloom"] textarea:focus,
-html[data-appearance="material_bloom"] select:focus {
+html[data-appearance] input:focus,
+html[data-appearance] textarea:focus,
+html[data-appearance] select:focus {
   border-color: var(--md-primary) !important;
 }
 
-html[data-appearance="material_bloom"] input[type="checkbox"],
-html[data-appearance="material_bloom"] input[type="radio"] {
+html[data-appearance] input[type="checkbox"],
+html[data-appearance] input[type="radio"] {
   accent-color: var(--md-primary) !important;
 }
 
-html[data-appearance="material_bloom"] :focus-visible {
+html[data-appearance] :focus-visible {
   outline-color: color-mix(in srgb, var(--md-primary) 75%, transparent);
 }
 
-html[data-appearance="material_bloom"] body,
-html[data-appearance="material_bloom"] .bg-\[\#eef1f5\] {
+html[data-appearance] body,
+html[data-appearance] .bg-\[\#eef1f5\] {
   background-color: var(--md-surface-container) !important;
 }
 
-html[data-appearance="material_bloom"] .bg-white {
+html[data-appearance] .bg-white {
   background-color: var(--md-surface-lowest) !important;
 }
 
-html[data-appearance="material_bloom"] .bg-\[\#fbfcfd\],
-html[data-appearance="material_bloom"] .bg-\[\#fbfbfc\],
-html[data-appearance="material_bloom"] .bg-\[\#fafafa\],
-html[data-appearance="material_bloom"] .bg-\[\#f9fafb\],
-html[data-appearance="material_bloom"] .bg-\[\#f8f9fb\],
-html[data-appearance="material_bloom"] .bg-\[\#f7f7f7\] {
+html[data-appearance] .bg-\[\#fbfcfd\],
+html[data-appearance] .bg-\[\#fbfbfc\],
+html[data-appearance] .bg-\[\#fafafa\],
+html[data-appearance] .bg-\[\#f9fafb\],
+html[data-appearance] .bg-\[\#f8f9fb\],
+html[data-appearance] .bg-\[\#f7f7f7\] {
   background-color: var(--md-surface-low) !important;
 }
 
-html[data-appearance="material_bloom"] .bg-\[\#dfe4ea\],
-html[data-appearance="material_bloom"] .bg-\[\#eef1f4\],
-html[data-appearance="material_bloom"] .bg-\[\#f0edf2\],
-html[data-appearance="material_bloom"] .bg-\[\#f2f4f7\],
-html[data-appearance="material_bloom"] .bg-\[\#f3f3f3\],
-html[data-appearance="material_bloom"] .bg-\[\#f3f4f7\],
-html[data-appearance="material_bloom"] .bg-\[\#f4f6f8\],
-html[data-appearance="material_bloom"] .bg-\[\#f5f5f5\],
-html[data-appearance="material_bloom"] .bg-\[\#f5f6f8\],
-html[data-appearance="material_bloom"] .bg-\[\#f6f7f9\] {
+html[data-appearance] .bg-\[\#dfe4ea\],
+html[data-appearance] .bg-\[\#eef1f4\],
+html[data-appearance] .bg-\[\#f0edf2\],
+html[data-appearance] .bg-\[\#f2f4f7\],
+html[data-appearance] .bg-\[\#f3f3f3\],
+html[data-appearance] .bg-\[\#f3f4f7\],
+html[data-appearance] .bg-\[\#f4f6f8\],
+html[data-appearance] .bg-\[\#f5f5f5\],
+html[data-appearance] .bg-\[\#f5f6f8\],
+html[data-appearance] .bg-\[\#f6f7f9\] {
   background-color: var(--md-surface-container) !important;
 }
 
-html[data-appearance="material_bloom"] .bg-\[\#eef2ff\],
-html[data-appearance="material_bloom"] .bg-\[\#eef4ff\],
-html[data-appearance="material_bloom"] .bg-\[\#eef5ff\],
-html[data-appearance="material_bloom"] .bg-\[\#eef6ff\],
-html[data-appearance="material_bloom"] .bg-\[\#f4f8ff\] {
+html[data-appearance] .bg-\[\#eef2ff\],
+html[data-appearance] .bg-\[\#eef4ff\],
+html[data-appearance] .bg-\[\#eef5ff\],
+html[data-appearance] .bg-\[\#eef6ff\],
+html[data-appearance] .bg-\[\#f4f8ff\] {
   background-color: var(--md-secondary-container) !important;
 }
 
-html[data-appearance="material_bloom"] .text-\[\#0b57d0\] {
+html[data-appearance] .text-\[\#0b57d0\] {
   color: var(--md-secondary) !important;
 }
 
-html[data-appearance="material_bloom"] .text-\[\#111827\],
-html[data-appearance="material_bloom"] .text-\[\#171717\],
-html[data-appearance="material_bloom"] .text-\[\#202124\],
-html[data-appearance="material_bloom"] .text-\[\#232323\],
-html[data-appearance="material_bloom"] .text-\[\#242424\],
-html[data-appearance="material_bloom"] .text-\[\#262626\],
-html[data-appearance="material_bloom"] .text-\[\#2b2b2b\],
-html[data-appearance="material_bloom"] .text-\[\#333\],
-html[data-appearance="material_bloom"] .text-\[\#344054\],
-html[data-appearance="material_bloom"] .text-\[\#3f3f3f\],
-html[data-appearance="material_bloom"] .text-\[\#3f444c\],
-html[data-appearance="material_bloom"] .text-\[\#3f4650\],
-html[data-appearance="material_bloom"] .text-\[\#3f4652\],
-html[data-appearance="material_bloom"] .text-\[\#475467\],
-html[data-appearance="material_bloom"] .text-\[\#4a414f\],
-html[data-appearance="material_bloom"] .text-\[\#4f5661\] {
+html[data-appearance] .text-\[\#111827\],
+html[data-appearance] .text-\[\#171717\],
+html[data-appearance] .text-\[\#202124\],
+html[data-appearance] .text-\[\#232323\],
+html[data-appearance] .text-\[\#242424\],
+html[data-appearance] .text-\[\#262626\],
+html[data-appearance] .text-\[\#2b2b2b\],
+html[data-appearance] .text-\[\#333\],
+html[data-appearance] .text-\[\#344054\],
+html[data-appearance] .text-\[\#3f3f3f\],
+html[data-appearance] .text-\[\#3f444c\],
+html[data-appearance] .text-\[\#3f4650\],
+html[data-appearance] .text-\[\#3f4652\],
+html[data-appearance] .text-\[\#475467\],
+html[data-appearance] .text-\[\#4a414f\],
+html[data-appearance] .text-\[\#4f5661\] {
   color: var(--md-on-surface) !important;
 }
 
-html[data-appearance="material_bloom"] .text-\[\#555\],
-html[data-appearance="material_bloom"] .text-\[\#59616d\],
-html[data-appearance="material_bloom"] .text-\[\#5f5f5f\],
-html[data-appearance="material_bloom"] .text-\[\#5f6368\],
-html[data-appearance="material_bloom"] .text-\[\#667085\],
-html[data-appearance="material_bloom"] .text-\[\#69707a\],
-html[data-appearance="material_bloom"] .text-\[\#6f6f6f\],
-html[data-appearance="material_bloom"] .text-\[\#6f7782\],
-html[data-appearance="material_bloom"] .text-\[\#777\],
-html[data-appearance="material_bloom"] .text-\[\#7a7f87\],
-html[data-appearance="material_bloom"] .text-\[\#7a8088\],
-html[data-appearance="material_bloom"] .text-\[\#7b8490\],
-html[data-appearance="material_bloom"] .text-\[\#8a8a8a\],
-html[data-appearance="material_bloom"] .text-\[\#8a9099\],
-html[data-appearance="material_bloom"] .text-\[\#98a2b3\],
-html[data-appearance="material_bloom"] .text-\[\#9a9a9a\],
-html[data-appearance="material_bloom"] .text-\[\#9aa1ab\],
-html[data-appearance="material_bloom"] .text-\[\#b4b4b4\] {
+html[data-appearance] .text-\[\#555\],
+html[data-appearance] .text-\[\#59616d\],
+html[data-appearance] .text-\[\#5f5f5f\],
+html[data-appearance] .text-\[\#5f6368\],
+html[data-appearance] .text-\[\#667085\],
+html[data-appearance] .text-\[\#69707a\],
+html[data-appearance] .text-\[\#6f6f6f\],
+html[data-appearance] .text-\[\#6f7782\],
+html[data-appearance] .text-\[\#777\],
+html[data-appearance] .text-\[\#7a7f87\],
+html[data-appearance] .text-\[\#7a8088\],
+html[data-appearance] .text-\[\#7b8490\],
+html[data-appearance] .text-\[\#8a8a8a\],
+html[data-appearance] .text-\[\#8a9099\],
+html[data-appearance] .text-\[\#98a2b3\],
+html[data-appearance] .text-\[\#9a9a9a\],
+html[data-appearance] .text-\[\#9aa1ab\],
+html[data-appearance] .text-\[\#b4b4b4\] {
   color: var(--md-on-surface-variant) !important;
 }
 
-html[data-appearance="material_bloom"] .border-\[\#bcc2cb\],
-html[data-appearance="material_bloom"] .border-\[\#c2c8d0\],
-html[data-appearance="material_bloom"] .border-\[\#cfd4dc\],
-html[data-appearance="material_bloom"] .border-\[\#cfd5dd\],
-html[data-appearance="material_bloom"] .border-\[\#cfd6df\],
-html[data-appearance="material_bloom"] .border-\[\#d7dbe2\],
-html[data-appearance="material_bloom"] .border-\[\#d8dde5\],
-html[data-appearance="material_bloom"] .border-\[\#d9d9d9\],
-html[data-appearance="material_bloom"] .border-\[\#dfe3e8\],
-html[data-appearance="material_bloom"] .border-\[\#e1dbe6\],
-html[data-appearance="material_bloom"] .border-\[\#e2e5ea\],
-html[data-appearance="material_bloom"] .border-\[\#e4e7ec\],
-html[data-appearance="material_bloom"] .border-\[\#e5e8ed\],
-html[data-appearance="material_bloom"] .border-\[\#e6e9ee\],
-html[data-appearance="material_bloom"] .border-\[\#e7e1ea\],
-html[data-appearance="material_bloom"] .border-\[\#e8e8e8\],
-html[data-appearance="material_bloom"] .border-\[\#e8ebef\],
-html[data-appearance="material_bloom"] .border-\[\#ece7ef\],
-html[data-appearance="material_bloom"] .border-\[\#ececec\],
-html[data-appearance="material_bloom"] .border-\[\#eceff3\] {
+html[data-appearance] .border-\[\#bcc2cb\],
+html[data-appearance] .border-\[\#c2c8d0\],
+html[data-appearance] .border-\[\#cfd4dc\],
+html[data-appearance] .border-\[\#cfd5dd\],
+html[data-appearance] .border-\[\#cfd6df\],
+html[data-appearance] .border-\[\#d7dbe2\],
+html[data-appearance] .border-\[\#d8dde5\],
+html[data-appearance] .border-\[\#d9d9d9\],
+html[data-appearance] .border-\[\#dfe3e8\],
+html[data-appearance] .border-\[\#e1dbe6\],
+html[data-appearance] .border-\[\#e2e5ea\],
+html[data-appearance] .border-\[\#e4e7ec\],
+html[data-appearance] .border-\[\#e5e8ed\],
+html[data-appearance] .border-\[\#e6e9ee\],
+html[data-appearance] .border-\[\#e7e1ea\],
+html[data-appearance] .border-\[\#e8e8e8\],
+html[data-appearance] .border-\[\#e8ebef\],
+html[data-appearance] .border-\[\#ece7ef\],
+html[data-appearance] .border-\[\#ececec\],
+html[data-appearance] .border-\[\#eceff3\] {
   border-color: var(--md-outline-variant) !important;
 }
 
-html[data-appearance="material_bloom"] .hover\:bg-\[\#cfd5dd\]:hover,
-html[data-appearance="material_bloom"] .hover\:bg-\[\#dfe4ea\]:hover,
-html[data-appearance="material_bloom"] .hover\:bg-\[\#e4e8ee\]:hover,
-html[data-appearance="material_bloom"] .hover\:bg-\[\#e6e6e6\]:hover,
-html[data-appearance="material_bloom"] .hover\:bg-\[\#eef1f5\]:hover,
-html[data-appearance="material_bloom"] .hover\:bg-\[\#f0edf2\]:hover,
-html[data-appearance="material_bloom"] .hover\:bg-\[\#f3f4f7\]:hover,
-html[data-appearance="material_bloom"] .hover\:bg-\[\#f5f5f5\]:hover,
-html[data-appearance="material_bloom"] .hover\:bg-\[\#f6f7f9\]:hover,
-html[data-appearance="material_bloom"] .hover\:bg-white:hover {
+html[data-appearance] .hover\:bg-\[\#cfd5dd\]:hover,
+html[data-appearance] .hover\:bg-\[\#dfe4ea\]:hover,
+html[data-appearance] .hover\:bg-\[\#e4e8ee\]:hover,
+html[data-appearance] .hover\:bg-\[\#e6e6e6\]:hover,
+html[data-appearance] .hover\:bg-\[\#eef1f5\]:hover,
+html[data-appearance] .hover\:bg-\[\#f0edf2\]:hover,
+html[data-appearance] .hover\:bg-\[\#f3f4f7\]:hover,
+html[data-appearance] .hover\:bg-\[\#f5f5f5\]:hover,
+html[data-appearance] .hover\:bg-\[\#f6f7f9\]:hover,
+html[data-appearance] .hover\:bg-white:hover {
   background-color: var(--md-surface-high) !important;
 }
 
-html[data-appearance="material_bloom"] .voice-call-surface,
-html[data-appearance="material_bloom"] .fortune-surface {
+html[data-appearance] .voice-call-surface,
+html[data-appearance] .fortune-surface {
   border-color: var(--md-outline-variant) !important;
   background: var(--md-surface) !important;
   box-shadow: 0 20px 54px var(--md-shadow);
 }
 
-html[data-appearance="material_bloom"] .fortune-backdrop {
+html[data-appearance] .fortune-backdrop {
   background: color-mix(in srgb, var(--md-secondary) 16%, rgba(18, 14, 20, 0.34)) !important;
 }
 
-html[data-appearance="material_bloom"] .fortune-header {
+html[data-appearance] .fortune-header {
   border-color: var(--md-outline-variant) !important;
   background: var(--md-surface-low) !important;
 }
 
-html[data-appearance="material_bloom"] .fortune-accent,
-html[data-appearance="material_bloom"] .fortune-title,
-html[data-appearance="material_bloom"] .fortune-blessing {
+html[data-appearance] .fortune-accent,
+html[data-appearance] .fortune-title,
+html[data-appearance] .fortune-blessing {
   color: var(--md-primary) !important;
 }
 
-html[data-appearance="material_bloom"] .fortune-level-chip {
+html[data-appearance] .fortune-level-chip {
   border-color: color-mix(in srgb, var(--md-primary) 35%, var(--md-outline-variant)) !important;
   background: var(--md-primary-container) !important;
   color: var(--md-on-primary-container) !important;
 }
 
-html[data-appearance="material_bloom"] .fortune-verse {
+html[data-appearance] .fortune-verse {
   border-color: color-mix(in srgb, var(--md-primary) 55%, transparent) !important;
 }
 
-html[data-appearance="material_bloom"] .fortune-primary-action {
+html[data-appearance] .fortune-primary-action {
   border-color: color-mix(in srgb, var(--md-primary) 70%, transparent) !important;
   background: var(--md-primary) !important;
   color: var(--md-on-primary) !important;
 }
 
-html[data-appearance="material_bloom"] .voice-call-wave-line {
+html[data-appearance] .voice-call-wave-line {
   background: var(--md-primary);
 }
 
-html[data-appearance="material_bloom"] .voice-call-wave-line.is-speaking {
+html[data-appearance] .voice-call-wave-line.is-speaking {
   background: var(--md-secondary);
 }
 
-html[data-appearance="material_bloom"] .voice-call-avatar-ring {
+html[data-appearance] .voice-call-avatar-ring {
   border-color: color-mix(in srgb, var(--md-primary) 45%, transparent);
   box-shadow: 0 0 20px color-mix(in srgb, var(--md-primary) 16%, transparent);
 }
 
-html[data-appearance="material_bloom"] .voice-call-tool {
+html[data-appearance] .voice-call-tool {
   border-color: var(--md-outline-variant);
   background: var(--md-surface-low);
   color: var(--md-on-surface-variant);
 }
 
-html[data-appearance="material_bloom"] .voice-call-tool.is-active {
+html[data-appearance] .voice-call-tool.is-active {
   border-color: color-mix(in srgb, var(--md-primary) 45%, var(--md-outline-variant));
   background: var(--md-primary-container);
   color: var(--md-on-primary-container);
 }
 
-html[data-appearance="material_bloom"] .voice-call-tool {
+html[data-appearance] .voice-call-tool {
   min-height: 44px;
   border-radius: 999px;
 }
 
-html[data-appearance="material_bloom"] .voice-call-tool:hover:not(:disabled) {
+html[data-appearance] .voice-call-tool:hover:not(:disabled) {
   border-color: color-mix(in srgb, var(--md-primary) 32%, var(--md-outline-variant));
   background: var(--md-surface-container);
 }
 
-html[data-appearance="material_bloom"] .voice-call-tool.is-danger {
+html[data-appearance] .voice-call-tool.is-danger {
   border-color: transparent;
   background: #ba1a1a;
   color: #fff;
 }
 
-html[data-appearance="material_bloom"] .app-navigation-rail {
+html[data-appearance] .app-navigation-rail {
   padding-inline: 12px;
 }
 
-html[data-appearance="material_bloom"] .app-navigation-leading {
+html[data-appearance] .app-navigation-leading {
   min-height: 48px;
 }
 
-html[data-appearance="material_bloom"] .app-nav-item,
-html[data-appearance="material_bloom"] .app-settings-entry {
+html[data-appearance] .app-nav-item,
+html[data-appearance] .app-settings-entry {
   min-height: 48px;
   border-radius: 999px !important;
   color: var(--md-on-surface-variant) !important;
 }
 
-html[data-appearance="material_bloom"] .app-nav-item:hover,
-html[data-appearance="material_bloom"] .app-settings-entry:hover {
+html[data-appearance] .app-nav-item:hover,
+html[data-appearance] .app-settings-entry:hover {
   background: color-mix(in srgb, var(--md-on-surface) 7%, transparent) !important;
   color: var(--md-on-surface) !important;
 }
 
-html[data-appearance="material_bloom"] .app-nav-item.is-active,
-html[data-appearance="material_bloom"] .app-settings-entry.is-active {
+html[data-appearance] .app-nav-item.is-active,
+html[data-appearance] .app-settings-entry.is-active {
   background: var(--md-primary-container) !important;
   color: var(--md-on-primary-container) !important;
   box-shadow: none;
 }
 
-html[data-appearance="material_bloom"] .app-nav-item.is-active::before {
+html[data-appearance] .app-nav-item.is-active::before {
   display: none;
 }
 
-html[data-appearance="material_bloom"] .app-navigation-footer {
+html[data-appearance] .app-navigation-footer {
   border-color: var(--md-outline-variant) !important;
 }
 
-html[data-appearance="material_bloom"] .settings-nav-item {
+html[data-appearance] .settings-nav-item {
   min-height: 54px;
   border-radius: 8px !important;
 }
 
-html[data-appearance="material_bloom"] .settings-nav-icon {
+html[data-appearance] .settings-nav-icon {
   display: grid;
   width: 32px;
   height: 32px;
@@ -1968,113 +2017,113 @@ html[data-appearance="material_bloom"] .settings-nav-icon {
   transition: background-color 120ms ease, color 120ms ease;
 }
 
-html[data-appearance="material_bloom"] .settings-nav-item.is-selected .settings-nav-icon {
+html[data-appearance] .settings-nav-item.is-selected .settings-nav-icon {
   background: color-mix(in srgb, var(--md-primary) 12%, transparent);
   color: var(--md-primary);
 }
 
-html[data-appearance="material_bloom"] .md-settings-section {
+html[data-appearance] .md-settings-section {
   border-color: var(--md-outline-variant) !important;
 }
 
-html[data-appearance="material_bloom"] .md-switch-list-tile {
+html[data-appearance] .md-switch-list-tile {
   padding: 8px 0;
   border: 0 !important;
   border-radius: 0 !important;
   background: transparent !important;
 }
 
-html[data-appearance="material_bloom"] .md-choice-card {
+html[data-appearance] .md-choice-card {
   border-color: var(--md-outline-variant) !important;
   border-radius: 8px !important;
   background: var(--md-surface-lowest) !important;
 }
 
-html[data-appearance="material_bloom"] .md-choice-card:hover {
+html[data-appearance] .md-choice-card:hover {
   background: var(--md-surface-low) !important;
 }
 
-html[data-appearance="material_bloom"] .appearance-option.is-selected {
+html[data-appearance] .appearance-option.is-selected {
   background: var(--md-primary-container) !important;
 }
 
-html[data-appearance="material_bloom"] .permission-dialog-backdrop {
+html[data-appearance] .permission-dialog-backdrop {
   background: rgba(27, 20, 25, 0.42) !important;
 }
 
-html[data-appearance="material_bloom"] .permission-dialog-surface {
+html[data-appearance] .permission-dialog-surface {
   border-color: var(--md-outline-variant) !important;
   border-radius: 8px !important;
   background: var(--md-surface) !important;
   box-shadow: 0 24px 64px var(--md-shadow);
 }
 
-html[data-appearance="material_bloom"] .dashboard-root {
+html[data-appearance] .dashboard-root {
   container-type: inline-size;
 }
 
-html[data-appearance="material_bloom"] .dashboard-greeting img {
+html[data-appearance] .dashboard-greeting img {
   border-color: color-mix(in srgb, var(--md-primary) 24%, var(--md-outline-variant)) !important;
   background: var(--md-surface-lowest) !important;
   box-shadow: 0 2px 8px color-mix(in srgb, var(--md-primary) 12%, transparent);
 }
 
-html[data-appearance="material_bloom"] .dashboard-panel {
+html[data-appearance] .dashboard-panel {
   background: var(--md-surface-lowest) !important;
   box-shadow: 0 3px 14px color-mix(in srgb, var(--md-shadow) 55%, transparent);
 }
 
-html[data-appearance="material_bloom"] .dashboard-metrics {
+html[data-appearance] .dashboard-metrics {
   background: var(--md-surface-low);
 }
 
-html[data-appearance="material_bloom"] .dashboard-metric {
+html[data-appearance] .dashboard-metric {
   border-right: 1px solid var(--md-outline-variant);
   border-bottom: 1px solid var(--md-outline-variant);
   background: transparent !important;
 }
 
-html[data-appearance="material_bloom"] .dashboard-metric:nth-child(2n) {
+html[data-appearance] .dashboard-metric:nth-child(2n) {
   border-right: 0;
 }
 
-html[data-appearance="material_bloom"] .dashboard-metric:nth-last-child(-n + 2) {
+html[data-appearance] .dashboard-metric:nth-last-child(-n + 2) {
   border-bottom: 0;
 }
 
-html[data-appearance="material_bloom"] .dashboard-heatmap {
+html[data-appearance] .dashboard-heatmap {
   border-color: var(--md-outline-variant) !important;
   background: var(--md-surface-lowest);
 }
 
-html[data-appearance="material_bloom"] .dashboard-fortune {
+html[data-appearance] .dashboard-fortune {
   border-color: color-mix(in srgb, var(--md-primary) 18%, var(--md-outline-variant)) !important;
   background: var(--md-primary-container) !important;
   color: var(--md-on-primary-container) !important;
   box-shadow: none;
 }
 
-html[data-appearance="material_bloom"] .dashboard-fortune:hover {
+html[data-appearance] .dashboard-fortune:hover {
   border-color: color-mix(in srgb, var(--md-primary) 42%, var(--md-outline-variant)) !important;
   box-shadow: 0 5px 16px color-mix(in srgb, var(--md-primary) 15%, transparent);
 }
 
-html[data-appearance="material_bloom"] .dashboard-fortune-icon {
+html[data-appearance] .dashboard-fortune-icon {
   background: color-mix(in srgb, var(--md-surface-lowest) 60%, transparent) !important;
   color: var(--md-primary) !important;
 }
 
-html[data-appearance="material_bloom"] .dashboard-fortune-action {
+html[data-appearance] .dashboard-fortune-action {
   color: var(--md-primary) !important;
 }
 
-html[data-appearance="material_bloom"] .app-chat-toolbar-pack,
-html[data-appearance="material_bloom"] .app-chat-toolbar-agent {
+html[data-appearance] .app-chat-toolbar-pack,
+html[data-appearance] .app-chat-toolbar-agent {
   min-width: 0;
   padding-inline: 8px;
 }
 
-html[data-appearance="material_bloom"] .app-toolbar-actions {
+html[data-appearance] .app-toolbar-actions {
   flex-shrink: 0;
 }
 
@@ -2087,80 +2136,80 @@ html[data-appearance="material_bloom"] .app-toolbar-actions {
   padding-block: 4px;
 }
 
-html[data-appearance="material_bloom"] .media-studio,
-html[data-appearance="material_bloom"] .skills-panel {
+html[data-appearance] .media-studio,
+html[data-appearance] .skills-panel {
   background: var(--md-surface-lowest) !important;
 }
 
-html[data-appearance="material_bloom"] .media-main,
-html[data-appearance="material_bloom"] .media-stage {
+html[data-appearance] .media-main,
+html[data-appearance] .media-stage {
   background: var(--md-surface-container) !important;
 }
 
-html[data-appearance="material_bloom"] .media-history-rail,
-html[data-appearance="material_bloom"] .media-toolbar,
-html[data-appearance="material_bloom"] .media-controls,
-html[data-appearance="material_bloom"] .skills-header,
-html[data-appearance="material_bloom"] .workspace-explorer {
+html[data-appearance] .media-history-rail,
+html[data-appearance] .media-toolbar,
+html[data-appearance] .media-controls,
+html[data-appearance] .skills-header,
+html[data-appearance] .workspace-explorer {
   border-color: var(--md-outline-variant) !important;
 }
 
-html[data-appearance="material_bloom"] .media-history-rail,
-html[data-appearance="material_bloom"] .skills-header,
-html[data-appearance="material_bloom"] .workspace-explorer {
+html[data-appearance] .media-history-rail,
+html[data-appearance] .skills-header,
+html[data-appearance] .workspace-explorer {
   background: var(--md-surface-low) !important;
 }
 
-html[data-appearance="material_bloom"] .media-toolbar,
-html[data-appearance="material_bloom"] .media-controls {
+html[data-appearance] .media-toolbar,
+html[data-appearance] .media-controls {
   background: var(--md-surface-lowest) !important;
 }
 
-html[data-appearance="material_bloom"] .media-new-action {
+html[data-appearance] .media-new-action {
   border-color: color-mix(in srgb, var(--md-primary) 36%, var(--md-outline-variant)) !important;
   background: var(--md-primary-container) !important;
   color: var(--md-primary) !important;
 }
 
-html[data-appearance="material_bloom"] .skills-header-icon,
-html[data-appearance="material_bloom"] .workspace-header-icon {
+html[data-appearance] .skills-header-icon,
+html[data-appearance] .workspace-header-icon {
   border-color: color-mix(in srgb, var(--md-secondary) 24%, var(--md-outline-variant)) !important;
   background: var(--md-secondary-container) !important;
   color: var(--md-secondary) !important;
 }
 
-html[data-appearance="material_bloom"] .skill-card {
+html[data-appearance] .skill-card {
   border-color: var(--md-outline-variant) !important;
   border-radius: 8px !important;
   background: var(--md-surface-lowest) !important;
   box-shadow: 0 2px 8px color-mix(in srgb, var(--md-shadow) 48%, transparent) !important;
 }
 
-html[data-appearance="material_bloom"] .skill-card.is-selected {
+html[data-appearance] .skill-card.is-selected {
   border-color: color-mix(in srgb, var(--md-primary) 48%, var(--md-outline-variant)) !important;
   background: color-mix(in srgb, var(--md-primary-container) 38%, var(--md-surface-lowest)) !important;
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--md-primary) 14%, transparent) !important;
 }
 
-html[data-appearance="material_bloom"] .workspace-actions,
-html[data-appearance="material_bloom"] .workspace-tabs {
+html[data-appearance] .workspace-actions,
+html[data-appearance] .workspace-tabs {
   border-color: var(--md-outline-variant) !important;
 }
 
-html[data-appearance="material_bloom"] .workspace-tab-control {
+html[data-appearance] .workspace-tab-control {
   background: var(--md-surface-lowest);
 }
 
 @container (min-width: 540px) {
-  html[data-appearance="material_bloom"] .dashboard-metric:nth-child(2n) {
+  html[data-appearance] .dashboard-metric:nth-child(2n) {
     border-right: 1px solid var(--md-outline-variant);
   }
 
-  html[data-appearance="material_bloom"] .dashboard-metric:nth-child(4n) {
+  html[data-appearance] .dashboard-metric:nth-child(4n) {
     border-right: 0;
   }
 
-  html[data-appearance="material_bloom"] .dashboard-metric:nth-last-child(-n + 4) {
+  html[data-appearance] .dashboard-metric:nth-last-child(-n + 4) {
     border-bottom: 0;
   }
 }
@@ -2178,22 +2227,22 @@ html[data-appearance="material_bloom"] .workspace-tab-control {
 }
 
 @media (max-width: 1023px) {
-  html[data-appearance="material_bloom"] .dashboard-fortune {
+  html[data-appearance] .dashboard-fortune {
     display: grid;
     min-height: 0;
     grid-template-columns: 44px minmax(0, 1fr);
     column-gap: 12px;
   }
 
-  html[data-appearance="material_bloom"] .dashboard-fortune-icon {
+  html[data-appearance] .dashboard-fortune-icon {
     grid-row: 1 / span 2;
   }
 
-  html[data-appearance="material_bloom"] .dashboard-fortune > span:nth-child(2) {
+  html[data-appearance] .dashboard-fortune > span:nth-child(2) {
     margin-top: 0;
   }
 
-  html[data-appearance="material_bloom"] .dashboard-fortune-action {
+  html[data-appearance] .dashboard-fortune-action {
     grid-column: 2;
     padding-top: 8px;
   }
@@ -2253,20 +2302,20 @@ html[data-appearance="material_bloom"] .workspace-tab-control {
     flex: 1;
   }
 
-  html[data-appearance="material_bloom"] .app-chat-toolbar {
+  html[data-appearance] .app-chat-toolbar {
     gap: 2px;
     padding-inline: 5px;
   }
 
-  html[data-appearance="material_bloom"] .app-chat-toolbar-pack {
+  html[data-appearance] .app-chat-toolbar-pack {
     max-width: 132px;
   }
 
-  html[data-appearance="material_bloom"] .app-chat-toolbar-agent {
+  html[data-appearance] .app-chat-toolbar-agent {
     max-width: 88px;
   }
 
-  html[data-appearance="material_bloom"] .app-toolbar-actions {
+  html[data-appearance] .app-toolbar-actions {
     gap: 0;
   }
 }
@@ -2329,7 +2378,7 @@ html[data-appearance="material_bloom"] .workspace-tab-control {
   }
 }
 
-html[data-appearance="material_bloom"] * {
+html[data-appearance] * {
   scrollbar-color: color-mix(in srgb, var(--md-primary) 24%, var(--md-outline-variant)) transparent;
 }
 
@@ -2422,13 +2471,101 @@ html[data-appearance="material_bloom"] * {
   }
 }
 
+html[data-window="widgets"],
+html[data-window="widgets"] body,
+html[data-window="widgets"] #app {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: var(--md-shell, #faf8fb);
+}
+
+.widgets-window-shell {
+  color: var(--md-on-surface, #2b2529);
+  background: var(--md-shell, #faf8fb);
+  letter-spacing: 0;
+}
+
+.widgets-window-header {
+  border-color: var(--md-outline-variant, #ded7e1);
+  background: var(--md-surface, #ffffff);
+}
+
+.widgets-window-header h1 {
+  color: var(--md-on-surface, #2b2529);
+}
+
+.widgets-window-header p {
+  color: var(--md-on-surface-variant, #685e65);
+}
+
+.widgets-window-app-icon {
+  background: var(--md-primary-container, #f9dce8);
+}
+
+.widgets-window-content {
+  scrollbar-gutter: stable;
+}
+
+.widgets-window-error {
+  overflow-wrap: anywhere;
+  border: 1px solid color-mix(in srgb, #b42318 28%, var(--md-outline-variant, #ded7e1));
+  color: #b42318;
+  background: color-mix(in srgb, #b42318 7%, var(--md-surface, #ffffff));
+}
+
+.widgets-fortune-surface {
+  border: 1px solid color-mix(in srgb, var(--md-primary, #c44782) 20%, var(--md-outline-variant, #ded7e1));
+  color: var(--md-on-primary-container, #4b1730);
+  background: var(--md-primary-container, #f9dce8);
+}
+
+.widgets-fortune-surface p {
+  color: color-mix(in srgb, var(--md-on-primary-container, #4b1730) 76%, transparent);
+}
+
+.widgets-fortune-art {
+  background: color-mix(in srgb, var(--md-surface-lowest, #ffffff) 72%, transparent);
+}
+
+.widgets-tool-surface {
+  border: 1px solid var(--md-outline-variant, #ded7e1);
+  background: var(--md-surface, #ffffff);
+  box-shadow: 0 1px 3px color-mix(in srgb, var(--md-shadow, rgba(64, 42, 55, 0.14)) 65%, transparent);
+}
+
+.widgets-tool-surface > section {
+  background: transparent !important;
+}
+
+@media (max-width: 460px) {
+  .widgets-window-content {
+    padding: 12px;
+  }
+
+  .widgets-fortune-surface {
+    gap: 12px;
+    padding: 12px;
+  }
+
+  .widgets-fortune-art {
+    width: 72px;
+    height: 72px;
+  }
+
+  .widgets-fortune-art img {
+    width: 64px;
+    height: 64px;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
-  html[data-appearance="material_bloom"] .app-shell,
-  html[data-appearance="material_bloom"] .app-titlebar::after,
-  html[data-appearance="material_bloom"] .app-nav-item.is-active::before,
-  html[data-appearance="material_bloom"] .settings-nav-item.is-selected::before,
-  html[data-appearance="material_bloom"] .app-primary-action,
-  html[data-appearance="material_bloom"] .settings-save {
+  html[data-appearance] .app-shell,
+  html[data-appearance] .app-titlebar::after,
+  html[data-appearance] .app-nav-item.is-active::before,
+  html[data-appearance] .settings-nav-item.is-selected::before,
+  html[data-appearance] .app-primary-action,
+  html[data-appearance] .settings-save {
     animation: none !important;
   }
 }

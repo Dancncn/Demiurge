@@ -149,7 +149,12 @@ export const contextPanelState = () => invoke<ContextPanelState>("context_panel_
 export const companionPanelState = () => invoke<CompanionPanelState>("companion_panel_state");
 export const companionClearWeatherCache = () =>
   invoke<CompanionPanelState>("companion_clear_weather_cache");
+export const mainWindowMinimize = () => invoke<void>("main_window_minimize");
+export const mainWindowToggleMaximize = () => invoke<void>("main_window_toggle_maximize");
+export const mainWindowClose = () => invoke<void>("main_window_close");
+export const desktopCompanionRestore = () => invoke<void>("desktop_companion_restore");
 export const desktopCompanionShowMain = () => invoke<void>("desktop_companion_show_main");
+export const openWidgetsWindow = () => invoke<void>("open_widgets_window");
 export const pomodoroState = () => invoke<PomodoroPanelState>("pomodoro_state");
 export const pomodoroStart = (request: PomodoroStartRequest) =>
   invoke<PomodoroPanelState>("pomodoro_start", { request });

@@ -41,6 +41,9 @@ const DESKTOP_COMPANION_EXPANDED_WIDTH: u32 = 320;
 const DESKTOP_COMPANION_EXPANDED_HEIGHT: u32 = 178;
 const DESKTOP_COMPANION_COLLAPSED_WIDTH: u32 = 188;
 const DESKTOP_COMPANION_COLLAPSED_HEIGHT: u32 = 64;
+const WIDGETS_WINDOW_LABEL: &str = "widgets";
+const WIDGETS_WINDOW_WIDTH: f64 = 520.0;
+const WIDGETS_WINDOW_HEIGHT: f64 = 700.0;
 
 /// 全局共享状态。路径类字段在 setup() 里填充（需要 AppHandle 才能拿到 app_data_dir）。
 pub struct AppState {
@@ -419,6 +422,70 @@ fn ensure_desktop_companion_window(
     .map_err(|e| format!("Failed to create desktop companion window: {e}"))
 }
 
+/// 构建常驻的小工具窗口。窗口始终以隐藏状态创建：Windows 上在 async command
+/// 上下文动态创建 WebviewWindow 会得到只有外壳、没有渲染内容的空白窗口，
+/// 因此改为启动时在主线程预创建，打开时只做显示/恢复/聚焦。
+fn create_widgets_window(app: &AppHandle) -> Result<tauri::WebviewWindow, String> {
+    let window = tauri::WebviewWindowBuilder::new(
+        app,
+        WIDGETS_WINDOW_LABEL,
+        tauri::WebviewUrl::App("index.html".into()),
+    )
+    .title("Demiurge - Utilities")
+    .inner_size(WIDGETS_WINDOW_WIDTH, WIDGETS_WINDOW_HEIGHT)
+    .min_inner_size(420.0, 540.0)
+    .resizable(true)
+    .decorations(true)
+    .visible(false)
+    .center()
+    .build()
+    .map_err(|e| format!("Failed to create widgets window: {e}"))?;
+    bind_widgets_window_lifecycle(&window);
+    Ok(window)
+}
+
+/// 小工具窗口常驻存活：关闭按钮只隐藏窗口，webview 保持已渲染状态，
+/// 下次打开可以瞬时恢复，也避免重建时再次踩到空白窗口问题。
+fn bind_widgets_window_lifecycle(window: &tauri::WebviewWindow) {
+    let app = window.app_handle().clone();
+    window.on_window_event(move |event| {
+        if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+            api.prevent_close();
+            if let Some(window) = app.get_webview_window(WIDGETS_WINDOW_LABEL) {
+                let _ = window.hide();
+            }
+        }
+    });
+}
+
+/// 主窗口是应用主体：关闭主窗口即退出进程。小工具/桌宠窗口是常驻的隐藏窗口，
+/// 不主动退出会让事件循环一直持有它们，进程无法结束。
+fn bind_main_window_lifecycle(app: &AppHandle) {
+    let Some(window) = app.get_webview_window("main") else {
+        return;
+    };
+    let app = app.clone();
+    window.on_window_event(move |event| {
+        if matches!(event, tauri::WindowEvent::CloseRequested { .. }) {
+            app.exit(0);
+        }
+    });
+}
+
+/// 显示常驻小工具窗口：先取消最小化，再显示并聚焦。
+fn show_widgets_window(window: &tauri::WebviewWindow) -> Result<(), String> {
+    window
+        .unminimize()
+        .map_err(|e| format!("Failed to restore widgets window: {e}"))?;
+    window
+        .show()
+        .map_err(|e| format!("Failed to show widgets window: {e}"))?;
+    window
+        .set_focus()
+        .map_err(|e| format!("Failed to focus widgets window: {e}"))?;
+    Ok(())
+}
+
 fn sync_desktop_companion_window(app: &AppHandle, settings: &Settings) -> Result<(), String> {
     if !settings.desktop_companion_enabled {
         if let Some(window) = app.get_webview_window(DESKTOP_COMPANION_WINDOW_LABEL) {
@@ -654,6 +721,136 @@ fn save_settings(
     Ok(())
 }
 
+/// 主窗口按 label 解析。窗口控制走后端而不是前端 `getCurrentWindow()`：
+/// 前端拿到的当前窗口在多窗口场景下不一定是 "main"。
+fn main_window(app: &AppHandle) -> Result<tauri::WebviewWindow, String> {
+    app.get_webview_window("main")
+        .ok_or_else(|| "Main window is not available".to_string())
+}
+
+#[cfg(target_os = "windows")]
+mod native_main_window {
+    use std::ffi::c_void;
+
+    use tauri::WebviewWindow;
+
+    const SW_MAXIMIZE: i32 = 3;
+    const SW_MINIMIZE: i32 = 6;
+    const SW_RESTORE: i32 = 9;
+    const WM_CLOSE: u32 = 0x0010;
+
+    #[link(name = "user32")]
+    extern "system" {
+        fn IsZoomed(window: *mut c_void) -> i32;
+        fn PostMessageW(window: *mut c_void, message: u32, w_param: usize, l_param: isize) -> i32;
+        fn ShowWindow(window: *mut c_void, command: i32) -> i32;
+    }
+
+    fn hwnd(window: &WebviewWindow) -> Result<*mut c_void, String> {
+        window
+            .hwnd()
+            .map(|handle| handle.0 as *mut c_void)
+            .map_err(|e| format!("Failed to resolve native main window handle: {e}"))
+    }
+
+    pub fn minimize(window: &WebviewWindow) -> Result<(), String> {
+        let handle = hwnd(window)?;
+        // SAFETY: Tauri owns this live top-level HWND for the duration of the call.
+        unsafe {
+            ShowWindow(handle, SW_MINIMIZE);
+        }
+        Ok(())
+    }
+
+    pub fn toggle_maximize(window: &WebviewWindow) -> Result<(), String> {
+        let handle = hwnd(window)?;
+        // SAFETY: Tauri owns this live top-level HWND for the duration of the call.
+        let command = if unsafe { IsZoomed(handle) } != 0 {
+            SW_RESTORE
+        } else {
+            SW_MAXIMIZE
+        };
+        // SAFETY: The command is one of the documented ShowWindow constants.
+        unsafe {
+            ShowWindow(handle, command);
+        }
+        Ok(())
+    }
+
+    pub fn close(window: &WebviewWindow) -> Result<(), String> {
+        let handle = hwnd(window)?;
+        // Post WM_CLOSE instead of destroying the HWND so Tauri still emits
+        // CloseRequested and the main-window lifecycle can exit cleanly.
+        if unsafe { PostMessageW(handle, WM_CLOSE, 0, 0) } == 0 {
+            return Err("Failed to post close request to the main window".to_string());
+        }
+        Ok(())
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+mod native_main_window {
+    use tauri::WebviewWindow;
+
+    pub fn minimize(window: &WebviewWindow) -> Result<(), String> {
+        window
+            .minimize()
+            .map_err(|e| format!("Failed to minimize main window: {e}"))
+    }
+
+    pub fn toggle_maximize(window: &WebviewWindow) -> Result<(), String> {
+        window
+            .toggle_maximize()
+            .map_err(|e| format!("Failed to toggle main window maximize state: {e}"))
+    }
+
+    pub fn close(window: &WebviewWindow) -> Result<(), String> {
+        window
+            .close()
+            .map_err(|e| format!("Failed to close main window: {e}"))
+    }
+}
+
+#[tauri::command]
+fn main_window_minimize(app: AppHandle) -> Result<(), String> {
+    native_main_window::minimize(&main_window(&app)?)
+}
+
+#[tauri::command]
+fn main_window_toggle_maximize(app: AppHandle) -> Result<(), String> {
+    native_main_window::toggle_maximize(&main_window(&app)?)
+}
+
+#[tauri::command]
+fn main_window_close(app: AppHandle) -> Result<(), String> {
+    native_main_window::close(&main_window(&app)?)
+}
+
+/// 呼出桌宠陪伴壳：主工具栏按钮的语义是"呼出"而不是开关，所以这里只负责
+/// 取消最小化 / 显示 / 聚焦，不写回任何设置。窗口尚未创建（或曾被停用后销毁）
+/// 时按当前设置重建——同步命令跑在主线程，重建不会踩到空白窗口的问题。
+#[tauri::command]
+fn desktop_companion_restore(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+    let settings = state.settings.lock().unwrap().clone();
+    if !settings.desktop_companion_enabled {
+        // 设置仍是唯一权威：未启用时呼出不应凭空造出一个陪伴壳。
+        return Ok(());
+    }
+    // 窗口已存在时这一步只是把置顶/尺寸/穿透同步一遍，是幂等的。
+    sync_desktop_companion_window(&app, &settings)?;
+    let window = ensure_desktop_companion_window(&app, &settings)?;
+    window
+        .unminimize()
+        .map_err(|e| format!("Failed to restore desktop companion window: {e}"))?;
+    window
+        .show()
+        .map_err(|e| format!("Failed to show desktop companion window: {e}"))?;
+    window
+        .set_focus()
+        .map_err(|e| format!("Failed to focus desktop companion window: {e}"))?;
+    Ok(())
+}
+
 #[tauri::command]
 fn desktop_companion_show_main(app: AppHandle) -> Result<(), String> {
     let Some(window) = app.get_webview_window("main") else {
@@ -666,6 +863,24 @@ fn desktop_companion_show_main(app: AppHandle) -> Result<(), String> {
         .set_focus()
         .map_err(|e| format!("Failed to focus main window: {e}"))?;
     Ok(())
+}
+
+#[tauri::command]
+async fn open_widgets_window(app: AppHandle) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window(WIDGETS_WINDOW_LABEL) {
+        return show_widgets_window(&window);
+    }
+
+    // 兜底：启动时的预创建失败了。Windows 上从命令线程直接建窗口只会得到空白
+    // 外壳，所以把重建排回主线程，再在主线程里显示。
+    let handle = app.clone();
+    app.run_on_main_thread(move || {
+        let result = create_widgets_window(&handle).and_then(|window| show_widgets_window(&window));
+        if let Err(e) = result {
+            eprintln!("Demiurge widgets window warning: {e}");
+        }
+    })
+    .map_err(|e| format!("Failed to schedule widgets window creation: {e}"))
 }
 
 #[tauri::command]
@@ -2917,6 +3132,13 @@ pub fn run() {
             if let Err(e) = sync_desktop_companion_window(app.handle(), &settings_snapshot) {
                 eprintln!("Demiurge desktop companion startup warning: {e}");
             }
+            bind_main_window_lifecycle(app.handle());
+            // 小工具窗口在启动时（主线程）预创建并保持隐藏。Windows 上从命令线程
+            // 动态创建 WebviewWindow 只会得到没有渲染内容的空白外壳，预创建后
+            // 打开只需 show/focus，既能立刻显示也不会空白。
+            if let Err(e) = create_widgets_window(app.handle()) {
+                eprintln!("Demiurge widgets window startup warning: {e}");
+            }
             agent::workflow_runtime::hydrate_persisted_runs(state.inner());
             pomodoro::hydrate(app.handle().clone(), state.inner());
             // 保证落盘一次（迁移/初始化后）
@@ -3006,7 +3228,12 @@ pub fn run() {
             media_synthesize_speech,
             companion_panel_state,
             companion_clear_weather_cache,
+            main_window_minimize,
+            main_window_toggle_maximize,
+            main_window_close,
+            desktop_companion_restore,
             desktop_companion_show_main,
+            open_widgets_window,
             pomodoro_state,
             pomodoro_start,
             pomodoro_pause,

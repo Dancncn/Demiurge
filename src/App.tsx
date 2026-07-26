@@ -33,8 +33,6 @@ import SettingsDialog, { type SettingsTab } from "./components/SettingsDialog";
 import MediaStudio from "./components/MediaStudio";
 import SkillsPanel from "./components/SkillsPanel";
 import FortuneDialog from "./components/FortuneDialog";
-import CompanionCard from "./components/CompanionCard";
-import PomodoroCard from "./components/PomodoroCard";
 import VoiceCallPanel from "./components/VoiceCallPanel";
 import WorkflowsPanel from "./components/WorkflowsPanel";
 import {
@@ -47,8 +45,6 @@ import {
   PanelLeftIcon,
   PhoneIcon,
   PinIcon,
-  SettingsIcon,
-  SparklesIcon,
   VolumeIcon,
 } from "./components/Icons";
 import { attachmentKindLabel, buildAttachmentPrompt, formatAttachmentSize, type ProcessedAttachment } from "./lib/fileProcessing";
@@ -340,7 +336,6 @@ export default function App() {
   );
   const [packMenuOpen, setPackMenuOpen] = useState(false);
   const [agentMenuOpen, setAgentMenuOpen] = useState(false);
-  const [toyMenuOpen, setToyMenuOpen] = useState(false);
   const [titleMenuOpen, setTitleMenuOpen] = useState<"file" | "edit" | "view" | "persona" | "help" | null>(null);
   const [confirmReq, setConfirmReq] = useState<ConfirmRequestEvent | null>(null);
   const [planState, setPlanState] = useState<PlanState>({ active: false, approved: false });
@@ -368,7 +363,6 @@ export default function App() {
   });
   const packMenuRef = useRef<HTMLDivElement | null>(null);
   const agentMenuRef = useRef<HTMLDivElement | null>(null);
-  const toyMenuRef = useRef<HTMLDivElement | null>(null);
   const titleMenuRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const spokenRepliesEnabledRef = useRef(spokenRepliesEnabled);
@@ -911,7 +905,6 @@ export default function App() {
   useClickOutside(packMenuRef, () => setPackMenuOpen(false), { enabled: packMenuOpen });
   useClickOutside(titleMenuRef, () => setTitleMenuOpen(null), { escape: true, enabled: !!titleMenuOpen });
   useClickOutside(agentMenuRef, () => setAgentMenuOpen(false), { enabled: agentMenuOpen });
-  useClickOutside(toyMenuRef, () => setToyMenuOpen(false), { escape: true, enabled: toyMenuOpen });
 
   async function handleSend(textArg?: string, attachments: ProcessedAttachment[] = []) {
     const text = (textArg ?? input).trim();
@@ -1193,6 +1186,14 @@ export default function App() {
     setActiveView("settings");
   }
 
+  async function openWidgets() {
+    try {
+      await api.openWidgetsWindow();
+    } catch (e) {
+      console.error("Failed to open widgets window", e);
+    }
+  }
+
   const last = items[items.length - 1];
   const tailStreaming = last?.kind === "assistant" && last.streaming;
   const tailToolRunning = last?.kind === "tool" && last.status === "running";
@@ -1209,19 +1210,29 @@ export default function App() {
     });
   }
 
-  async function toggleDesktopCompanion() {
+  /**
+   * 主工具栏按钮的语义是"呼出"而不是开关：已启用时只把陪伴壳恢复到前台，
+   * 不会因为窗口被隐藏/最小化而反向停用。停用只走设置页和陪伴壳自身的关闭按钮。
+   */
+  async function summonDesktopCompanion() {
     if (!settings) return;
-    const enabled = !settings.desktop_companion_enabled;
+    if (settings.desktop_companion_enabled) {
+      try {
+        await api.desktopCompanionRestore();
+      } catch (e) {
+        console.error("Failed to summon desktop companion", e);
+      }
+      return;
+    }
     const next = {
       ...settings,
-      desktop_companion_enabled: enabled,
-      desktop_companion_click_through: enabled ? settings.desktop_companion_click_through : false,
+      desktop_companion_enabled: true,
     };
     setSettings(next);
     try {
       await api.saveSettings(next);
     } catch (e) {
-      console.error("Failed to toggle desktop companion", e);
+      console.error("Failed to enable desktop companion", e);
       setSettings(settings);
     }
   }
@@ -1252,17 +1263,17 @@ export default function App() {
 
   async function handleWindowMinimize() {
     if (!("__TAURI_INTERNALS__" in window)) return;
-    await getCurrentWindow().minimize();
+    await api.mainWindowMinimize();
   }
 
   async function handleWindowToggleMaximize() {
     if (!("__TAURI_INTERNALS__" in window)) return;
-    await getCurrentWindow().toggleMaximize();
+    await api.mainWindowToggleMaximize();
   }
 
   async function handleWindowClose() {
     if (!("__TAURI_INTERNALS__" in window)) return;
-    await getCurrentWindow().close();
+    await api.mainWindowClose();
   }
 
   return (
@@ -1705,16 +1716,15 @@ export default function App() {
 
                   <button
                     type="button"
-                    onClick={() => void toggleDesktopCompanion()}
+                    onClick={() => void summonDesktopCompanion()}
                     disabled={!settings}
                     className={`app-toolbar-secondary md-icon-button grid h-8 w-8 place-items-center rounded-md transition ${
                       settings?.desktop_companion_enabled
                         ? "bg-[#eef5ff] text-[#0b57d0]"
                         : "text-[#59616d] hover:bg-[#eef1f5]"
                     } disabled:cursor-not-allowed disabled:opacity-40`}
-                    aria-label={t("desktopCompanion.toggle")}
-                    aria-pressed={Boolean(settings?.desktop_companion_enabled)}
-                    title={t("desktopCompanion.toggle")}
+                    aria-label={t("desktopCompanion.summon")}
+                    title={t("desktopCompanion.summon")}
                   >
                     <PinIcon size={16} />
                   </button>
@@ -1769,67 +1779,15 @@ export default function App() {
                     </div>
                   )}
 
-                  <div ref={toyMenuRef} className="relative">
-                    <button
-                      type="button"
-                      onClick={() => setToyMenuOpen((v) => !v)}
-                      className={`grid h-8 w-8 place-items-center rounded-md transition ${
-                        toyMenuOpen ? "bg-[#eef1f5] text-[#111827]" : "text-[#59616d] hover:bg-[#eef1f5]"
-                      }`}
-                      aria-label={t("header.toys")}
-                      title={t("header.toys")}
-                    >
-                      <SparklesIcon size={17} />
-                    </button>
-                    {toyMenuOpen && (
-                      <div className="cf-pop cf-pop-down cf-dropdown absolute right-0 top-10 z-30 w-[min(720px,calc(100vw-2rem))] overflow-hidden">
-                        <div className="flex items-center justify-between border-b border-[#eceff3] bg-[#fbfcfd] px-3 py-2.5">
-                          <div className="flex items-center gap-2 text-[13px] font-semibold text-[#202124]">
-                            <SparklesIcon size={16} />
-                            {t("header.toys")}
-                          </div>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setToyMenuOpen(false);
-                              openSettings("companion");
-                            }}
-                            className="inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-[12px] font-medium text-[#59616d] transition hover:bg-[#eef1f5] hover:text-[#202124]"
-                          >
-                            <SettingsIcon size={13} />
-                            {t("sidebar.settings")}
-                          </button>
-                        </div>
-                        <div className="toy-panel max-h-[min(72vh,680px)] overflow-y-auto p-2">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setToyMenuOpen(false);
-                              setFortuneOpen(true);
-                            }}
-                            className="flex w-full items-center gap-2 rounded-[10px] border border-[#eceff3] bg-white p-2.5 text-left transition hover:bg-[#fbfcfd]"
-                          >
-                            <span className="grid size-7 shrink-0 place-items-center rounded-md border border-[#e2e5ea] text-[#49515c]">
-                              <SparklesIcon size={15} />
-                            </span>
-                            <span className="min-w-0 flex-1">
-                              <span className="block text-[12px] font-semibold text-[#202124]">{t("fortune.cardTitle")}</span>
-                              <span className="block truncate text-[11px] text-[#7a8088]">{t("fortune.cardDesc")}</span>
-                            </span>
-                            <span className="text-[12px] font-medium text-[#59616d]">{t("fortune.cardDraw")}</span>
-                          </button>
-                          <CompanionCard
-                            settings={settings}
-                            onOpenSettings={() => {
-                              setToyMenuOpen(false);
-                              openSettings("companion");
-                            }}
-                          />
-                          <PomodoroCard activeSessionId={activeId} activeSessionTitle={activeSession?.title} goal={goalPanel} />
-                        </div>
-                      </div>
-                    )}
-                  </div>
+                  <button
+                    type="button"
+                    onClick={() => void openWidgets()}
+                    className="md-icon-button grid h-8 w-8 place-items-center rounded-md text-[#59616d] transition hover:bg-[#eef1f5]"
+                    aria-label={t("header.toys")}
+                    title={t("header.toys")}
+                  >
+                    <img src="/fortune-icon.png" alt="" className="size-5 object-contain" />
+                  </button>
                 </div>
               </header>
 

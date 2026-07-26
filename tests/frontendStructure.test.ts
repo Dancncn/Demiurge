@@ -58,3 +58,21 @@ test("layout contains explicit safeguards for 980, 1280, and 1811 pixel widths",
   assert.match(css, /@media \(min-width: 1280px\) and \(max-width: 1810px\)/);
   assert.match(css, /@media \(min-width: 1811px\)/);
 });
+
+test("appearance presets share Material layout while keeping separate palettes", async () => {
+  const [css, i18n] = await Promise.all([
+    source("src/style.css"),
+    source("src/lib/i18n.tsx"),
+  ]);
+
+  assert.equal((css.match(/html\[data-appearance="material_bloom"\]/g) ?? []).length, 2);
+  assert.equal((css.match(/html\[data-appearance="classic"\]/g) ?? []).length, 2);
+  assert.match(css, /html\[data-appearance\] \.md-button/);
+  assert.match(css, /html\[data-appearance\] \.app-navigation-rail/);
+  assert.match(css, /html\[data-appearance\] \.settings-nav-item/);
+  assert.match(css, /html\[data-appearance\] \.dashboard-panel/);
+  assert.match(css, /html\[data-appearance="classic"\]\s*\{[^}]*--md-primary: #4f5d6b/s);
+  assert.match(i18n, /"settings\.general\.appearance\.materialBloom": "水晶花"/);
+  assert.match(i18n, /"settings\.general\.appearance\.materialBloom": "Crystal Bloom"/);
+  assert.doesNotMatch(i18n, /"settings\.general\.appearance\.materialBloom": "Material Bloom"/);
+});

@@ -7,6 +7,7 @@ import type {
   WorkspaceState,
 } from "../lib/types";
 import { useI18n } from "../lib/i18n";
+import { pickFolder, type FolderPickOutcome } from "../lib/folderPicker";
 import { normalizeExplorerTab, RequestGeneration, type ExplorerTab } from "../lib/agentEventReducer";
 import {
   ChevronDownIcon,
@@ -69,6 +70,8 @@ export function WorkspaceExplorer({
   const [changes, setChanges] = useState<GitChangedFile[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [picking, setPicking] = useState(false);
+  const pickingRef = useRef(false);
   const isDesktop = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
   const workspaceKey = workspace ? `${workspace.path}\u0000${workspace.is_git ? "git" : "files"}` : "";
   const workspaceKeyRef = useRef(workspaceKey);
@@ -199,26 +202,48 @@ export function WorkspaceExplorer({
   }
 
   async function chooseWorkspace() {
-    if (busy) return;
+    // 生成中禁止切换项目：这里给出可见原因，而不是让按钮看起来坏掉。
+    if (busy) {
+      setError(t("workspace.busyHint"));
+      return;
+    }
+    // 原生文件夹对话框是模态的，但它的 Promise 并不阻止第二次点击。
+    // 重复调用会让第二个对话框排在第一个后面（表现为"点了没反应"），
+    // 所以这里自己守住重入。
+    if (pickingRef.current) {
+      setError(t("workspace.pickerAlreadyOpen"));
+      return;
+    }
     setError(null);
+
+    pickingRef.current = true;
+    setPicking(true);
+    let outcome: FolderPickOutcome;
     try {
-      if (!isDesktop) {
-        setError(t("workspace.desktopOnly"));
-        return;
-      }
-      const { open: openDialog } = await import("@tauri-apps/plugin-dialog");
-      const selected = await openDialog({
-        directory: true,
-        multiple: false,
-        title: t("workspace.chooseFolder"),
-      });
-      const path = Array.isArray(selected) ? selected[0] : selected;
-      if (!path) return;
-      const next = await api.selectWorkspace(path);
+      outcome = await pickFolder(t("workspace.chooseFolder"));
+    } finally {
+      pickingRef.current = false;
+      setPicking(false);
+    }
+
+    if (outcome.status === "unavailable") {
+      setError(t("workspace.desktopOnly"));
+      return;
+    }
+    if (outcome.status === "failed") {
+      // 插件权限缺失 / 对话框拉起失败都会走到这里，必须浮出原因，不能静默吞掉。
+      setError(t("workspace.chooseFolderFailed", { error: outcome.error }));
+      return;
+    }
+    // 用户取消选择：不是错误，安静返回。
+    if (outcome.status === "cancelled") return;
+
+    try {
+      const next = await api.selectWorkspace(outcome.path);
       onWorkspaceChange(next);
       setTab("files");
     } catch (e) {
-      setError(String(e));
+      setError(t("workspace.switchFolderFailed", { error: String(e) }));
     }
   }
 
@@ -327,8 +352,15 @@ export function WorkspaceExplorer({
         <button
           type="button"
           onClick={() => void chooseWorkspace()}
-          disabled={busy}
-          className="md-button md-button-filled flex-1 whitespace-nowrap bg-[#111827] px-2 text-white transition hover:bg-[#2b3442] disabled:cursor-not-allowed disabled:opacity-40"
+          // 生成中刻意不用 disabled：原生 disabled 会吞掉 click，用户只会看到
+          // 一个"坏掉"的按钮。这里保留可点击并在 onClick 里说明原因，
+          // 视觉与语义上仍然标记为不可用。
+          aria-disabled={busy || picking}
+          disabled={picking}
+          title={busy ? t("workspace.busyHint") : t("workspace.chooseFolder")}
+          className={`md-button md-button-filled flex-1 whitespace-nowrap bg-[#111827] px-2 text-white transition hover:bg-[#2b3442] ${
+            busy || picking ? "cursor-not-allowed opacity-40" : ""
+          }`}
         >
           {t("workspace.changeFolder")}
         </button>
