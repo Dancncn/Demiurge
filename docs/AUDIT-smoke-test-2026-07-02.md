@@ -31,7 +31,7 @@
 |---|---|
 | 同步 `/chat/completions`（`stream:false`，ping） | ✅ HTTP 200，1.3s，回复 "pong"，含 `reasoning_content` |
 | 流式 SSE（`stream:true`，"用一句话介绍你自己"） | ✅ HTTP 200，6 个 content delta + 26 个 reasoning_content delta，`[DONE]` 正常收尾 |
-| Demiurge 适配器契约 | ✅ `src-tauri/src/llm/openai.rs:195-199` 把 `delta.reasoning_content` 单独路由到 `StreamDelta::Reasoning`，不污染正文；`openai_stream_routes_reasoning_separately_from_content` 单测覆盖 DeepSeek-V4 推理模型路径 |
+| Demiurge 适配器契约 | ✅ `backend/Demiurge-desktop/src/llm/openai.rs:195-199` 把 `delta.reasoning_content` 单独路由到 `StreamDelta::Reasoning`，不污染正文；`openai_stream_routes_reasoning_separately_from_content` 单测覆盖 DeepSeek-V4 推理模型路径 |
 
 配置（已写入 `settings.json`，key 走 keyring）：
 ```
@@ -81,7 +81,7 @@ model    = deepseek-v4-flash
 | `npm run tauri dev` | ✅ Vite 6.4.3 dev server（port 38741）+ cargo 增量编译 1.15s + `demiurge.exe` 启动（PID 40232） |
 | 设置加载 | ✅ 百炼配置 hydrate 成功（无 credential warning），key 已迁移至 keyring |
 | 编译警告 | 2 个 dead-code warning：`mcp/mod.rs:179 capabilities` 字段未读、`tools/mod.rs:849 permission_policy_for` 未使用 |
-| ⚠️ 构建路径 | `src-tauri/.cargo/config.toml:12` 把 `target-dir` 指向 `D:/Project/Project-1/babel-window-translator/src-tauri/target`（另一项目）。已 git-ignore，但跨项目共享 target 目录属非系统化布局。 |
+| ⚠️ 构建路径 | `backend/Demiurge-desktop/.cargo/config.toml:12` 把 `target-dir` 指向 `D:/Project/Project-1/babel-window-translator/src-tauri/target`（另一项目）。已 git-ignore，但跨项目共享 target 目录属非系统化布局。 |
 | UI 驱动 | 未自动化（Tauri 原生 webview 无 CDP 接口；Vite dev server 单独打开缺 `__TAURI_INTERNALS__` 无法 invoke 命令） |
 
 ### 1.6 冒烟测试资产清单
@@ -112,7 +112,7 @@ model    = deepseek-v4-flash
 
 **是否存在 demo / mock 占位？—— 否。** 无 `mock-data` / `demo-data` 类伪数据残留。唯一 `hardcoded-fake` 是游离的 GPT-SoVITS 启动脚本（含本机绝对路径，非运行时 mock）。唯一 `stub` 是 `LocalEmbeddingProvider`（feature 门控、安全围栏完整，启用即报错而非返回假数据）。其余 14 条为文档/TODO 描述与代码现状不符的漂移。
 
-补充（手动闭合 TS 扫描缺口）：前端 `src/components/Dashboard.tsx:25-26,106` 的 `mockStats()` 是浏览器预览回退（`__TAURI_INTERNALS__` 缺失时才用，真 Tauri 应用永不触发），与 `App.tsx:55 PREVIEW_SETTINGS` 同模式，verifier 已判 `not-an-issue`。TS 无运行时 mock/demo 数据。
+补充（手动闭合 TS 扫描缺口）：前端 `frontend/src/components/Dashboard.tsx:25-26,106` 的 `mockStats()` 是浏览器预览回退（`__TAURI_INTERNALS__` 缺失时才用，真 Tauri 应用永不触发），与 `App.tsx:55 PREVIEW_SETTINGS` 同模式，verifier 已判 `not-an-issue`。TS 无运行时 mock/demo 数据。
 
 ### 2.1 todo-comment（3 条）
 
@@ -122,7 +122,7 @@ model    = deepseek-v4-flash
 
 ### 2.2 stub（1 条）
 
-- **[MEDIUM]** `src-tauri/src/embed/mod.rs:143` — `LocalEmbeddingProvider` 在 `#[cfg(feature="embeddings-local")]` 门控下，`dims()` 返回 0、`embed()` 恒返回带中文说明的 `Err`。`Cargo.toml:17` 该 feature 为空。安全围栏完整（不返回假数据，启用即早失败）。**建议**：接 `fastembed` crate 实现本地推理，或明确文档标注。
+- **[MEDIUM]** `backend/Demiurge-desktop/src/embed/mod.rs:143` — `LocalEmbeddingProvider` 在 `#[cfg(feature="embeddings-local")]` 门控下，`dims()` 返回 0、`embed()` 恒返回带中文说明的 `Err`。`Cargo.toml:17` 该 feature 为空。安全围栏完整（不返回假数据，启用即早失败）。**建议**：接 `fastembed` crate 实现本地推理，或明确文档标注。
 
 ### 2.3 hardcoded-fake（1 条）
 
@@ -133,19 +133,19 @@ model    = deepseek-v4-flash
 - **[HIGH]** `README.md:76` — 称"TTS 接口仍为预留占位"，但 `voice.rs:193-249` 已实现双后端 TTS 并注册为 Tauri command。README 是用户首要入口，功能存在性描述错误直接误导。
 - **[HIGH]** `docs/modules/15-multimodal-computer-use.md:246` — 称 voice_synthesize "纯占位:恒返回错误...丢弃 text/voice_id（`let _ = (text, voice_id)`）"。实际函数位于 193-249，真正使用参数并分派两路后端。文档自引虚构代码模式。
 - **[HIGH]** `docs/modules/15-multimodal-computer-use.md:244` — 同文档多处（§3/§4/§4.3 标题/表格）系统性称 TTS 预留/占位/恒返回错误。
-- **[HIGH]** `src-tauri/src/lib.rs:2` — 声明 `mod companion/embed/startup`，但 `README.md:176-188` 与 `IMPLEMENTATION.md:70-85` Project Structure 树未列出（companion.rs 1589 行）。
+- **[HIGH]** `backend/Demiurge-desktop/src/lib.rs:2` — 声明 `mod companion/embed/startup`，但 `README.md:176-188` 与 `IMPLEMENTATION.md:70-85` Project Structure 树未列出（companion.rs 1589 行）。
 - **[HIGH]** `docs/IMPLEMENTATION.md:106` — 写"TTS 仍为预留占位"。
 - **[MEDIUM]** `docs/modules/17-frontend-architecture.md:220` — 称"后端 STT/TTS 是占位实现（见 api.ts:118 注释 backend not implemented）"。api.ts:118 实为 `agentSaveFile` 与语音无关；后端三命令均已实现。
 - **[MEDIUM]** `docs/modules/14-pack-system.md:240` — 断言"语音（TTS/ASR）后端未接通"。
 - **[MEDIUM]** `docs/modules/13-persistence-config.md:320` — 已知限制写"无 RAG / 无向量检索"，但 `embed/mod.rs` 已实现 `RemoteEmbeddingProvider` + RRF 混合召回（`docs/modules/20`）。
 - **[MEDIUM]** `docs/modules/19-live2d-panel.md:121` — 称"TTS adapter 尚未接通"。核心结论（lip-sync 未接入 Live2D）正确，仅表述漂移。
 - **[MEDIUM]** `docs/demiurge-mvp-design.md:97` — 存档文档把 TTS 标"🔜 接口已预留、未接后端"。
-- **[MEDIUM]** `src-tauri/src/pack/mod.rs:1` — 模块注释自称"MVP 文本版清单"，与现状（Live2D 归一化 + lorebook BM25/dense/RRF + credits/skills）严重漂移。
+- **[MEDIUM]** `backend/Demiurge-desktop/src/pack/mod.rs:1` — 模块注释自称"MVP 文本版清单"，与现状（Live2D 归一化 + lorebook BM25/dense/RRF + credits/skills）严重漂移。
 - **[LOW]** `scripts/start-gpt-sovits-dan.ps1:1` — 文件名嵌入个人代号 'dan'，无 `scripts/README` 说明。
 
 ### 2.5 其他
 
-- **[MEDIUM]** `src-tauri/src/store/mod.rs:321` — `pub embedding_api_key: String` 带 TODO 注释"后续接入凭据管理器"。`credentials.rs` 已实现完整 keyring 管理器（6 类密钥），唯独无 embedding 变体。注释与凭据管理器已存在的事实矛盾（详见审计 security 段）。
+- **[MEDIUM]** `backend/Demiurge-desktop/src/store/mod.rs:321` — `pub embedding_api_key: String` 带 TODO 注释"后续接入凭据管理器"。`credentials.rs` 已实现完整 keyring 管理器（6 类密钥），唯独无 embedding 变体。注释与凭据管理器已存在的事实矛盾（详见审计 security 段）。
 
 ---
 
@@ -167,36 +167,36 @@ model    = deepseek-v4-flash
 
 ### 3.1 Security
 
-- **[HIGH]** `src-tauri/src/store/mod.rs:562` — `redacted_settings`(555-571) 清空了 api_key/tavily/brave/exa/webdav_password/media_api_key 及 MCP secret env，**唯独漏清 `embedding_api_key`**。`save_settings`(573-578) 用 redacted 结果 `fs::write`，导致 embedding key 明文写入 `settings.json`。单测 `save_settings_does_not_persist_api_key`(671) 只校验前 5 个 key，未覆盖 embedding。`embed/mod.rs:123` 直接读 `settings.embedding_api_key` 作 bearer。**建议**：`redacted_settings` 对 `embedding_api_key` 执行清空；纳入 `SecretKind` 枚举走 keyring；补单测断言。
+- **[HIGH]** `backend/Demiurge-desktop/src/store/mod.rs:562` — `redacted_settings`(555-571) 清空了 api_key/tavily/brave/exa/webdav_password/media_api_key 及 MCP secret env，**唯独漏清 `embedding_api_key`**。`save_settings`(573-578) 用 redacted 结果 `fs::write`，导致 embedding key 明文写入 `settings.json`。单测 `save_settings_does_not_persist_api_key`(671) 只校验前 5 个 key，未覆盖 embedding。`embed/mod.rs:123` 直接读 `settings.embedding_api_key` 作 bearer。**建议**：`redacted_settings` 对 `embedding_api_key` 执行清空；纳入 `SecretKind` 枚举走 keyring；补单测断言。
 
 ### 3.2 Layout
 
-- **[HIGH]** `src-tauri/src/pack/mod.rs:1` — 2834 行 god module，混合 5 类职责（类型定义 / lorebook BM25+dense+RRF / Live2D 导入 / pack 文件浏览 / manifest 校验+分块）。`pack/` 目录下仅此一文件。**建议**：拆 `pack/manifest.rs`/`lorebook.rs`/`live2d.rs`/`files.rs`。
-- **[MEDIUM]** `src-tauri/src/lib.rs:407` — `send`(~170 行) 单函数分支处理 `/dream`/`/compact`/`/goal`/`/skills`/`/effort`/`/recall`/`/workflows`/`/ultracode` + 高风险检测 + turn 编排。`lib.rs` 全文 2467 行/126 函数偏胖。**建议**：slash 分流下沉到 `agent::slash::dispatch`。
-- **[LOW]** `src-tauri/src/companion.rs:1` — 1589 行捆绑 4 子系统（高风险检测/记忆队列/记忆抽取/天气）。**建议**：拆 `companion/{safety,memory_queue,extraction,weather}.rs`。
-- **[LOW]** `src/components/SettingsDialog.tsx:1` — 4357 行单体设置组件。**建议**：按 tab 拆 `settings/` 子目录。
-- **[LOW]** `src/lib/i18n.tsx:1` — 1708 行内联双语词典 + Provider 逻辑混杂。**建议**：拆 `i18n/locales/{zh,en}.ts` + `I18nProvider.tsx`，类型约束保证 key 对齐。
-- **[LOW]** `src/lib/` — 8 文件扁平堆积，`IMPLEMENTATION.md`/`README` 结构树滞后。**建议**：优先更新结构树。
+- **[HIGH]** `backend/Demiurge-desktop/src/pack/mod.rs:1` — 2834 行 god module，混合 5 类职责（类型定义 / lorebook BM25+dense+RRF / Live2D 导入 / pack 文件浏览 / manifest 校验+分块）。`pack/` 目录下仅此一文件。**建议**：拆 `pack/manifest.rs`/`lorebook.rs`/`live2d.rs`/`files.rs`。
+- **[MEDIUM]** `backend/Demiurge-desktop/src/lib.rs:407` — `send`(~170 行) 单函数分支处理 `/dream`/`/compact`/`/goal`/`/skills`/`/effort`/`/recall`/`/workflows`/`/ultracode` + 高风险检测 + turn 编排。`lib.rs` 全文 2467 行/126 函数偏胖。**建议**：slash 分流下沉到 `agent::slash::dispatch`。
+- **[LOW]** `backend/Demiurge-desktop/src/companion.rs:1` — 1589 行捆绑 4 子系统（高风险检测/记忆队列/记忆抽取/天气）。**建议**：拆 `companion/{safety,memory_queue,extraction,weather}.rs`。
+- **[LOW]** `frontend/src/components/SettingsDialog.tsx:1` — 4357 行单体设置组件。**建议**：按 tab 拆 `settings/` 子目录。
+- **[LOW]** `frontend/src/lib/i18n.tsx:1` — 1708 行内联双语词典 + Provider 逻辑混杂。**建议**：拆 `i18n/locales/{zh,en}.ts` + `I18nProvider.tsx`，类型约束保证 key 对齐。
+- **[LOW]** `frontend/src/lib/` — 8 文件扁平堆积，`IMPLEMENTATION.md`/`README` 结构树滞后。**建议**：优先更新结构树。
 
 ### 3.3 Quality（21 条，节选）
 
-- **[MEDIUM]** `src-tauri/src/agent/runner.rs:146` — `run_turn_with_options` 487 行超长编排函数（setup/MCP/prompt/LLM 循环/工具/中断/内存/落盘）。**建议**：拆 `prepare_turn`/`llm_step`/`tool_step`/`finalize_turn`。
-- **[MEDIUM]** `src-tauri/src/lib.rs:121` — `AppState` 全用 `std::sync::Mutex`，lib.rs 93 处 `lock().unwrap()`。持锁线程 panic 会 poison，后续 unwrap 二次 panic，命令直接失败而非优雅降级。**建议**：改 `parking_lot::Mutex`（无 poison）或 `map_err` 转 `anyhow`。
-- **[MEDIUM]** `src-tauri/src/lib.rs:2212` — `parse_webdav_backup_files` 每次调用 `Regex::new` 编译 4 条正则并 `expect`。**建议**：`LazyLock`/`OnceLock` 缓存（lib.rs 已用该模式）。
-- **[MEDIUM]** `src-tauri/src/tools/mod.rs:173` — `registry()` 554 行单 vec! 字面量。新增工具需同时改 `registry`/`execute`/`permission_summary`/`affected_paths`/`confirmation_preview` 多处。**建议**：宏或 builder + 按工具单文件聚合。
-- **[MEDIUM]** `src-tauri/src/companion.rs:519` — `read_memory_queue` 用 `.ok().and_then(.ok()).unwrap_or_default()` 把"文件缺失"与"队列损坏"一并吞为空 Vec。调用方会用单项列表覆盖损坏文件，静默销毁原队列。**建议**：返回 `Result`，区分 NotFound 与其它错误。
-- **[MEDIUM]** `src/components/Select.tsx:59` — 自定义下拉缺 ARIA 语义（无 `aria-haspopup`/`role=listbox`/`aria-selected`，无方向键导航），违反 WCAG 4.1.2。**建议**：补全 ARIA + 键盘导航。
-- **[MEDIUM]** `src/components/SettingsDialog.tsx:582` — 主组件 ~3775 行，60+ useState，7 useEffect，跨十余功能域。**建议**：按功能域拆 `<OcrSettingsSection/>` 等。
-- **[MEDIUM]** `src-tauri/src/mcp/mod.rs:771` — `pending.lock().unwrap()` 裸 unwrap（注：原述"持锁跨 await"有误，每次取锁单语句内释放，无死锁；真问题仅生产路径裸 unwrap）。
-- **[LOW]** `src/App.tsx:569` — 4 个重复的 click-outside useEffect。**建议**：抽 `useClickOutside` hook。
-- **[LOW]** `src/App.tsx:521` — 5 个 `listenXxx().then()` 无 `.catch`。**建议**：补 catch。
-- **[LOW]** `src/components/{WorkflowsPanel,SettingsDialog,SkillsPanel}.tsx` — 多处 listen 链无 catch / `openSkillsDir().catch(()=>{})` 完全吞错。
-- **[LOW]** `src/components/{MessageList,MarkdownRenderer,MermaidBlock}.tsx` — 剪贴板复制逻辑三处逐字重复（含 1600ms 魔法数）。**建议**：抽 `useCopyToClipboard` hook。
-- **[LOW]** `src/components/Live2DPanel.tsx:18` — `appRef/modelRef` 用 `any` + eslint-disable（pixi 动态 import 设计，无功能风险）。**建议**：定义最小接口获类型安全。
-- **[LOW]** `src/components/MediaStudio.tsx:31` — 初始 prompt 硬编码示例文案 `'A clean native desktop app screenshot...'`，与组件空状态设计矛盾，看似 demo 残留。**建议**：置空或移至 i18n。
-- **[LOW]** `src/components/PomodoroCard.tsx:75` — `setInterval(refresh,1000)` 空依赖 effect，无论 running/paused/idle 都每秒 IPC，且已注册事件监听冗余。**建议**：非 active 时 `clearInterval` 或拉长到 5-10s。
-- **[LOW]** `src-tauri/src/lib.rs:117` — `persist_sessions` 每次落盘 `std::thread::spawn` 新 OS 线程。**建议**：改 `tokio::task::spawn_blocking` 复用线程池。
-- **[LOW]** `src-tauri/src/lib.rs:1492` — `context_memory_source` `unwrap_or_default` 吞 IO 错误，面板显示"0 entries"用户无法察觉真实原因。
+- **[MEDIUM]** `backend/Demiurge-desktop/src/agent/runner.rs:146` — `run_turn_with_options` 487 行超长编排函数（setup/MCP/prompt/LLM 循环/工具/中断/内存/落盘）。**建议**：拆 `prepare_turn`/`llm_step`/`tool_step`/`finalize_turn`。
+- **[MEDIUM]** `backend/Demiurge-desktop/src/lib.rs:121` — `AppState` 全用 `std::sync::Mutex`，lib.rs 93 处 `lock().unwrap()`。持锁线程 panic 会 poison，后续 unwrap 二次 panic，命令直接失败而非优雅降级。**建议**：改 `parking_lot::Mutex`（无 poison）或 `map_err` 转 `anyhow`。
+- **[MEDIUM]** `backend/Demiurge-desktop/src/lib.rs:2212` — `parse_webdav_backup_files` 每次调用 `Regex::new` 编译 4 条正则并 `expect`。**建议**：`LazyLock`/`OnceLock` 缓存（lib.rs 已用该模式）。
+- **[MEDIUM]** `backend/Demiurge-desktop/src/tools/mod.rs:173` — `registry()` 554 行单 vec! 字面量。新增工具需同时改 `registry`/`execute`/`permission_summary`/`affected_paths`/`confirmation_preview` 多处。**建议**：宏或 builder + 按工具单文件聚合。
+- **[MEDIUM]** `backend/Demiurge-desktop/src/companion.rs:519` — `read_memory_queue` 用 `.ok().and_then(.ok()).unwrap_or_default()` 把"文件缺失"与"队列损坏"一并吞为空 Vec。调用方会用单项列表覆盖损坏文件，静默销毁原队列。**建议**：返回 `Result`，区分 NotFound 与其它错误。
+- **[MEDIUM]** `frontend/src/components/Select.tsx:59` — 自定义下拉缺 ARIA 语义（无 `aria-haspopup`/`role=listbox`/`aria-selected`，无方向键导航），违反 WCAG 4.1.2。**建议**：补全 ARIA + 键盘导航。
+- **[MEDIUM]** `frontend/src/components/SettingsDialog.tsx:582` — 主组件 ~3775 行，60+ useState，7 useEffect，跨十余功能域。**建议**：按功能域拆 `<OcrSettingsSection/>` 等。
+- **[MEDIUM]** `backend/Demiurge-desktop/src/mcp/mod.rs:771` — `pending.lock().unwrap()` 裸 unwrap（注：原述"持锁跨 await"有误，每次取锁单语句内释放，无死锁；真问题仅生产路径裸 unwrap）。
+- **[LOW]** `frontend/src/App.tsx:569` — 4 个重复的 click-outside useEffect。**建议**：抽 `useClickOutside` hook。
+- **[LOW]** `frontend/src/App.tsx:521` — 5 个 `listenXxx().then()` 无 `.catch`。**建议**：补 catch。
+- **[LOW]** `frontend/src/components/{WorkflowsPanel,SettingsDialog,SkillsPanel}.tsx` — 多处 listen 链无 catch / `openSkillsDir().catch(()=>{})` 完全吞错。
+- **[LOW]** `frontend/src/components/{MessageList,MarkdownRenderer,MermaidBlock}.tsx` — 剪贴板复制逻辑三处逐字重复（含 1600ms 魔法数）。**建议**：抽 `useCopyToClipboard` hook。
+- **[LOW]** `frontend/src/components/Live2DPanel.tsx:18` — `appRef/modelRef` 用 `any` + eslint-disable（pixi 动态 import 设计，无功能风险）。**建议**：定义最小接口获类型安全。
+- **[LOW]** `frontend/src/components/MediaStudio.tsx:31` — 初始 prompt 硬编码示例文案 `'A clean native desktop app screenshot...'`，与组件空状态设计矛盾，看似 demo 残留。**建议**：置空或移至 i18n。
+- **[LOW]** `frontend/src/components/PomodoroCard.tsx:75` — `setInterval(refresh,1000)` 空依赖 effect，无论 running/paused/idle 都每秒 IPC，且已注册事件监听冗余。**建议**：非 active 时 `clearInterval` 或拉长到 5-10s。
+- **[LOW]** `backend/Demiurge-desktop/src/lib.rs:117` — `persist_sessions` 每次落盘 `std::thread::spawn` 新 OS 线程。**建议**：改 `tokio::task::spawn_blocking` 复用线程池。
+- **[LOW]** `backend/Demiurge-desktop/src/lib.rs:1492` — `context_memory_source` `unwrap_or_default` 吞 IO 错误，面板显示"0 entries"用户无法察觉真实原因。
 
 ---
 

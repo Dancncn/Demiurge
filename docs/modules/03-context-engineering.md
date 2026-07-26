@@ -4,13 +4,13 @@
 
 > 存档级技术原理文档。读者为协作开发者。
 > 覆盖源文件：
-> - `src-tauri/src/agent/prompt.rs`（system prompt 分区组装）
-> - `src-tauri/src/agent/budget.rs`（token 启发式估算与 profile-aware history budget）
-> - `src-tauri/src/agent/context.rs`（历史裁剪）
-> - `src-tauri/src/agent/summary.rs`（rolling summary 更新）
-> - `src-tauri/src/agent/collapse.rs` + `src-tauri/src/tools/context_tools.rs`（`/compact`、`context_inspect`/`context_collapse`）
-> - `src-tauri/src/lib.rs`（`context_panel_state` 预算可视化聚合）
-> 相邻依赖：`src-tauri/src/agent/runner.rs`、`src-tauri/src/llm/mod.rs`、`src-tauri/src/agent/persona.rs`、`src-tauri/src/store/mod.rs`。
+> - `backend/Demiurge-desktop/src/agent/prompt.rs`（system prompt 分区组装）
+> - `backend/Demiurge-desktop/src/agent/budget.rs`（token 启发式估算与 profile-aware history budget）
+> - `backend/Demiurge-desktop/src/agent/context.rs`（历史裁剪）
+> - `backend/Demiurge-desktop/src/agent/summary.rs`（rolling summary 更新）
+> - `backend/Demiurge-desktop/src/agent/collapse.rs` + `backend/Demiurge-desktop/src/tools/context_tools.rs`（`/compact`、`context_inspect`/`context_collapse`）
+> - `backend/Demiurge-desktop/src/lib.rs`（`context_panel_state` 预算可视化聚合）
+> 相邻依赖：`backend/Demiurge-desktop/src/agent/runner.rs`、`backend/Demiurge-desktop/src/llm/mod.rs`、`backend/Demiurge-desktop/src/agent/persona.rs`、`backend/Demiurge-desktop/src/store/mod.rs`。
 
 ---
 
@@ -119,7 +119,7 @@ let mut remaining = max_context_chars.saturating_sub(base_chars);
 
 ### 3.4 各分区内容采集的工程细节
 
-- **`project_section`**（`prompt.rs:272`）：依次读取指令文件（`DEMIURGE.md`/`SYSTEM.md`/`AGENTS.md`，其中 `DEMIURGE.md`/`SYSTEM.md` 为本项目自有的中性指令文件名，`AGENTS.md` 兼容跨工具的 agents.md 通用约定）、`README.md`、`package_detection`（解析 `package.json` 与 `src-tauri/Cargo.toml` 推断前端/Rust 技术栈）、`directory_snapshot`。单文件读取上限 `MAX_TEXT_FILE_BYTES=32KB`（`read_limited_text`，`prompt.rs:564`，超限直接跳过）。
+- **`project_section`**（`prompt.rs:272`）：依次读取指令文件（`DEMIURGE.md`/`SYSTEM.md`/`AGENTS.md`，其中 `DEMIURGE.md`/`SYSTEM.md` 为本项目自有的中性指令文件名，`AGENTS.md` 兼容跨工具的 agents.md 通用约定）、`README.md`、`package_detection`（解析 `package.json` 与 `backend/Demiurge-desktop/Cargo.toml` 推断前端/Rust 技术栈）、`directory_snapshot`。单文件读取上限 `MAX_TEXT_FILE_BYTES=32KB`（`read_limited_text`，`prompt.rs:564`，超限直接跳过）。
 - **`directory_snapshot`**（`prompt.rs:455`）：递归深度上限 `MAX_DIRECTORY_DEPTH=2`、条目上限 `MAX_DIRECTORY_ENTRIES=90`，并跳过 `.git`/`node_modules`/`target`/`dist`/`Cargo.lock` 等重目录（`should_skip_entry`，`prompt.rs:504`）；目录先于文件、再字典序，溢出的条目以 `... N entries omitted` 收尾。
 - **`environment_section`**（`prompt.rs:322`）含 `git_snapshot`（`prompt.rs:526`），后者在独立线程跑 `git status --short --branch`，用 `mpsc` + `recv_timeout(GIT_TIMEOUT_SECS=5)` 做超时保护，避免大仓库或卡死的 git 阻塞整轮组装。
 
@@ -405,6 +405,6 @@ flowchart TD
 
 ## 八之外补记：现有文档/测试与代码不符之处
 
-1. `src-tauri/src/agent/budget.rs:219` 的测试 `history_budget_uses_profile_token_limits` 断言 OpenAI profile 把输入/输出预算 clamp 到 `128_000` / `16_384`，但当前 `ProviderProfile::openai()`（`llm/mod.rs:176`）定义为 `272_000` / `128_000`。该测试要么使用了陈旧常量、要么会因 profile 升级而失败，常量需与 profile 对齐。
-2. `src-tauri/src/llm/mod.rs:709` 的测试 `official_openai_profile_clamps_token_budget` 同样断言 `128_000` / `16_384`，与同文件 `openai()` 定义的 272K/128K 不一致，属同源问题。
+1. `backend/Demiurge-desktop/src/agent/budget.rs:219` 的测试 `history_budget_uses_profile_token_limits` 断言 OpenAI profile 把输入/输出预算 clamp 到 `128_000` / `16_384`，但当前 `ProviderProfile::openai()`（`llm/mod.rs:176`）定义为 `272_000` / `128_000`。该测试要么使用了陈旧常量、要么会因 profile 升级而失败，常量需与 profile 对齐。
+2. `backend/Demiurge-desktop/src/llm/mod.rs:709` 的测试 `official_openai_profile_clamps_token_budget` 同样断言 `128_000` / `16_384`，与同文件 `openai()` 定义的 272K/128K 不一致，属同源问题。
 3. `Settings.context_budget_auto` 的 doc-comment（`store/mod.rs:240`）声称「为 true 时输入预算自动跟随所选模型上下文窗口、忽略手填 max_input_tokens」，但后端预算逻辑并未实现「忽略手填值」——实际恒为 `min(用户值, provider 上限)`。注释描述的行为与代码不符。

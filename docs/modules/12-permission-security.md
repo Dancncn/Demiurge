@@ -6,23 +6,23 @@
 
 > 存档级技术原理文档。读者：协作开发者。
 > 主要源文件：
-> - `src-tauri/src/permission/mod.rs`
-> - `src-tauri/src/tools/args.rs`
-> - `src-tauri/src/tools/mod.rs`（风险/策略类型、沙盒路径解析、审计辅助）
-> - `src-tauri/src/agent/runner.rs`（权限门在 Agent 循环中的接入点）
-> - `src-tauri/src/lib.rs`（`respond_confirm` / `interrupt` / `approve_plan` 等 Tauri 命令、`PlanState`）
-> - `src-tauri/src/tools/write_plan.rs`
-> - `src-tauri/capabilities/default.json`、`src-tauri/tauri.conf.json`（Tauri 暴露面）
+> - `backend/Demiurge-desktop/src/permission/mod.rs`
+> - `backend/Demiurge-desktop/src/tools/args.rs`
+> - `backend/Demiurge-desktop/src/tools/mod.rs`（风险/策略类型、沙盒路径解析、审计辅助）
+> - `backend/Demiurge-desktop/src/agent/runner.rs`（权限门在 Agent 循环中的接入点）
+> - `backend/Demiurge-desktop/src/lib.rs`（`respond_confirm` / `interrupt` / `approve_plan` 等 Tauri 命令、`PlanState`）
+> - `backend/Demiurge-desktop/src/tools/write_plan.rs`
+> - `backend/Demiurge-desktop/capabilities/default.json`、`backend/Demiurge-desktop/tauri.conf.json`（Tauri 暴露面）
 
 ---
 
 ## 一、模块职责与定位
 
-权限子系统是 Demiurge 的「执行门」：在 Agent 决定调用某个工具、但**尚未真正执行**之前，对该调用做一次裁决，得出三种结果之一——直接放行、直接拒绝、或弹出前端确认对话框等待用户裁决。它的核心目标是确保**有副作用的操作（写文件、shell、外部发布、系统能力）在执行前获得用户许可**，而只读探索尽量不打扰用户（`src-tauri/src/permission/mod.rs:1-2` 的模块注释即点明此意图）。
+权限子系统是 Demiurge 的「执行门」：在 Agent 决定调用某个工具、但**尚未真正执行**之前，对该调用做一次裁决，得出三种结果之一——直接放行、直接拒绝、或弹出前端确认对话框等待用户裁决。它的核心目标是确保**有副作用的操作（写文件、shell、外部发布、系统能力）在执行前获得用户许可**，而只读探索尽量不打扰用户（`backend/Demiurge-desktop/src/permission/mod.rs:1-2` 的模块注释即点明此意图）。
 
 它的设计有三条贯穿始终的安全原则：
 
-1. **作用域是结构性强制的，而非提示词约束。** 文件类工具被物理限制在沙盒目录内（`src-tauri/src/tools/mod.rs:3` 注释明确写道：「作用域是结构性强制的（文件工具被物理限制在沙盒目录），不靠提示词」）。即便模型被诱导尝试越界，`resolve_in_sandbox` 也会在文件系统层面拒绝。
+1. **作用域是结构性强制的，而非提示词约束。** 文件类工具被物理限制在沙盒目录内（`backend/Demiurge-desktop/src/tools/mod.rs:3` 注释明确写道：「作用域是结构性强制的（文件工具被物理限制在沙盒目录），不靠提示词」）。即便模型被诱导尝试越界，`resolve_in_sandbox` 也会在文件系统层面拒绝。
 2. **权限审计不落敏感参数。** 审计记录工具名、裁决结果、来源与理由，但不写入工具入参的完整内容（详见第五节）。
 3. **外部自报元数据不是授权事实。** 动态工具的 annotation 可用于展示和调度提示，但本地授权风险始终施加 `External`/`Privileged` 下限，且默认保持 `Ask/Once`。
 
@@ -32,7 +32,7 @@
 
 ## 二、关键类型与入口函数
 
-### 2.1 基础枚举（定义于 `src-tauri/src/tools/mod.rs`）
+### 2.1 基础枚举（定义于 `backend/Demiurge-desktop/src/tools/mod.rs`）
 
 | 类型 | 取值 | 说明 |
 |------|------|------|
@@ -41,9 +41,9 @@
 | `ToolRisk`（`:59-64`） | `ReadOnly` / `Mutating` / `External` / `Privileged` | 工具风险等级，驱动模式决策 |
 | `PermissionPolicy`（`:81-103`） | `{ effect, scope, reason }` | 工具注册表里写死的**默认策略**，含两个 const 构造器 `allow()` / `ask()` |
 
-`PermissionMode`（决策模式）定义在 `src-tauri/src/store/mod.rs:113-118`，取 `Plan` / `Default` / `Auto` / `Bypass` 四值，由 `Settings.permission_mode` 持久化。
+`PermissionMode`（决策模式）定义在 `backend/Demiurge-desktop/src/store/mod.rs:113-118`，取 `Plan` / `Default` / `Auto` / `Bypass` 四值，由 `Settings.permission_mode` 持久化。
 
-### 2.2 权限模块自身的类型（`src-tauri/src/permission/mod.rs`）
+### 2.2 权限模块自身的类型（`backend/Demiurge-desktop/src/permission/mod.rs`）
 
 - `PermissionDecision`（`:33-40`）：一次裁决的结果，比 `PermissionPolicy` 多了 `source`（来源）和 `mode`（当时所处模式）字段。
 - `PermissionDecisionSource`：`ToolDefault` / `UserOverride` / `UnknownTool` / `CardOverlay`，标记裁决「依据何来」。

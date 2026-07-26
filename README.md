@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="docs/assets/logo.png" width="132" alt="Demiurge" />
+<img src="assets/branding/logo.png" width="132" alt="Demiurge" />
 
 # Demiurge
 
@@ -21,7 +21,7 @@
 
 ---
 
-> 文档状态：2026-07-26 已按当前实现复核。验证基线为前端 43 项测试、生产构建和 Rust 287 项测试通过；真正音频字节流、Computer Use 执行闭环与 Live2D 桌宠交互扩展仍在路线图中。
+> 文档状态：2026-07-26 已按当前实现复核。验证基线为前端 44 项测试、生产构建和 Rust 297 项测试通过；真正音频字节流、Computer Use 执行闭环与 Live2D 桌宠交互扩展仍在路线图中。
 
 ## 这是什么
 
@@ -102,7 +102,7 @@ Demiurge 是一个桌面伴侣 Agent 的“空引擎”。它不绑定具体角�
 
 前置依赖：
 
-- Node.js 18+
+- Node.js 22.6+（测试脚本使用 Node 原生 TypeScript 类型剥离）
 - Rust stable
 - Windows WebView2，macOS/Linux 使用系统 WebView
 
@@ -167,56 +167,59 @@ memory.md        # 角色长期记忆，只读注入 prompt
 assets/          # 头像、语音、Live2D 等本地素材
 ```
 
-## System Architecture
+## 系统架构
 
 ```text
-React UI
-  ├─ invoke: send / settings / sessions / workspace / Git / workflow commands
-  └─ listen: assistant/tool/confirm/workspace/workflow events
+React Feature
+  │
+  ▼
+类型化 IPC 门面（frontend/src/lib）
+  │ invoke / listen
+  ▼
+Tauri Controller
+  │ 参数校验与 DTO 转换
+  ▼
+Biz 用例编排
+  ├─ Core：Session、Goal 等领域规则
+  ├─ Framework：持久化、WebDAV 等基础设施适配器
+  └─ Desktop Service：Agent、Tool、LLM、窗口与系统能力
         │
         ▼
-Rust AppState
-  ├─ agent runner
-  ├─ prompt/context/memory/goal
-  ├─ tool registry + permission gate
-  ├─ provider adapters
-  └─ session/settings/keyring persistence
-        │
-        ▼
-LLM endpoint / local tools / OS integrations
+本地文件 / 系统凭据 / LLM 端点 / 操作系统集成
+
+Starter：构建 AppState、装配 Adapter、恢复运行时并注册 Tauri Command
 ```
 
-## Project Structure
+## 项目结构
 
 ```text
 Demiurge/
-├─ src/                         # React front-end
-│  ├─ components/                # Sidebar, Composer, ToolCard, Settings, Workflows
-│  ├─ lib/                       # Tauri API wrapper and shared types
-│  ├─ App.tsx                    # Front-end orchestration and event binding
-│  └─ style.css                  # Global UI styling
-├─ src-tauri/                    # Rust/Tauri back-end
-│  ├─ src/agent/                 # Agent loop, context, memory, goal, workflow
-│  ├─ src/llm/                   # Provider adapters
-│  ├─ src/tools/                 # Built-in tools and registry
-│  ├─ src/permission/            # Confirmation and permission gate
-│  ├─ src/store/                 # Settings/session persistence
-│  ├─ src/pack/                  # Character pack loading
-│  ├─ src/workspace.rs           # Project tree, preview, Git status/branch commands
-│  ├─ src/credentials.rs         # Keyring integration
-│  ├─ src/connection_tests.rs    # Provider/Web Search/WebDAV connection tests
-│  ├─ src/ocr.rs                 # OCR model and inference entry
-│  ├─ src/media.rs               # DashScope media (image gen) + voice credential helpers
-│  ├─ src/voice.rs               # Voice adapters (STT + TTS wired: DashScope / GPT-SoVITS)
-│  ├─ src/companion.rs           # Companion, weather, safety detection
-│  ├─ src/embed/                 # Remote embedding provider (OpenAI-compatible /v1/embeddings)
-│  ├─ src/startup.rs             # OS autorun on boot
-│  └─ src/mcp/                   # stdio MCP manager and dynamic tool discovery
+├─ frontend/                     # React/TypeScript/Vite front-end
+│  ├─ src/app/                   # Application orchestration and navigation shell
+│  ├─ src/features/              # Agent/chat/workspace/settings/etc. feature owners
+│  ├─ src/shared/                # Stateless shared view components
+│  ├─ src/lib/                   # Typed IPC facade and cross-feature contracts
+│  ├─ public/                    # Front-end runtime assets
+│  └─ tests/                     # Front-end logic and source-contract tests
+├─ backend/                      # Rust/Tauri back-end area
+│  ├─ Demiurge-common/           # Compiled shared contract crate
+│  ├─ Demiurge-core/             # Compiled domain rule crate
+│  ├─ Demiurge-framework/        # Compiled persistence/remote adapter crate
+│  └─ Demiurge-desktop/          # Tauri controller/biz/starter and desktop services
+│     ├─ src/controller/         # Lightweight IPC adapters
+│     ├─ src/biz/                # Use-case orchestration
+│     ├─ src/agent/              # Agent loop, context, memory, goal, workflow
+│     ├─ src/llm/                # Provider adapters
+│     ├─ src/tools/              # Built-in tools and registry
+│     ├─ src/permission/         # Confirmation and permission gate
+│     ├─ src/store/              # Settings/session persistence
+│     └─ src/pack/               # Character pack loading
+├─ assets/                       # Project-level source artwork and branding
+├─ resources/packs/              # Versioned default pack and format example
 ├─ docs/                         # Design, implementation notes, roadmap
-├─ packs/                        # Example character pack
-├─ public/                       # Static assets
-├─ tests/                        # Front-end state, race, Voice and accessibility contracts
-└─ package.json                  # Front-end and Tauri scripts
+├─ scripts/                      # Build/runtime helper scripts
+├─ tests/                        # Future cross-layer E2E tests
+└─ package.json                  # Workspace-level commands
 ```
 
 ## Security Model
@@ -261,7 +264,7 @@ npm run build
 Rust 测试：
 
 ```bash
-cargo test --manifest-path src-tauri/Cargo.toml
+cargo test --manifest-path backend/Cargo.toml --workspace --all-targets
 ```
 
 Tauri 打包：
@@ -272,6 +275,7 @@ npm run tauri build
 
 ## Documentation
 
+- [模块化架构与迁移约束](docs/MODULAR-ARCHITECTURE.md)
 - [模块技术原理文档（存档）](docs/modules/README.md) — 逐子系统的深度技术文档，从[架构总览](docs/modules/01-architecture-overview.md)开始
 - [实现说明](docs/IMPLEMENTATION.md)
 - [代码审查报告（2026-07-12）](docs/CODE-REVIEW-2026-07-12.md)

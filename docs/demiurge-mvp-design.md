@@ -106,8 +106,8 @@ Owner 标记：**[R]** Rust 内核 · **[F]** 前端。
 ## 仓库结构（现状）
 ```
 demiurge/
-├─ src-tauri/            # Rust 内核
-│  ├─ src/
+├─ backend/Demiurge-desktop/            # Rust 内核
+│  ├─ frontend/src/
 │  │  ├─ agent/          # 循环、会话状态、上下文管理、人格拼装
 │  │  ├─ llm/            # OpenAI 兼容适配器（流式）
 │  │  ├─ tools/          # 注册表 + 接口 + 内置工具
@@ -116,10 +116,10 @@ demiurge/
 │  │  └─ store/          # 会话 / 设置持久化
 │  │                     # （.cargo/config.toml 为本地编译加速，已 gitignore，不入库）
 │  └─ tauri.conf.json
-├─ src/                  # React + TypeScript + Tailwind UI
+├─ frontend/src/                  # React + TypeScript + Tailwind UI
 │  ├─ components/        # Sidebar / Composer / MessageList / Markdown / 对话框 / 图标
 │  └─ lib/               # api（Tauri 命令/事件封装）+ types
-├─ public/               # 静态资源（应用内头像等）
+├─ frontend/public/               # 静态资源（应用内头像等）
 ├─ packs/                # 本地角色包；.gitignore（默认包除外，作格式参考）
 └─ docs/                 # 设计 / 实现 / TODO
 ```

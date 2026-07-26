@@ -86,7 +86,7 @@ Demiurge 当前已经具备本地桌面 Agent 的主体能力：会话、工具�
 - [x] **Lorebook 分块索引**：按 Markdown 标题和段落分块，缓存到本地索引；按文件集合、大小和修改时间失效。
 - [x] **Lorebook 检索注入**：按当前用户输入进行短语匹配、中文 ngram 和 BM25 稀疏召回，注入 `Retrieved Lorebook`。
 - [x] **Lorebook UI**：Settings 中展示 lorebook 条目、添加目录模板、输入查询并预览真实召回片段。
-- [x] **默认角色包示例**：`packs/default` 展示 persona、manifest 2.0、lore 目录和 pack tone guard skill。
+- [x] **默认角色包示例**：`resources/packs/default` 展示 persona、manifest 2.0、lore 目录和 pack tone guard skill。
 
 ## P0/P1 / 代码审查修复队列
 
@@ -119,10 +119,10 @@ Demiurge 当前已经具备本地桌面 Agent 的主体能力：会话、工具�
 
 ### 本批次已完成（原型打磨）
 
-- [x] **结构化角色卡编辑器**：`src/components/pack-editor/` 表单化编辑 Character Card / Runtime / Lorebook / 示例对话 / OOC 规则，保留可折叠原始 JSON 回退；复用 `read_pack_manifest_json` / `save_pack_manifest_json` 往返。
+- [x] **结构化角色卡编辑器**：`frontend/src/features/pack/editor/` 表单化编辑 Character Card / Runtime / Lorebook / 示例对话 / OOC 规则，保留可折叠原始 JSON 回退；复用 `read_pack_manifest_json` / `save_pack_manifest_json` 往返。
 - [x] **角色包素材管理**：`open_pack_dir` / `import_pack_lore_files` / `list_pack_files` / `read_pack_file` 命令 + `PackFileBrowser`；`PackManifest` 增 `credits` / `license`，`import_pack_zip` 返回 `PackImportResult { manifest, warnings }` 并在前端展示授权缺失警告。
 - [x] **Lorebook 召回可视化**：`lorebook_index_status` / `lorebook_recall_detail` / `lorebook_rebuild_index` 命令 + `LorebookRecallPanel`（chunk 列表、命中关键词高亮、score、索引状态、手动重建）；`/recall <query>` slash 命令。
-- [x] **向量 RAG / embedding（远程优先脚手架）**：`src-tauri/src/embed/` 的 `EmbeddingProvider` trait + 远程 OpenAI 兼容 provider + `LoreChunk.embedding` 缓存 + RRF 混合召回权重（`hybrid_weight`）。详见 [docs/modules/20-lorebook-vector-rag.md](./modules/20-lorebook-vector-rag.md)。
+- [x] **向量 RAG / embedding（远程优先脚手架）**：`backend/Demiurge-desktop/src/embed/` 的 `EmbeddingProvider` trait + 远程 OpenAI 兼容 provider + `LoreChunk.embedding` 缓存 + RRF 混合召回权重（`hybrid_weight`）。详见 [docs/modules/20-lorebook-vector-rag.md](./modules/20-lorebook-vector-rag.md)。
 - [x] **Memory namespace 落地**：`scope_files` 按 `runtime.memory.namespace` 隔离 user/project 到 `user.{ns}.md` / `memory.{ns}.md`，default 走 legacy；`memory_migrate_namespace` 命令 + 面板迁移入口；`/dream` 与自动抽取写 namespaced 路径。
 - [x] **Permission preference 强约束**：`CharacterRuntime.permissions` 只能声明 deny/ask/default；导入/保存与运行时双重阻止权限升级，`ask_every_time` 禁止持久化，`permission_panel_state` 暴露 `card_preference`。
 - [x] **前端体积治理**：Markdown/KaTeX/highlight、Mermaid、PDF、ZIP、Live2D 已按需加载或独立 vendor chunk。
@@ -177,7 +177,7 @@ Demiurge 当前已经具备本地桌面 Agent 的主体能力：会话、工具�
 - [x] **主题命名与经典主题统一**：界面显示名已改为“水晶花”（英文 `Crystal Bloom`）；经典主题复用相同的 Material 版式、字号、间距、控件和响应式规则，仅使用独立的浅深中性色板。
 - [x] **原生窗口控制修复**：主窗口最小化、最大化/恢复和关闭统一走后端 Rust 命令（`get_webview_window(“main”)` 后操作 `WebviewWindow`），前端保留 Tauri 检测降级；绑定同文件 `bind_main_window_lifecycle` 确保常驻隐藏窗口不阻止进程退出。
 - [x] **桌宠陪伴壳呼出语义**：主工具栏改为”呼出”（`desktop_companion_restore`）；已启用时只负责取消最小化、显示和聚焦，不再反向停用，停用仍由设置页和陪伴壳关闭操作负责。
-- [x] **沙盒文件夹选择修复**：补齐 `dialog:allow-open` 权限并从调用时动态 `await import(...)` 改为静态导入统一入口（`src/lib/folderPicker.ts`），区分 `selected`/`cancelled`/`unavailable`/`failed` 四种结果，生成中给出明确原因提示。
+- [x] **沙盒文件夹选择修复**：补齐 `dialog:allow-open` 权限并从调用时动态 `await import(...)` 改为静态导入统一入口（`frontend/src/lib/folderPicker.ts`），区分 `selected`/`cancelled`/`unavailable`/`failed` 四种结果，生成中给出明确原因提示。
 - [x] **桌面交互自动化回归**：前端 43 项、生产构建和 `cargo fmt` 格式检查通过；新增 widgets 窗口生命周期 (5) + 原生窗口控制/桌宠呼出 (6) 测试。（Windows 实机多 DPI 最小化按钮、原生对话框取消/无权限路径、Tauri 实机小工具窗口渲染和进程退出由用户手动验证；Rust 287 项测试基线与本批次无关，已在 desktop-closeout 分支上独立通过 `cargo check`。）
 
 ### 其他未完成特性（原列表保留）
@@ -265,4 +265,4 @@ Demiurge 当前已经具备本地桌面 Agent 的主体能力：会话、工具�
 - 架构结构见 [IMPLEMENTATION.md](./IMPLEMENTATION.md)。
 - 当前审查结论见 [CODE-REVIEW-2026-07-12.md](./CODE-REVIEW-2026-07-12.md)。
 - 设计背景见 [demiurge-mvp-design.md](./demiurge-mvp-design.md)。
-- 提交前至少运行 `npm test`、`npm run build`、`cargo fmt --manifest-path src-tauri/Cargo.toml -- --check` 和 `cargo test --manifest-path src-tauri/Cargo.toml --no-fail-fast`；本分支基线上次全量门禁为前端 21 项（`main`），当前为 43 项（`desktop-closeout`）。
+- 提交前至少运行 `npm test`、`npm run build`、`cargo fmt --manifest-path backend/Demiurge-desktop/Cargo.toml -- --check` 和 `cargo test --manifest-path backend/Demiurge-desktop/Cargo.toml --no-fail-fast`；本分支基线上次全量门禁为前端 21 项（`main`），当前为 43 项（`desktop-closeout`）。

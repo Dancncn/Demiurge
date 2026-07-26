@@ -2,7 +2,7 @@
 
 评估日期：2026-07-12
 
-> 文档状态：已按 `src-tauri/src/llm/sse.rs`、两类适配器与 `src/components/MarkdownRenderer.tsx` 的当前实现复核。相关项目级发现见 [代码审查报告](./CODE-REVIEW-2026-07-12.md)。
+> 文档状态：已按 `backend/Demiurge-desktop/src/llm/sse.rs`、两类适配器与 `frontend/src/shared/components/MarkdownRenderer.tsx` 的当前实现复核。相关项目级发现见 [代码审查报告](./CODE-REVIEW-2026-07-12.md)。
 
 ## 结论
 

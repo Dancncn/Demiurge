@@ -3,14 +3,14 @@
 > 审阅状态（2026-07-12）：目标状态机、预算记账与三次同因阻塞阈值已按当前测试复核；本轮工作区功能没有改变 Goal 终止语义。固定行号请以符号名为准。
 
 > 存档级技术原理文档。读者为协作开发者。
-> 主要源码：`src-tauri/src/agent/goal.rs`、`src-tauri/src/tools/goal_tool.rs`。
-> 关联源码：`src-tauri/src/lib.rs`(slash/命令入口与续跑挂载)、`src-tauri/src/agent/runner.rs`(回合执行与 token 记账)、`src-tauri/src/agent/budget.rs`(token 估算)、`src-tauri/src/agent/prompt.rs`(目标上下文注入)、`src-tauri/src/tools/mod.rs`(goal 工具注册)、`src/App.tsx`(前端历史过滤)。
+> 主要源码：`backend/Demiurge-desktop/src/agent/goal.rs`、`backend/Demiurge-desktop/src/tools/goal_tool.rs`。
+> 关联源码：`backend/Demiurge-desktop/src/biz/goal.rs`（目标续跑用例）、`backend/Demiurge-desktop/src/agent/runner.rs`(回合执行与 token 记账)、`backend/Demiurge-desktop/src/agent/budget.rs`(token 估算)、`backend/Demiurge-desktop/src/agent/prompt.rs`(目标上下文注入)、`backend/Demiurge-desktop/src/tools/mod.rs`(goal 工具注册)、`frontend/src/app/App.tsx`(前端历史过滤)。
 
 ## 1. 模块职责与定位
 
 Goal 持续驱动让用户用一句 `/goal <目标>` 设定一个跨越多个回合的长期目标，之后引擎在每个普通回合结束后**自动续跑**，反复把目标重新注入模型上下文并推动其继续工作，直到满足终止条件之一：目标完成、被用户暂停、连续阻塞、token 预算耗尽、达到最大续跑回合数，或被用户取消。
 
-它本质上是一个**挂在回合执行链路尾部的调度器**，自身不直接调用 LLM，而是通过既有的 `run_turn_with_options`（`src-tauri/src/agent/runner.rs:146`）发起新回合。状态全部存放在 `Session.goal` 字段中，随 session 持久化，因此目标是**按会话隔离**的：每个会话最多一个活跃目标。
+它本质上是一个**挂在回合执行链路尾部的调度器**，自身不直接调用 LLM，而是通过既有的 `run_turn_with_options`（`backend/Demiurge-desktop/src/agent/runner.rs:146`）发起新回合。状态全部存放在 `Session.goal` 字段中，随 session 持久化，因此目标是**按会话隔离**的：每个会话最多一个活跃目标。
 
 设计动机：把"反复让模型继续干活"这件事从前端轮询/用户手动催促，下沉为后端在一次命令调用内部的同步循环，使得续跑对前端透明（前端只看到模型连续产出，看不到内部续跑消息），同时把预算、回合数、阻塞计数等护栏集中在一处管理。
 
@@ -146,7 +146,7 @@ run_turn_with_options(普通回合)  ──成功且未取消──▶ drive_aft
 
 记账发生在 `runner.rs` 的回合执行过程中，对象是当前 session 的 goal：
 
-1. **精确优先**：模型回合返回后，`runner.rs:377` 调用 `add_provider_usage`（`goal.rs:445`）。它取 `usage.total_or_sum()`（`src-tauri/src/llm/mod.rs:23`，优先 `total_tokens`，否则 `input+output`），若 provider 给出 usage 即按精确值累加，并返回 `true`（`exact_usage_recorded`）。
+1. **精确优先**：模型回合返回后，`runner.rs:377` 调用 `add_provider_usage`（`goal.rs:445`）。它取 `usage.total_or_sum()`（`backend/Demiurge-desktop/src/llm/mod.rs:23`，优先 `total_tokens`，否则 `input+output`），若 provider 给出 usage 即按精确值累加，并返回 `true`（`exact_usage_recorded`）。
 2. **估算兜底**：仅当 provider 未返回 usage（`exact_usage_recorded==false`）时，在最终答复分支用 `add_estimated_tokens`（`goal.rs:457`）补记用户输入与助手输出（`runner.rs:400-403`）；工具调用路径则对 `tc.function.arguments` 与截断后的工具结果做估算补记（`runner.rs:583-584`）。
 3. **估算函数** `budget::estimate_text_tokens`（`budget.rs:77-89`）：`ascii.div_ceil(4) + non_ascii.max(1)`，即 ASCII 约 4 字符/token、非 ASCII（如中文）约 1 字符/token，是粗粒度启发式而非真实分词。
 

@@ -5,10 +5,10 @@
 > 存档级技术原理文档。覆盖本地 OCR（PP-OCRv5 mobile + oar-ocr 推理）、屏幕感知工具（窗口列表 / 截图 / 区域或窗口 OCR）、语音（云端 ASR + TTS 均已接通）以及云端多模态生成（图像 / TTS）四块底层能力。
 >
 > 主要源文件：
-> - `src-tauri/src/ocr.rs` — OCR 模型管理与推理
-> - `src-tauri/src/tools/screen.rs` — 屏幕感知工具
-> - `src-tauri/src/voice.rs` — WebView 录音 → 云端 ASR 转写、TTS 合成（dashscope / gpt-sovits 双后端，`voice.rs:193-249`）
-> - `src-tauri/src/media.rs` — DashScope 云端图像生成 / 语音合成
+> - `backend/Demiurge-desktop/src/ocr.rs` — OCR 模型管理与推理
+> - `backend/Demiurge-desktop/src/tools/screen.rs` — 屏幕感知工具
+> - `backend/Demiurge-desktop/src/voice.rs` — WebView 录音 → 云端 ASR 转写、TTS 合成（dashscope / gpt-sovits 双后端，`voice.rs:193-249`）
+> - `backend/Demiurge-desktop/src/media.rs` — DashScope 云端图像生成 / 语音合成
 
 ---
 

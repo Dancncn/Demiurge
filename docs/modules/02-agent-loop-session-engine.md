@@ -5,12 +5,12 @@
 > 存档级技术原理文档。覆盖一次回合（turn）从入口互斥、状态建立、流式生成、多轮工具循环到收尾的完整生命周期。
 >
 > 主要源文件：
-> - `src-tauri/src/agent/runner.rs`（Agent 主循环，本系统的心脏）
-> - `src-tauri/src/agent/session_engine.rs`（回合运行时状态、入口互斥、中断标记、事件信封、会话写入封装）
-> - `src-tauri/src/agent/conversation.rs`（OpenAI 兼容的消息结构）
-> - `src-tauri/src/agent/mod.rs`（模块导出）
+> - `backend/Demiurge-desktop/src/agent/runner.rs`（Agent 主循环，本系统的心脏）
+> - `backend/Demiurge-desktop/src/agent/session_engine.rs`（回合运行时状态、入口互斥、中断标记、事件信封、会话写入封装）
+> - `backend/Demiurge-desktop/src/agent/conversation.rs`（OpenAI 兼容的消息结构）
+> - `backend/Demiurge-desktop/src/agent/mod.rs`（模块导出）
 >
-> 相邻协作模块：`agent/budget.rs`、`agent/context.rs`、`agent/custom.rs`、`agent/prompt.rs`、`agent/summary.rs`、`agent/goal.rs`、`agent/workflow_journal.rs`、`llm/mod.rs`、`src-tauri/src/lib.rs`（Tauri command 入口）。
+> 相邻协作模块：`agent/budget.rs`、`agent/context.rs`、`agent/custom.rs`、`agent/prompt.rs`、`agent/summary.rs`、`agent/goal.rs`、`agent/workflow_journal.rs`、`llm/mod.rs`、`backend/Demiurge-desktop/src/lib.rs`（Tauri command 入口）。
 
 ---
 
@@ -25,7 +25,7 @@
 2. **Runner（`runner.rs`）—— 回合执行层。**
    它实现真正的 Agent 循环（`runner.rs:1`-`2`）：`输入 + 上下文 → 调 LLM → 若请求工具则执行 → 把 tool_result 喂回 → 重复，直到给出最终答复`。它消费 Session Engine 提供的能力（`SessionTurnStore` 读写、`TurnEventEmitter` 广播、`state.cancel` 中断标记），并把预算、裁剪、权限门、流式增量缝合在一起。
 
-两层的**调用边界**在 `src-tauri/src/lib.rs` 的 Tauri command 中：`send`（`lib.rs:293`）和 `send_with_agents`（`lib.rs:458`）负责 `begin_turn` → `run_turn(_with_options)` → `finish_turn` 的外层包裹，而 runner 只负责中间那段。
+两层的**调用边界**在 `backend/Demiurge-desktop/src/lib.rs` 的 Tauri command 中：`send`（`lib.rs:293`）和 `send_with_agents`（`lib.rs:458`）负责 `begin_turn` → `run_turn(_with_options)` → `finish_turn` 的外层包裹，而 runner 只负责中间那段。
 
 ```
 前端 invoke("send" / "send_with_agents")
