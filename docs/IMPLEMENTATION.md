@@ -1,6 +1,6 @@
 # 实现说明
 
-> 文档状态：2026-07-22 已按当前源码复核。统一事件归并、流式协议边界、工作流表单与恢复、语音/陪伴交互、本地状态恢复和前端测试基线已收口；当前验证基线为前端 21 项、Rust 287 项测试通过。审查结论见 [代码审查报告](./CODE-REVIEW-2026-07-12.md)。
+> 文档状态：2026-07-26 已按当前源码复核。统一事件归并、流式协议边界、工作流表单与恢复、语音/陪伴交互、本地状态恢复和前端测试基线已收口；当前验证基线为前端 35 项、生产构建和 Rust 287 项测试通过。审查结论见 [代码审查报告](./CODE-REVIEW-2026-07-12.md)。
 
 本文面向协作者，说明 Demiurge 的项目结构、核心数据流、后端模块、前端模块、安全边界和扩展方式。逐子系统的深度技术原理见 [modules/](./modules/README.md)（从[架构总览](./modules/01-architecture-overview.md)开始），路线图见 [TODO.md](./TODO.md)，设计背景见 [demiurge-mvp-design.md](./demiurge-mvp-design.md)。
 
@@ -24,6 +24,14 @@ Rust AppState
         ▼
 LLM endpoint / local tools / OS integrations
 ```
+
+## 桌面窗口与主题
+
+- 主窗口控制统一由 Rust 按 label 获取窗口；Windows 使用 `ShowWindow`、`IsZoomed` 和 `PostMessageW` 操作真实顶层窗口，其他平台使用 Tauri 窗口 API。
+- `widgets` 小工具窗口在应用启动时于主线程预创建并隐藏，关闭请求只隐藏窗口；再次打开复用同一 webview，主窗口关闭仍退出应用。
+- `WidgetsWindowShell` 承载吉签、陪伴状态和番茄钟，并在窗口隐藏时停止轮询、重新可见时立即刷新。
+- 外观内部键继续使用 `material_bloom`，界面显示名为“水晶花”/`Crystal Bloom`；水晶花与经典主题共享 Material 版式和响应式规则，分别使用粉白紫与中性浅深色板。
+- 沙盒目录选择通过静态导入的 `folderPicker` 统一处理选择、取消、不可用和失败状态；Tauri capability 显式授予 `dialog:allow-open`。
 
 一次普通对话回合：
 
@@ -59,6 +67,7 @@ Demiurge/
 │  │  ├─ Composer.tsx
 │  │  ├─ ConfirmDialog.tsx
 │  │  ├─ DesktopCompanionShell.tsx
+│  │  ├─ WidgetsWindowShell.tsx
 │  │  ├─ Markdown.tsx
 │  │  ├─ MarkdownRenderer.tsx
 │  │  ├─ MessageList.tsx
