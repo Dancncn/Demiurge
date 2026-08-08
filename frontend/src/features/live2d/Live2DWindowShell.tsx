@@ -10,6 +10,7 @@ const IS_TAURI = "__TAURI_INTERNALS__" in window;
 
 const PREVIEW_SETTINGS = {
   current_pack: "default",
+  current_pet: "",
   language: "zh",
   theme: "light",
   appearance: "material_bloom",

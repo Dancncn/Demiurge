@@ -30,7 +30,10 @@
         "scope": [
           "$APPDATA/packs/**",
           "$APPDATA/com.demiurge.engine/packs/**",
-          "$APPLOCALDATA/com.demiurge.engine/packs/**"
+          "$APPLOCALDATA/com.demiurge.engine/packs/**",
+          "$APPDATA/pets/**",
+          "$APPDATA/com.demiurge.engine/pets/**",
+          "$APPLOCALDATA/com.demiurge.engine/pets/**"
         ]
       }
     }

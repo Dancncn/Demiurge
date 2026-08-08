@@ -75,6 +75,7 @@ const PREVIEW_SETTINGS: Settings = {
   model: "deepseek-chat",
   reasoning_effort: "auto",
   current_pack: "default",
+  current_pet: "",
   max_context_chars: 24000,
   max_input_tokens: 32000,
   reserved_output_tokens: 4000,

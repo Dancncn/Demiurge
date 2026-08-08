@@ -17,6 +17,7 @@ import type {
   GoalProgressEvent,
   ImageGenerationRequest,
   ImageGenerationResult,
+  InstalledPet,
   Live2DBundle,
   Message,
   LoreIndexStatus,
@@ -44,6 +45,7 @@ import type {
   SessionEnginePanelState,
   SessionList,
   Settings,
+  ResolvedPet,
   SkillPanelState,
   StatsPanel,
   ShellPolicyState,
@@ -102,6 +104,11 @@ export const mcpRefresh = () => invoke<McpPanelState>("mcp_refresh");
 export const mcpSetServerEnabled = (name: string, enabled: boolean) =>
   invoke<McpPanelState>("mcp_set_server_enabled", { name, enabled });
 export const listPacks = () => invoke<PackManifest[]>("list_packs");
+export const petList = () => invoke<InstalledPet[]>("pet_list");
+export const petImport = (fileName: string, bytes: number[]) =>
+  invoke<InstalledPet>("pet_import", { fileName, bytes });
+export const petRemove = (id: string) => invoke<void>("pet_remove", { id });
+export const petResolve = (id: string) => invoke<ResolvedPet>("pet_resolve", { id });
 export const importPackZip = (fileName: string, bytes: number[]) =>
   invoke<PackImportResult>("import_pack_zip", { fileName, bytes });
 export const readPackManifestJson = (id: string) => invoke<string>("read_pack_manifest_json", { id });
@@ -269,6 +276,8 @@ export const listenPermissionModeUpdated = (handler: (e: PermissionMode) => void
   listen<PermissionMode>("permission-mode-updated", (e) => handler(e.payload));
 export const listenSettingsUpdated = (handler: (e: Settings) => void) =>
   listen<Settings>("settings-updated", (e) => handler(e.payload));
+export const listenPetCatalogUpdated = (handler: (e: InstalledPet[]) => void) =>
+  listen<InstalledPet[]>("pet-catalog-updated", (e) => handler(e.payload));
 export const listenMcpUpdated = (handler: (e: McpPanelState) => void) =>
   listen<McpPanelState>("mcp-updated", (e) => handler(e.payload));
 export const listenPomodoroUpdated = (handler: (e: PomodoroPanelState) => void) =>

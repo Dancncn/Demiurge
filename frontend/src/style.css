@@ -411,6 +411,39 @@ html[data-window="desktop-companion"] #app {
   -webkit-app-region: no-drag;
 }
 
+.pet-canvas {
+  display: block;
+  max-width: 100%;
+  max-height: 100%;
+  cursor: grab;
+}
+
+.pet-canvas:active {
+  cursor: grabbing;
+}
+
+.pet-settings-panel {
+  width: 100%;
+  border-bottom: 1px solid #e2e5ea;
+  padding: 0 0 20px;
+}
+
+.pet-picker-item {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid #dfe3e8;
+  border-radius: 6px;
+  background: #fff;
+  padding: 8px;
+}
+
+.pet-picker-item.is-selected {
+  border-color: #8ab4f8;
+  background: #f2f7ff;
+}
+
 .line-clamp-2 {
   display: -webkit-box;
   overflow: hidden;

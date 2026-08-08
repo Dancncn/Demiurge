@@ -493,6 +493,7 @@ mod tests {
             data_dir: Mutex::new(data_dir),
             sandbox_dir: Mutex::new(PathBuf::new()),
             packs_dir: Mutex::new(PathBuf::new()),
+            pets_dir: Mutex::new(PathBuf::new()),
             ocr: OcrState::default(),
         }
     }

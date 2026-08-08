@@ -308,6 +308,8 @@ pub struct Settings {
     pub api_key: String,
     pub model: String,
     pub current_pack: String,
+    #[serde(default)]
+    pub current_pet: String,
     #[serde(default = "default_max_context_chars")]
     pub max_context_chars: usize,
     #[serde(default = "default_max_input_tokens")]
@@ -454,6 +456,7 @@ impl Default for Settings {
             api_key: String::new(),
             model: "deepseek-chat".to_string(),
             current_pack: "default".to_string(),
+            current_pet: String::new(),
             max_context_chars: DEFAULT_MAX_CONTEXT_CHARS,
             max_input_tokens: DEFAULT_MAX_INPUT_TOKENS,
             reserved_output_tokens: DEFAULT_RESERVED_OUTPUT_TOKENS,

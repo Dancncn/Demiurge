@@ -12,6 +12,7 @@ mod media;
 mod ocr;
 mod pack;
 mod permission;
+mod pet;
 mod pomodoro;
 mod starter;
 mod startup;

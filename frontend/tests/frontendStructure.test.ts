@@ -88,6 +88,7 @@ test("frontend code is owned by app, feature, shared, or library modules", async
     "live2d",
     "media",
     "pack",
+    "pet",
     "settings",
     "voice",
     "workflow",

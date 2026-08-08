@@ -11,6 +11,7 @@ pub(crate) mod media;
 pub(crate) mod memory;
 pub(crate) mod pack;
 pub(crate) mod permission;
+pub(crate) mod pet;
 pub(crate) mod remote;
 pub(crate) mod session;
 pub(crate) mod settings;

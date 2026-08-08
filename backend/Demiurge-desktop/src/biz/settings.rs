@@ -15,6 +15,10 @@ pub(crate) fn save_settings(
 ) -> Result<(), String> {
     let packs_dir = state.packs_dir.lock().unwrap().clone();
     pack::resolve_pack_dir(&packs_dir, &settings.current_pack)?;
+    if !settings.current_pet.is_empty() {
+        let pets_dir = state.pets_dir.lock().unwrap().clone();
+        crate::pet::resolve_dir(&pets_dir, &settings.current_pet)?;
+    }
     let current_launch_on_startup = state.settings.lock().unwrap().launch_on_startup;
     if settings.launch_on_startup != current_launch_on_startup {
         startup::apply_launch_on_startup(settings.launch_on_startup)?;

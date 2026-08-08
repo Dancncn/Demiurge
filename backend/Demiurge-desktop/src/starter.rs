@@ -19,6 +19,7 @@ use crate::controller::mcp::*;
 use crate::controller::media::*;
 use crate::controller::memory::*;
 use crate::controller::pack::*;
+use crate::controller::pet::*;
 use crate::controller::permission::*;
 use crate::controller::remote::*;
 use crate::controller::session::*;
@@ -83,6 +84,10 @@ pub(crate) fn run() {
             resolve_pack_live2d_path,
             pack_live2d_bundle,
             remove_pack_live2d,
+            pet_list,
+            pet_import,
+            pet_remove,
+            pet_resolve,
             agent_panel_state,
             agent_template_json,
             agent_validate_json,
@@ -180,6 +185,9 @@ fn setup_runtime(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>>
     let packs = dir.join("packs");
     std::fs::create_dir_all(&packs)?;
     pack::ensure_default(&packs)?;
+    let pets = dir.join("pets");
+    std::fs::create_dir_all(&pets)?;
+    crate::pet::ensure_bundled(&pets)?;
 
     let mut settings = store::load_settings(&dir);
     if let Err(error) = credentials::hydrate_or_migrate_settings(&dir, &mut settings) {
@@ -194,6 +202,7 @@ fn setup_runtime(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>>
     *state.data_dir.lock().unwrap() = dir;
     *state.sandbox_dir.lock().unwrap() = sandbox;
     *state.packs_dir.lock().unwrap() = packs;
+    *state.pets_dir.lock().unwrap() = pets;
     *state.settings.lock().unwrap() = settings;
     *state.sessions.lock().unwrap() = sessions;
     if let Err(error) = workspace::sync_active_session_workspace(state.inner()) {

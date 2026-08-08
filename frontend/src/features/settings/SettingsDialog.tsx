@@ -52,6 +52,7 @@ import { SegmentedControl } from "@/shared/components/SegmentedControl";
 import { PackEditor } from "@/features/pack/editor/PackEditor";
 import { PackFileBrowser } from "@/features/pack/editor/PackFileBrowser";
 import { LorebookRecallPanel } from "@/features/pack/editor/LorebookRecallPanel";
+import { PetSettingsPanel } from "@/features/pet/PetSettingsPanel";
 import { PROVIDER_OPTIONS, PROVIDER_ICON_SET, modelContextWindow, autoContextBudget } from "@/lib/providers";
 import { useI18n, type TFunction } from "@/lib/i18n";
 import { isAutoPromptEnabled, setAutoPromptEnabled } from "@/lib/fortune";
@@ -2726,6 +2727,10 @@ export default function SettingsDialog({
 
               {activeTab === "companion" && (
                 <>
+                  <PetSettingsPanel
+                    currentPet={form.current_pet}
+                    onSelect={(id) => set("current_pet", id)}
+                  />
                   <Section title={t("settings.companion.coreTitle")} description={t("settings.companion.coreDesc")}>
                     <div className="grid gap-4">
                       <ToggleRow

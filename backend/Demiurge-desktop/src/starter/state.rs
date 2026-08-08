@@ -42,6 +42,7 @@ pub struct AppState {
     pub data_dir: Mutex<PathBuf>,
     pub sandbox_dir: Mutex<PathBuf>,
     pub packs_dir: Mutex<PathBuf>,
+    pub pets_dir: Mutex<PathBuf>,
     pub ocr: ocr::OcrState,
 }
 
@@ -82,6 +83,7 @@ impl AppState {
             data_dir: Mutex::new(PathBuf::new()),
             sandbox_dir: Mutex::new(PathBuf::new()),
             packs_dir: Mutex::new(PathBuf::new()),
+            pets_dir: Mutex::new(PathBuf::new()),
             ocr: ocr::OcrState::default(),
         }
     }

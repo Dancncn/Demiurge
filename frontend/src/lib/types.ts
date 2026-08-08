@@ -65,6 +65,7 @@ export interface Settings {
   api_key: string;
   model: string;
   current_pack: string;
+  current_pet: string;
   max_context_chars: number;
   max_input_tokens: number;
   reserved_output_tokens: number;
@@ -679,6 +680,63 @@ export interface PackManifest {
   lorebook?: LoreEntry[];
   credits?: AssetCredit[];
   license?: string;
+}
+
+export interface InstalledPet {
+  id: string;
+  name: string;
+  version: string;
+  description?: string;
+  thumbnailPath?: string;
+}
+
+export interface PetFrameRange {
+  row: number;
+  start: number;
+  count: number;
+}
+
+export interface PetAction {
+  frames: PetFrameRange;
+  frameDurationMs: number;
+  mode: "loop" | "once" | "hold";
+  returnTo?: string;
+}
+
+export interface PetBinding {
+  action: string;
+  sound?: string;
+}
+
+export interface PetSound {
+  source: string;
+  volume: number;
+  loop?: boolean;
+}
+
+export interface PetManifest {
+  schemaVersion: number;
+  id: string;
+  name: string;
+  version: string;
+  description?: string;
+  thumbnail?: string;
+  renderer: {
+    type: "sprite-sheet";
+    sheet: string;
+    frameWidth: number;
+    frameHeight: number;
+    columns: number;
+  };
+  actions: Record<string, PetAction>;
+  bindings: Record<string, PetBinding>;
+  sounds: Record<string, PetSound>;
+}
+
+export interface ResolvedPet {
+  manifest: PetManifest;
+  sheetPath: string;
+  soundPaths: Record<string, string>;
 }
 
 export interface AssetCredit {
