@@ -4,11 +4,13 @@
 
 > 存档级技术原理文档。读者为协作开发者。
 > 覆盖源文件：
-> - `src-tauri/src/lib.rs`（全局状态 `AppState`、所有 `#[tauri::command]` 命令面、`run()` 构建器与 `setup`、WebDAV/上下文聚合等辅助逻辑）
-> - `src-tauri/src/main.rs`（Tauri v2 二进制入口，仅转调 `demiurge_lib::run()`）
-> - `src-tauri/tauri.conf.json`（窗口、bundle、CSP 配置）
-> - `src-tauri/Cargo.toml`（crate 布局与 release profile）
-> - `src-tauri/build.rs`（`tauri_build::build()`）
+> - `backend/Demiurge-desktop/src/starter.rs`（`run()` 构建器、`setup`、窗口预创建与 Command 注册）
+> - `backend/Demiurge-desktop/src/lib.rs`（全局状态 `AppState`、尚未迁移的 Command、WebDAV/上下文聚合等辅助逻辑）
+> - `backend/Demiurge-desktop/src/controller/session.rs`（Session IPC 命令面）
+> - `backend/Demiurge-desktop/src/main.rs`（Tauri v2 二进制入口，仅转调 `demiurge_lib::run()`）
+> - `backend/Demiurge-desktop/tauri.conf.json`（窗口、bundle、CSP 配置）
+> - `backend/Demiurge-desktop/Cargo.toml`（crate 布局与 release profile）
+> - `backend/Demiurge-desktop/build.rs`（`tauri_build::build()`）
 > - `scripts/tauri.mjs`（dev 端口选择与配置覆盖包装器）
 > - `vite.config.ts`、`package.json`（前端构建与脚本）
 >
@@ -247,7 +249,7 @@ context_panel_state:
 ## ④ 与其他模块的交互边界
 
 ```
-                         WebView (React, src/)
+                         WebView (React, frontend/src/)
                               │  invoke(...) / listen(...)
                               ▼
               ┌──────────────────────────────────┐
@@ -322,7 +324,7 @@ tauri.mjs dev:
 - 端口来源链：`DEMIURGE_DEV_PORT ?? PORT ?? 38741`（`vite.config.ts:6`），与 `tauri.mjs` 注入的环境变量对接；host 同理。
 - `strictPort: true`：端口已由包装器选好，Vite 不得再自行漂移。
 - `clearScreen: false`：把清屏权让给 Tauri，避免吞掉 Rust 报错（`vite.config.ts:14-15`）。
-- `watch.ignored: ["**/src-tauri/**"]`：前端 HMR 不监听 Rust 源码，避免误触发。
+- `watch.ignored: ["**/backend/Demiurge-desktop/**"]`：前端 HMR 不监听 Rust 源码，避免误触发。
 - 插件：`@vitejs/plugin-react` + `@tailwindcss/vite`；`@` 别名指向 `./src`。
 - `tauri.conf.json` 侧 `beforeDevCommand: "npm run dev"` / `beforeBuildCommand: "npm run build"`，`frontendDist: "../dist"`，把前端构建产物喂给 Tauri 打包。`npm run build` = `tsc --noEmit && vite build`（`package.json:10`），即**先类型检查再产出**。
 

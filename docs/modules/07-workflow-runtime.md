@@ -5,9 +5,9 @@
 > 存档级技术原理文档。读者为协作开发者。本文聚焦“为什么这样设计”与“数据如何流动”，所有结论均以真实源码为依据。
 >
 > 主要源文件：
-> - `src-tauri/src/agent/workflow_runtime.rs`（DSL 解析、执行语义、live panel、durable snapshot、启动水合、恢复 overlay）
-> - `src-tauri/src/agent/workflow_journal.rs`（`journal.jsonl` 追加写、tail 读取、run 目录约定）
-> - `src-tauri/src/tools/worktree.rs`（`worktree_create` 隔离工作区）
+> - `backend/Demiurge-desktop/src/agent/workflow_runtime.rs`（DSL 解析、执行语义、live panel、durable snapshot、启动水合、恢复 overlay）
+> - `backend/Demiurge-desktop/src/agent/workflow_journal.rs`（`journal.jsonl` 追加写、tail 读取、run 目录约定）
+> - `backend/Demiurge-desktop/src/tools/worktree.rs`（`worktree_create` 隔离工作区）
 
 ---
 

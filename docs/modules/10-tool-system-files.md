@@ -3,11 +3,11 @@
 > 审阅状态（2026-07-12）：本文所称“沙盒”现在是当前会话绑定的项目根；未选择项目时才是应用数据目录默认沙盒。undo entry 已绑定 canonical workspace root，路径 containment 与权限门仍适用，固定行号请以符号名为准。
 
 > 存档级技术原理文档。读者为协作开发者。
-> 覆盖源文件：`src-tauri/src/tools/mod.rs`、`args.rs`、`read_file.rs`、`write_file.rs`、`edit_file.rs`、`glob.rs`、`grep.rs`、`list_dir.rs`、`git_status.rs`、`write_plan.rs`。
+> 覆盖源文件：`backend/Demiurge-desktop/src/tools/mod.rs`、`args.rs`、`read_file.rs`、`write_file.rs`、`edit_file.rs`、`glob.rs`、`grep.rs`、`list_dir.rs`、`git_status.rs`、`write_plan.rs`。
 
 ## 1. 模块职责与定位
 
-`tools` 模块是 Agent 与「外部世界」之间唯一受控的能力出口。它把每一种工具抽象成一个**带元数据的声明**（名称 + 描述 + 输入 JSON Schema + 风险/并发/权限/输出策略），并提供一个统一的异步分发入口 `execute()`。模块顶部的注释一句话点明了设计哲学（`src-tauri/src/tools/mod.rs:1`）：
+`tools` 模块是 Agent 与「外部世界」之间唯一受控的能力出口。它把每一种工具抽象成一个**带元数据的声明**（名称 + 描述 + 输入 JSON Schema + 风险/并发/权限/输出策略），并提供一个统一的异步分发入口 `execute()`。模块顶部的注释一句话点明了设计哲学（`backend/Demiurge-desktop/src/tools/mod.rs:1`）：
 
 > 作用域是结构性强制的（文件工具被物理限制在沙盒目录），不靠提示词。
 

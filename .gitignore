@@ -1,8 +1,10 @@
 # 依赖与构建产物
 node_modules/
-dist/
-src-tauri/target/
-src-tauri/gen/
+frontend/node_modules/
+frontend/dist/
+backend/Demiurge-desktop/target/
+backend/target/
+backend/Demiurge-desktop/gen/
 .tauri-dev/
 
 # 本地调试与 Playwright MCP 产物
@@ -13,14 +15,14 @@ playwright-report/
 test-results/
 
 # 本地编译加速：把 target 指向另一个项目以复用已编译依赖（含绝对路径，仅本机有效，不入库）
-src-tauri/.cargo/
+backend/Demiurge-desktop/.cargo/
 
 # 本地角色包（不把具体角色素材提交进仓库）；保留通用 default 作为格式参考
-packs/*
-!packs/default/
+resources/packs/*
+!resources/packs/default/
 
 # Cubism Core（Live2D 私有运行时，用户自行下载，不入库）
-public/core/live2dcubismcore.min.js
+frontend/public/core/live2dcubismcore.min.js
 
 # 本地配置
 .env

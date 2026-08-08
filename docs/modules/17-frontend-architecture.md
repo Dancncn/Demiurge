@@ -2,8 +2,8 @@
 
 > 审阅状态（2026-07-12）：Workspace/Branch、会话项目徽标、编辑活动、流式动画、原子导航快照、navigation epoch/request 与 session-owned 事件过滤均已按当前源码复核。固定行号请以符号名为准。
 
-> 适用版本：`src/` 当前实现。本文聚焦数据流与事件契约，不逐行解释样式。
-> 引用约定：所有路径相对仓库根；行号形如 `src/App.tsx:159`，随代码演进可能漂移，请以符号名为准。
+> 适用版本：`frontend/src/` 当前实现。本文聚焦数据流与事件契约，不逐行解释样式。
+> 引用约定：所有路径相对仓库根；行号形如 `frontend/src/app/App.tsx:159`，随代码演进可能漂移，请以符号名为准。
 
 ## 一、模块职责与定位
 
@@ -15,7 +15,7 @@
 
 这一定位决定了前端的核心设计原则：**后端是单一事实源（single source of truth），前端做乐观更新 + 事件对齐**。例如发送消息时前端会立刻插入一条 user 气泡（乐观），但助手内容、工具调用、目标进度都来自后端事件回填；会话列表、目标面板在每个回合结束后都会重新 `refresh`，以后端为准纠偏。
 
-入口装配在 `src/main.tsx:14`：`ReactDOM` 根节点用 `<LanguageProvider>` 包裹 `<App />`，并在此统一引入字体（Inter / JetBrains Mono / MiSans 子集）、`style.css`、KaTeX 与 highlight.js 的 GitHub 主题样式。
+入口装配在 `frontend/src/main.tsx:14`：`ReactDOM` 根节点用 `<LanguageProvider>` 包裹 `<App />`，并在此统一引入字体（Inter / JetBrains Mono / MiSans 子集）、`style.css`、KaTeX 与 highlight.js 的 GitHub 主题样式。
 
 ```text
 main.tsx
@@ -31,7 +31,7 @@ main.tsx
 
 ## 二、关键类型与入口
 
-### 2.1 共享类型 `src/lib/types.ts`
+### 2.1 共享类型 `frontend/src/lib/types.ts`
 
 该文件是前后端的"接口契约"，注释开宗明义："与 Rust 端结构对应的前端类型"。关键分组：
 
@@ -42,7 +42,7 @@ main.tsx
 
 `SessionEnginePanelState`（`types.ts:536`）含 `busy`、`cancel_requested`、`active_turn?`、`last_turn?`，是回合级运行状态的权威来源；`TurnRunState` 描述单个回合（`entrypoint: send | send_with_agents`、`status`、`input_preview` 等）。
 
-### 2.2 typed invoke/listen 封装 `src/lib/api.ts`
+### 2.2 typed invoke/listen 封装 `frontend/src/lib/api.ts`
 
 `api.ts` 把所有 Tauri 调用收敛成强类型函数，避免组件里散落裸 `invoke`/`listen`，集中管理命令名与 payload 形状：
 
@@ -63,7 +63,7 @@ export const respondConfirm = (id, allow, scope) =>
 
 后端为兼容仍双发 legacy assistant/tool 事件，但当前主时间线不再订阅它们。`App` 在触碰时间线、确认框、Goal 或 tool-end workspace 刷新前调用 `turnBelongsToSession` / `eventBelongsToSession`，缺失归属或不等于 `activeIdRef.current` 都 fail closed。
 
-### 2.3 主组件 `src/App.tsx`
+### 2.3 主组件 `frontend/src/app/App.tsx`
 
 `App` 是唯一的"状态编排中心"，集中持有大约二十个 `useState` 和一组 `useRef`（`App.tsx:161` 起）。useState 管"要渲染的值"，useRef 管"跨事件回调的可变游标"，这一分工是理解事件折叠的关键：
 
@@ -162,7 +162,7 @@ handleSend(text?, attachments=[])
 
 ### 3.6 目标（Goal）控制流
 
-`GoalBar`（`src/components/GoalBar.tsx`）渲染 `GoalPanelState`：双进度条分别表示 token 预算占用（`tokens_used/token_budget`，无预算时显示满格并提示 unlimited）与 continuation 回合占用（`turns_executed/max_turns`）。四个动作按钮的可用性完全由后端给的 `can_pause/can_resume/can_continue/can_clear` 布尔位驱动，前端不自行推断。
+`GoalBar`（`frontend/src/features/agent/GoalBar.tsx`）渲染 `GoalPanelState`：双进度条分别表示 token 预算占用（`tokens_used/token_budget`，无预算时显示满格并提示 unlimited）与 continuation 回合占用（`turns_executed/max_turns`）。四个动作按钮的可用性完全由后端给的 `can_pause/can_resume/can_continue/can_clear` 布尔位驱动，前端不自行推断。
 
 `handleGoalAction`（`App.tsx:521`）把动作映射到 `goalPause/goalResume/goalContinue/goalClear` 命令；其中 `resume`/`continue` 会本地置 busy 并切到 chat 视图，因为它们会触发新的后端回合。
 
@@ -172,9 +172,9 @@ handleSend(text?, attachments=[])
 
 ### 3.8 上下文预算（ContextMeter）
 
-`ContextMeter`（`src/components/ContextMeter.tsx`）是 Composer 里的环形用量表。它独立调用 `contextPanelState()` 拉取 `ContextPanelState`，用 `projected_total_tokens / max_input_tokens` 算占用比 `frac`，并据此切换环色（≥0.92 红 / ≥0.72 橙 / 否则绿）。展开 popover 展示分项：消息数、系统提示、工具、摘要、历史、历史预算、预留输出、最大输入。这些字段全部来自后端的真实预算账本（`ContextPanelState` 含 `prompt_sections`、`history_buckets`、`memory_sources` 等更细的报告，主要在 SettingsDialog 的 Context 标签消费）。
+`ContextMeter`（`frontend/src/features/agent/ContextMeter.tsx`）是 Composer 里的环形用量表。它独立调用 `contextPanelState()` 拉取 `ContextPanelState`，用 `projected_total_tokens / max_input_tokens` 算占用比 `frac`，并据此切换环色（≥0.92 红 / ≥0.72 橙 / 否则绿）。展开 popover 展示分项：消息数、系统提示、工具、摘要、历史、历史预算、预留输出、最大输入。这些字段全部来自后端的真实预算账本（`ContextPanelState` 含 `prompt_sections`、`history_buckets`、`memory_sources` 等更细的报告，主要在 SettingsDialog 的 Context 标签消费）。
 
-## 四、附件处理 `src/lib/fileProcessing.ts`
+## 四、附件处理 `frontend/src/lib/fileProcessing.ts`
 
 附件在**渲染层（前端）**就被解析成纯文本注入 prompt，后端回合开始前并不重复读取这些文件。
 
@@ -186,14 +186,14 @@ handleSend(text?, attachments=[])
 
 `buildAttachmentPrompt`（`fileProcessing.ts:120`）把所有 `status==="ready"` 的附件渲染成带 `<file name="...">…</file>` 包裹的 Markdown 块，标题为 "Attached files processed by Demiurge"；`buildUserDisplayText`（`App.tsx:145`）则生成给用户看的简短附件清单（名称/类型/大小/ready|failed）。`releaseAttachment` 负责回收 `blob:` 预览 URL，Composer 在卸载与移除时都会调用，防内存泄漏。
 
-## 五、Provider 目录与上下文窗口推断 `src/lib/providers.ts`
+## 五、Provider 目录与上下文窗口推断 `frontend/src/lib/providers.ts`
 
 - `PROVIDER_OPTIONS`：19 个 provider 的目录（label / baseUrl 默认 / 默认 model / help / 推荐 models 列表）。`findProvider` 找不到时回退到列表第一项。
-- `PROVIDER_ICON_SET`：声明哪些 provider 在 `public/providers/<key>.svg` 有图标（图标来自 `@lobehub/icons-static-svg`，MIT）。注意 `custom` 不在图标集中。
+- `PROVIDER_ICON_SET`：声明哪些 provider 在 `frontend/public/providers/<key>.svg` 有图标（图标来自 `@lobehub/icons-static-svg`，MIT）。注意 `custom` 不在图标集中。
 - **上下文窗口推断**是这里的核心算法：`MODEL_CONTEXT_WINDOWS` 是模型 id → 最大输入 token 的硬编码表；`modelContextWindow(provider, model)` 先精确匹配（小写），OpenRouter 的 `vendor/model` 形式则回退匹配末段 model id，再退到 `PROVIDER_FALLBACK_WINDOW` 的 per-provider 兜底，全不中则返回 `null`。
 - `autoContextBudget`（`providers.ts:369`）：在窗口已知时，给出 `{maxInput: 窗口, reservedOutput: clamp(窗口*0.125, [1024, 64000])}`。`App.handleSetModel`（`App.tsx:640`）在 `settings.context_budget_auto` 为真时调用它，使切换模型自动重算输入预算；窗口未知则保留用户手填值。
 
-## 六、国际化 `src/lib/i18n.tsx`
+## 六、国际化 `frontend/src/lib/i18n.tsx`
 
 - `LanguageProvider` 提供 `{lang, setLang, t}` context；默认语言 `zh`，并通过 `localStorage` key `demiurge.lang` 持久化（`initialLang`）。`setLang` 同时写 localStorage，并在 effect 中同步 `document.documentElement.lang`。
 - `t(key, vars?)`：查表顺序为 当前语言表 → 中文表兜底 → 返回 key 本身；`vars` 用 `{name}` 占位符做全局替换。
@@ -226,11 +226,11 @@ handleSend(text?, attachments=[])
 - **发送/停止合一**：右下角主按钮在 `loading` 时变为 Stop（调 `onStop` → `api.interrupt()`），否则为提交（`Composer.tsx:631`）。`readyToSend = (canSend || 有就绪附件) && !processingFiles`。
 - **语音输入**：用浏览器 `MediaRecorder` 录音，停止后把 Blob 转字节数组交给后端 `voiceTranscribe`。但调用前先 `voiceStatus()` 检查 `ready`，**后端 voice 三命令（`voice_transcribe`/`voice_synthesize`/`voice_status`）已实现**——STT 走 DashScope `qwen3-asr-flash` / OpenAI 兼容 Whisper，TTS 走 dashscope + gpt-sovits 双后端；若用户未在 Settings 选定具体后端，`voiceStatus().ready` 为 false 并给出 reason，前端据此提示先配置后端。设备选择 id 仅前端 localStorage 持久化（`demiurge.voiceInputDeviceId`），不进 Settings。
 
-### 7.2 ToolCard 的语义增强（`src/components/ToolCard.tsx`）
+### 7.2 ToolCard 的语义增强（`frontend/src/features/agent/ToolCard.tsx`）
 
 `progressSummary` 针对工具名做了人性化文案：`mcp__server__tool` 解析出 server/tool；`web_search` 用正则 `^\d+\. \[` 数返回的来源链接条数；`web_fetch` 显示 URL。`source_quality`（strong/limited/none）按等级着色提示检索证据强度。`rollbackHint` 在 edit 类工具结果里检测 `undo_records: edit_` 提示可回滚。失败状态默认自动展开详情并用 `DiffPreview` 渲染结果。
 
-### 7.3 Markdown 流式稳定化（`src/components/Markdown.tsx`）
+### 7.3 Markdown 流式稳定化（`frontend/src/shared/components/Markdown.tsx`）
 
 为消除流式输出时的渲染抖动做了两处处理：
 - `closeUnclosedFence`：流式时若 ``` ``` `` 数量为奇数，临时补一个闭合围栏，避免代码块/普通文本反复横跳。

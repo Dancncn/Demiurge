@@ -57,51 +57,30 @@ LLM endpoint / local tools / OS integrations
 Demiurge/
 ├─ README.md
 ├─ package.json
-├─ vite.config.ts
-├─ src/
-│  ├─ App.tsx
+├─ frontend/src/
+│  ├─ app/
+│  │  ├─ App.tsx
+│  │  └─ Sidebar.tsx
 │  ├─ main.tsx
 │  ├─ style.css
-│  ├─ components/
-│  │  ├─ BranchSwitcher.tsx
-│  │  ├─ Composer.tsx
-│  │  ├─ ConfirmDialog.tsx
-│  │  ├─ DesktopCompanionShell.tsx
-│  │  ├─ WidgetsWindowShell.tsx
-│  │  ├─ Markdown.tsx
-│  │  ├─ MarkdownRenderer.tsx
-│  │  ├─ MessageList.tsx
-│  │  ├─ SettingsDialog.tsx
-│  │  ├─ Sidebar.tsx
-│  │  ├─ ToolCard.tsx
-│  │  ├─ WorkspaceExplorer.tsx
-│  │  ├─ VoiceCallPanel.tsx
-│  │  └─ WorkflowsPanel.tsx
+│  ├─ features/
+│  │  ├─ agent/  chat/  companion/  live2d/
+│  │  ├─ media/  pack/  settings/  voice/
+│  │  └─ workflow/  workspace/
+│  ├─ shared/components/
 │  └─ lib/
 │     ├─ api.ts
 │     └─ types.ts
-├─ src-tauri/
-│  ├─ Cargo.toml
-│  └─ src/
-│     ├─ lib.rs
-│     ├─ main.rs
-│     ├─ credentials.rs
-│     ├─ connection_tests.rs
-│     ├─ ocr.rs
-│     ├─ media.rs
-│     ├─ voice.rs
-│     ├─ pomodoro.rs
-│     ├─ companion.rs
-│     ├─ workspace.rs
-│     ├─ embed/
-│     ├─ startup.rs
-│     ├─ agent/
-│     ├─ llm/
-│     ├─ mcp/
-│     ├─ pack/
-│     ├─ permission/
-│     ├─ store/
-│     └─ tools/
+├─ backend/
+│  ├─ common/          # Shared serialized contracts
+│  ├─ core/            # Session/Goal domain state
+│  ├─ framework/       # Persistence and WebDAV adapters
+│  └─ desktop/src/
+│     ├─ controller/   # Tauri command adapters
+│     ├─ biz/          # Use-case orchestration
+│     ├─ starter/      # AppState
+│     ├─ starter.rs    # Runtime assembly
+│     └─ agent/ llm/ tools/ store/ ...
 ├─ docs/
 │  ├─ IMPLEMENTATION.md
 │  ├─ TODO.md
@@ -163,11 +142,11 @@ Demiurge/
 
 | 模块 | 职责 |
 |---|---|
-| `src/App.tsx` | 主状态编排，订阅后端事件，维护消息流、设置、会话、会话级工作区、Agent 选择、Plan Mode、busy/cancel、workflow、语音和桌面陪伴状态 |
-| `src/lib/api.ts` | Tauri invoke/event 的 typed wrapper，包含 session engine、工作区/Git 和统一 `agent-event` 契约 |
-| `src/lib/types.ts` | 前后端共享 TypeScript 类型 |
-| `src/lib/fileProcessing.ts` | 附件读取与提示词拼接辅助；PDF.js 与 JSZip 仅在处理对应附件时按需导入 |
-| `src/lib/useStreamingTtsQueue.ts` | 把 assistant 流式文本按句切分成 TTS 播放队列，支持停止、静音、队列状态和语速/情感/streaming 参数透传 |
+| `frontend/src/app/App.tsx` | 主状态编排，订阅后端事件，维护消息流、设置、会话、会话级工作区、Agent 选择、Plan Mode、busy/cancel、workflow、语音和桌面陪伴状态 |
+| `frontend/src/lib/api.ts` | Tauri invoke/event 的 typed wrapper，包含 session engine、工作区/Git 和统一 `agent-event` 契约 |
+| `frontend/src/lib/types.ts` | 前后端共享 TypeScript 类型 |
+| `frontend/src/lib/fileProcessing.ts` | 附件读取与提示词拼接辅助；PDF.js 与 JSZip 仅在处理对应附件时按需导入 |
+| `frontend/src/lib/useStreamingTtsQueue.ts` | 把 assistant 流式文本按句切分成 TTS 播放队列，支持停止、静音、队列状态和语速/情感/streaming 参数透传 |
 | `components/Sidebar.tsx` | 会话列表、会话重命名/删除、会话绑定项目名称、角色包选择和基础入口 |
 | `components/Composer.tsx` | 输入框、中断/发送状态、项目选择和分支切换入口 |
 | `components/BranchSwitcher.tsx` | 当前/远程分支搜索、脏工作区提示、切换确认与错误反馈 |
@@ -477,7 +456,7 @@ Tavily、Brave、Exa key 优先从 settings/keyring 水合，也保留环境变�
 
 ### 新增工具
 
-1. 在 `src-tauri/src/tools/<name>.rs` 实现工具逻辑。
+1. 在 `backend/Demiurge-desktop/src/tools/<name>.rs` 实现工具逻辑。
 2. 在 `tools/mod.rs` 增加 `mod <name>;`。
 3. 在 `registry()` 注册 tool definition。
 4. 在 `execute()` 增加分支。
@@ -486,7 +465,7 @@ Tavily、Brave、Exa key 优先从 settings/keyring 水合，也保留环境变�
 
 ### 新增 provider
 
-1. 在 `src-tauri/src/llm/` 增加 adapter，或复用 OpenAI-compatible adapter。
+1. 在 `backend/Demiurge-desktop/src/llm/` 增加 adapter，或复用 OpenAI-compatible adapter。
 2. 在 `store::ProviderKind` 中增加 provider kind，并在设置 UI / `store::Settings` 中补字段或默认值。
 3. 在 `llm/mod.rs::ProviderProfile::for_kind` 中声明 adapter kind、tool/schema dialect、prompt cache、thinking、parallel tool calls、structured output 和 token budget 上限。
 4. 实现请求体构造、SSE/stream 解析、tool call 转换；provider-specific JSON 只放在对应 adapter 文件，finish reason 走 `normalize_finish_reason()`，usage 走 `merge_usage()`。
@@ -532,7 +511,7 @@ npm test
 Rust 测试：
 
 ```bash
-cargo test --manifest-path src-tauri/Cargo.toml
+cargo test --manifest-path backend/Demiurge-desktop/Cargo.toml
 ```
 
 2026-07-26 验证结果：43 项前端测试与 287 项 Rust 测试全部通过；`npm run build` 和 `cargo fmt --check` 通过。图像面板的分辨率菜单另在 1100×680 本地页面中验证为 body portal、靠近底边时自动向上且完整位于视口内。生产构建仍有约 1.1 MB 的 Live2D vendor chunk 非阻断体积警告；Rust 仍有两个既有未使用方法警告；供应商专项只覆盖离线解析与请求体契约，发布前仍应执行真实端点网络契约测试。

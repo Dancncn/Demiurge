@@ -4,11 +4,11 @@
 
 > 存档级技术原理文档。读者：协作开发者。
 > 覆盖源文件：
-> - `src-tauri/src/agent/subagent.rs`（只读子 Agent 运行时）
-> - `src-tauri/src/tools/agent_spawn.rs`（`agent_spawn` 工具参数解析层）
-> - `src-tauri/src/agent/ultracode.rs`（`/ultracode` 临时 overlay）
-> - `src-tauri/src/agent/custom.rs`（`.demiurge/agents/*.json` 自定义 Agent / team）
-> 相邻协作：`src-tauri/src/tools/mod.rs`（工具注册表与只读执行分支）、`src-tauri/src/agent/runner.rs`（主 loop 消费自定义 Agent）、`src-tauri/src/agent/budget.rs`（token 预算原语）、`src-tauri/src/lib.rs`（`/ultracode` 入口）。
+> - `backend/Demiurge-desktop/src/agent/subagent.rs`（只读子 Agent 运行时）
+> - `backend/Demiurge-desktop/src/tools/agent_spawn.rs`（`agent_spawn` 工具参数解析层）
+> - `backend/Demiurge-desktop/src/agent/ultracode.rs`（`/ultracode` 临时 overlay）
+> - `backend/Demiurge-desktop/src/agent/custom.rs`（`.demiurge/agents/*.json` 自定义 Agent / team）
+> 相邻协作：`backend/Demiurge-desktop/src/tools/mod.rs`（工具注册表与只读执行分支）、`backend/Demiurge-desktop/src/agent/runner.rs`（主 loop 消费自定义 Agent）、`backend/Demiurge-desktop/src/agent/budget.rs`（token 预算原语）、`backend/Demiurge-desktop/src/lib.rs`（`/ultracode` 入口）。
 
 ---
 

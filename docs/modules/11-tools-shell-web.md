@@ -4,14 +4,14 @@
 
 > 存档级技术原理文档。读者为协作开发者。
 > 覆盖源文件：
-> `src-tauri/src/tools/shell.rs`、`web_search.rs`、`web_fetch.rs`、`web_common.rs`、`safe_http.rs`、`http_get.rs`、`package_scripts.rs`、`open_path.rs`、`clipboard.rs`、`system_info.rs`、`tool_search.rs`、`execute_tool.rs`。
-> 注册表与分发位于 `src-tauri/src/tools/mod.rs`，入参校验位于 `src-tauri/src/tools/args.rs`。
+> `backend/Demiurge-desktop/src/tools/shell.rs`、`web_search.rs`、`web_fetch.rs`、`web_common.rs`、`safe_http.rs`、`http_get.rs`、`package_scripts.rs`、`open_path.rs`、`clipboard.rs`、`system_info.rs`、`tool_search.rs`、`execute_tool.rs`。
+> 注册表与分发位于 `backend/Demiurge-desktop/src/tools/mod.rs`，入参校验位于 `backend/Demiurge-desktop/src/tools/args.rs`。
 
 ---
 
 ## 1. 模块职责与定位
 
-工具子系统的总体设计原则写在 `src-tauri/src/tools/mod.rs:1`：
+工具子系统的总体设计原则写在 `backend/Demiurge-desktop/src/tools/mod.rs:1`：
 
 > 「每个工具 = 名称 + 描述 + 输入 JSON Schema + 权限/风险/并发/输出策略 + execute。作用域是结构性强制的（文件工具被物理限制在沙盒目录），不靠提示词。」
 
@@ -416,9 +416,9 @@ execute_tool(tool_name, args)  ── 校验是 deferred，再 match 路由到�
 ## 7. 与其他模块的交互边界
 
 - **AppState**：provider API、搜索 adapter 和 Exa 外部抓取仍用 `state.http`（共享 reqwest client）；direct `http_get` / `web_fetch` 为了逐跳 DNS pin 与禁代理而按 hop 建立受限 client。`shell`/`package_scripts` 用 `state.sandbox_dir`；联网工具的 key 经 `state.settings`，密钥水合/keyring 落盘由 `credentials.rs` 处理。
-- **runner（`src-tauri/src/agent/runner.rs`）**：执行后调 `source_link_count`（`runner.rs:105`）对 `web_search`/`web_fetch` 结果计来源链接数，生成 `source_quality_hint`（strong≥3 / limited≥1 / none=0），提示模型是否需要换查询或换 provider。
-- **mcp（`src-tauri/src/mcp.rs`）**：`execute()`（`mod.rs:874`）先判 `is_mcp_tool_name` 走 MCP 分发；`mcp_read_resource` 走标准 MCP client。而 Exa 的调用**不走** MCP client，是 `web_common::call_exa_mcp` 自己拼的 JSON-RPC HTTP 请求。
-- **connection_tests（`src-tauri/src/connection_tests.rs`）**：复用 settings/env 的 provider 与 key 解析逻辑做连接测试（`connection_tests.rs:279`）。
+- **runner（`backend/Demiurge-desktop/src/agent/runner.rs`）**：执行后调 `source_link_count`（`runner.rs:105`）对 `web_search`/`web_fetch` 结果计来源链接数，生成 `source_quality_hint`（strong≥3 / limited≥1 / none=0），提示模型是否需要换查询或换 provider。
+- **mcp（`backend/Demiurge-desktop/src/mcp.rs`）**：`execute()`（`mod.rs:874`）先判 `is_mcp_tool_name` 走 MCP 分发；`mcp_read_resource` 走标准 MCP client。而 Exa 的调用**不走** MCP client，是 `web_common::call_exa_mcp` 自己拼的 JSON-RPC HTTP 请求。
+- **connection_tests（`backend/Demiurge-desktop/src/connection_tests.rs`）**：复用 settings/env 的 provider 与 key 解析逻辑做连接测试（`connection_tests.rs:279`）。
 - **Settings UI**：通过 `shell_policy_state()`（`mod.rs:861`）读取 shell 策略快照渲染 Permission Rules 区域。
 
 ---

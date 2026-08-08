@@ -42,7 +42,7 @@ flowchart TD
 
 ## 三、全局状态 AppState
 
-后端围绕一个全局 `AppState`（`src-tauri/src/lib.rs`）组织，由 Tauri 在启动时 `manage`，所有 `#[tauri::command]` 通过 `State<'_, AppState>` 共享访问。它持有的核心运行时状态大致包括：
+后端仍围绕全局 `AppState`（`backend/Demiurge-desktop/src/lib.rs`）组织，由 `backend/Demiurge-desktop/src/starter.rs` 在启动时 `manage`。Session 入口已经迁入 `controller/session.rs` 并委托给 `biz/session.rs`；其他尚未迁移的 `#[tauri::command]` 仍通过 `State<'_, AppState>` 共享访问。它持有的核心运行时状态大致包括：
 
 - 会话与设置：`SessionStore`、`Settings`（含运行时水合出的内存态 secret）。
 - 项目所有权：`sandbox_dir` 保存当前活动会话解析后的项目根；`Session.workspace_path` 是持久化来源。
@@ -66,7 +66,7 @@ Session.workspace_path
 
 ## 四、命令/事件桥
 
-前端经 `src/lib/api.ts` 的 typed 封装与后端交互，分为两个方向：
+前端经 `frontend/src/lib/api.ts` 的 typed 封装与后端交互，分为两个方向：
 
 **命令（前端 → 后端 `invoke`）** 按用途可分为若干类：
 

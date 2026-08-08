@@ -4,10 +4,10 @@
 
 > 授权边界：外部 server 的 annotation 是不可信提示，只用于 UI 展示与并发提示。本地 `authorization_risk` 保证动态工具只能落入 `External`/`Privileged`，默认权限固定为 `Ask/Once`；Auto 会先尊重完整本地规则链。
 
-> 主源文件：`src-tauri/src/mcp/mod.rs`
-> 关联文件：`src-tauri/src/tools/mod.rs`、`src-tauri/src/agent/runner.rs`、`src-tauri/src/permission/mod.rs`、`src-tauri/src/credentials.rs`、`src-tauri/src/store/mod.rs`、`src-tauri/src/lib.rs`
+> 主源文件：`backend/Demiurge-desktop/src/mcp/mod.rs`
+> 关联文件：`backend/Demiurge-desktop/src/tools/mod.rs`、`backend/Demiurge-desktop/src/agent/runner.rs`、`backend/Demiurge-desktop/src/permission/mod.rs`、`backend/Demiurge-desktop/src/credentials.rs`、`backend/Demiurge-desktop/src/store/mod.rs`、`backend/Demiurge-desktop/src/lib.rs`
 
-本模块实现了一个 **Model Context Protocol（MCP）客户端运行时**，让 Demiurge 能够把外部 MCP server 暴露的工具/资源接入到自身的工具注册表与权限体系中。第一阶段（“first slice”）刻意把传输范围收窄到**本地 stdio server**，并复用 Demiurge 既有的权限门，而不是引入新的安全模型。这一设计意图在文件头注释中写得很明确（`src-tauri/src/mcp/mod.rs:1-5`）。
+本模块实现了一个 **Model Context Protocol（MCP）客户端运行时**，让 Demiurge 能够把外部 MCP server 暴露的工具/资源接入到自身的工具注册表与权限体系中。第一阶段（“first slice”）刻意把传输范围收窄到**本地 stdio server**，并复用 Demiurge 既有的权限门，而不是引入新的安全模型。这一设计意图在文件头注释中写得很明确（`backend/Demiurge-desktop/src/mcp/mod.rs:1-5`）。
 
 ---
 
@@ -21,7 +21,7 @@ MCP 集成在整个 Agent 引擎中承担“**外部能力适配层**”的角�
 - **提示与授权分离**：保留 MCP 工具的 annotation（`readOnlyHint`/`destructiveHint`/`openWorldHint`）用于展示与并发提示，同时独立计算带 `External`/`Privileged` 下限的本地授权风险。
 - **密钥治理**：与 `credentials` 模块协作，把标记为 `secret` 的环境变量存入操作系统 keyring，并在落盘配置时脱敏。
 
-第一阶段的边界由 `connect_stdio_server` 强制（`src-tauri/src/mcp/mod.rs:472-474`）：`transport` 只接受 `Stdio`，其它枚举值在代码层面尚未定义——`McpTransportKind` 当前**仅有 `Stdio` 一个变体**（`src-tauri/src/mcp/mod.rs:44-48`）。因此“第一阶段”不是临时开关，而是类型系统层面的真实约束；HTTP/SSE 等远程传输属于**预留扩展点，尚未实现**。
+第一阶段的边界由 `connect_stdio_server` 强制（`backend/Demiurge-desktop/src/mcp/mod.rs:472-474`）：`transport` 只接受 `Stdio`，其它枚举值在代码层面尚未定义——`McpTransportKind` 当前**仅有 `Stdio` 一个变体**（`backend/Demiurge-desktop/src/mcp/mod.rs:44-48`）。因此“第一阶段”不是临时开关，而是类型系统层面的真实约束；HTTP/SSE 等远程传输属于**预留扩展点，尚未实现**。
 
 ---
 
@@ -40,7 +40,7 @@ MCP 集成在整个 Agent 引擎中承担“**外部能力适配层**”的角�
 - `normalized_name()`：调用 `normalize_segment(name, 32)`，产出可用于标识符的规整名。
 - `signature()`（`mcp/mod.rs:78-80`）：把整个 config 序列化为 JSON 字符串作为“配置指纹”。这是**幂等刷新的核心**——见下文 `ensure_initialized`。
 
-这些配置存放在 `Settings.mcp_servers`（`src-tauri/src/store/mod.rs:294-295`），因此 MCP server 列表随应用设置一起持久化。
+这些配置存放在 `Settings.mcp_servers`（`backend/Demiurge-desktop/src/store/mod.rs:294-295`），因此 MCP server 列表随应用设置一起持久化。
 
 ### 2.2 运行时类型（仅存于内存）
 
@@ -80,9 +80,9 @@ MCP 集成在整个 Agent 引擎中承担“**外部能力适配层**”的角�
 
 `ensure_initialized`（`mcp/mod.rs:307-374`）是整个生命周期的中枢，被多处调用以保证“调用前一定已对齐”：
 
-- runner 在每个 turn 开始时调用（`src-tauri/src/agent/runner.rs:156`）；
-- `mcp_read_resource` 工具执行前调用（`src-tauri/src/tools/mod.rs:868`）；
-- 前端打开 MCP 面板（`mcp_panel_state` 命令）时调用（`src-tauri/src/lib.rs:736`）。
+- runner 在每个 turn 开始时调用（`backend/Demiurge-desktop/src/agent/runner.rs:156`）；
+- `mcp_read_resource` 工具执行前调用（`backend/Demiurge-desktop/src/tools/mod.rs:868`）；
+- 前端打开 MCP 面板（`mcp_panel_state` 命令）时调用（`backend/Demiurge-desktop/src/lib.rs:736`）。
 
 它的算法是**基于配置指纹的差量对齐**，而非粗暴重连：
 
@@ -184,7 +184,7 @@ MCP 集成在整个 Agent 引擎中承担“**外部能力适配层**”的角�
 - `output_policy`：`TruncateForUi`。
 - `parameters`：直接用发现到的 `input_schema`。
 
-注册表合并点在 `tools::registry_for_state`（`src-tauri/src/tools/mod.rs:727-730`）：
+注册表合并点在 `tools::registry_for_state`（`backend/Demiurge-desktop/src/tools/mod.rs:727-730`）：
 
 ```rust
 pub fn registry_for_state(state: &crate::AppState) -> Vec<ToolDefinition> {
@@ -211,7 +211,7 @@ pub fn registry_for_state(state: &crate::AppState) -> Vec<ToolDefinition> {
 
 ### 3.7 工具调用分发：`call_tool`
 
-runner 在执行阶段调用 `tools::execute`（`src-tauri/src/tools/mod.rs:874-877`），其第一步即判定：
+runner 在执行阶段调用 `tools::execute`（`backend/Demiurge-desktop/src/tools/mod.rs:874-877`），其第一步即判定：
 
 ```rust
 if crate::mcp::is_mcp_tool_name(name) {
@@ -233,7 +233,7 @@ if crate::mcp::is_mcp_tool_name(name) {
 
 ### 3.9 资源读取：`read_resource`
 
-`read_resource`（`mcp/mod.rs:649-675`）按 server name 查找运行时（必须 `Connected` 且有 handle），发 `resources/read` 请求并格式化。它通过原生工具 `mcp_read_resource`（参数 `server_name`/`uri`）对模型暴露——见 `read_mcp_resource_tool`（`src-tauri/src/tools/mod.rs:865-870`），该工具名也列在 `CORE_TOOL_NAMES`（`tools/mod.rs:134`）。这是个**手动按需读取**入口：发现阶段只列资源元数据（`resources/list`），真正读内容需要模型显式调用此工具。
+`read_resource`（`mcp/mod.rs:649-675`）按 server name 查找运行时（必须 `Connected` 且有 handle），发 `resources/read` 请求并格式化。它通过原生工具 `mcp_read_resource`（参数 `server_name`/`uri`）对模型暴露——见 `read_mcp_resource_tool`（`backend/Demiurge-desktop/src/tools/mod.rs:865-870`），该工具名也列在 `CORE_TOOL_NAMES`（`tools/mod.rs:134`）。这是个**手动按需读取**入口：发现阶段只列资源元数据（`resources/list`），真正读内容需要模型显式调用此工具。
 
 ---
 
@@ -263,7 +263,7 @@ if crate::mcp::is_mcp_tool_name(name) {
 
 ### 4.1 与 runner
 
-runner（`src-tauri/src/agent/runner.rs`）是唯一的工具执行驱动。它在 `run_turn` 入口调 `ensure_initialized`（runner.rs:156），随后通过 `tools::definition_for_state`/`permission_policy_for_state`/`permission_summary_for_state`/`execute` 间接触达 MCP，**不直接 import `mcp` 的执行函数**。runner 对 MCP 工具与原生工具走完全相同的代码路径：`tool_start` 事件、权限门、`execute`、`tool_end` 事件（runner.rs:440-579）。
+runner（`backend/Demiurge-desktop/src/agent/runner.rs`）是唯一的工具执行驱动。它在 `run_turn` 入口调 `ensure_initialized`（runner.rs:156），随后通过 `tools::definition_for_state`/`permission_policy_for_state`/`permission_summary_for_state`/`execute` 间接触达 MCP，**不直接 import `mcp` 的执行函数**。runner 对 MCP 工具与原生工具走完全相同的代码路径：`tool_start` 事件、权限门、`execute`、`tool_end` 事件（runner.rs:440-579）。
 
 ### 4.2 与 tools 注册表
 
@@ -274,7 +274,7 @@ tools 模块是 MCP 与 runner 之间的“接缝”：
 
 ### 4.3 与权限模块
 
-`tool_definition` 把 MCP 工具的 `permission.effect` 钉死为 `Ask`，但**最终是否弹窗取决于权限模式**（`permission::decide_for_mode`，`src-tauri/src/permission/mod.rs:178-240`）：
+`tool_definition` 把 MCP 工具的 `permission.effect` 钉死为 `Ask`，但**最终是否弹窗取决于权限模式**（`permission::decide_for_mode`，`backend/Demiurge-desktop/src/permission/mod.rs:178-240`）：
 
 | 模式 | 对 MCP 工具的效果 |
 |------|-------------------|
@@ -297,9 +297,9 @@ Tauri 命令 `mcp_panel_state`（lib.rs:735-737）、`mcp_refresh`（lib.rs:744-
 
 这是 MCP 集成最关键的安全设计，跨 `mcp`/`credentials`/`store` 三个模块：
 
-1. **写入**：`save_settings` 时，`save_mcp_env_secrets`（`src-tauri/src/credentials.rs:193-202`）遍历所有 `secret=true` 的 env，调 `save_mcp_env_secret` 写进 OS keyring。
+1. **写入**：`save_settings` 时，`save_mcp_env_secrets`（`backend/Demiurge-desktop/src/credentials.rs:193-202`）遍历所有 `secret=true` 的 env，调 `save_mcp_env_secret` 写进 OS keyring。
 2. **keyring 账户命名**：`mcp_env_account`（credentials.rs:81-89）用 `mcp_env_{server段}_{key段}_{hash}` 作为账户名，其中 hash 是 `server\nkey` 的 FNV-1a 64 位（`stable_hash_hex`，credentials.rs:113-120）。加 hash 是为了在 server 名/key 被截断或规整后仍能唯一区分。单测 `mcp_env_account_is_stable_and_sanitized`（credentials.rs:292-296）验证其稳定与脱敏。
-3. **落盘脱敏**：`store::save_settings`（`src-tauri/src/store/mod.rs:445-447`）调用 `redacted_settings`，对每个 `secret=true` 的 env **清空 `value`**（store/mod.rs:435-438）后才写磁盘。单测 `save_settings_does_not_persist_secret_mcp_env_values`（store/mod.rs:570-595）断言 `settings.json` 不含明文且持久化后 `env[0].value == ""`。
+3. **落盘脱敏**：`store::save_settings`（`backend/Demiurge-desktop/src/store/mod.rs:445-447`）调用 `redacted_settings`，对每个 `secret=true` 的 env **清空 `value`**（store/mod.rs:435-438）后才写磁盘。单测 `save_settings_does_not_persist_secret_mcp_env_values`（store/mod.rs:570-595）断言 `settings.json` 不含明文且持久化后 `env[0].value == ""`。
 4. **水合**：应用启动时 `hydrate_or_migrate_settings`（credentials.rs:205-286）把 keyring 中的 secret 读回 `env.value`（credentials.rs:261-275）。还兼容**历史明文配置**：若发现旧版 settings.json 里残留明文 secret，会迁移进 keyring 并重写文件（`has_legacy_mcp_env` 分支）。
 5. **进程注入**：`connect_stdio_server` 注入的是水合后的明文 `env.value`（mcp/mod.rs:487-491）——明文只活在内存与子进程环境块里，从不落盘。
 

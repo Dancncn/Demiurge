@@ -29,8 +29,8 @@ P1 发布阻断队列已经关闭。显式 Bypass 模式、stdio 子进程本身
 - 对三种流式适配路径检查网络分片、事件边界、流尾、错误、usage、工具参数和终止语义。
 - 逐份更新仓库内 Markdown，并检查相对链接、陈旧能力描述和测试基线。
 - 执行 `npm run build`：通过；Vite 对约 1.1 MB Live2D vendor chunk 给出非阻断体积警告。
-- 执行 `cargo test --manifest-path src-tauri/Cargo.toml --no-fail-fast`：255 passed，0 failed。
-- 执行 `cargo fmt --manifest-path src-tauri/Cargo.toml -- --check`：通过。
+- 执行 `cargo test --manifest-path backend/Demiurge-desktop/Cargo.toml --no-fail-fast`：255 passed，0 failed。
+- 执行 `cargo fmt --manifest-path backend/Demiurge-desktop/Cargo.toml -- --check`：通过。
 - Markdown 覆盖核验：35/35 文件均出现在工作区变更列表。
 - 禁用名称大小写不敏感全量扫描：0 命中。
 - Markdown 相对链接检查：0 个失效目标；`git diff --check` 通过。
@@ -48,11 +48,11 @@ P1 发布阻断队列已经关闭。显式 Bypass 模式、stdio 子进程本身
 
 **证据**：
 
-- `src-tauri/src/pack/manifest.rs:185-194`：可导入清单包含权限映射。
-- `src-tauri/src/pack/manifest.rs:531-540`：权限偏好原样返回。
-- `src-tauri/src/pack/manifest.rs:705-732`：运行时校验没有验证权限键、值或是否放宽默认策略。
-- `src-tauri/src/permission/mod.rs:156-186`、`253-299`：角色包 overlay 可把值直接转换为 Allow。
-- `src-tauri/src/agent/runner.rs:526-588`：Allow 决策跳过用户确认。
+- `backend/Demiurge-desktop/src/pack/manifest.rs:185-194`：可导入清单包含权限映射。
+- `backend/Demiurge-desktop/src/pack/manifest.rs:531-540`：权限偏好原样返回。
+- `backend/Demiurge-desktop/src/pack/manifest.rs:705-732`：运行时校验没有验证权限键、值或是否放宽默认策略。
+- `backend/Demiurge-desktop/src/permission/mod.rs:156-186`、`253-299`：角色包 overlay 可把值直接转换为 Allow。
+- `backend/Demiurge-desktop/src/agent/runner.rs:526-588`：Allow 决策跳过用户确认。
 
 **建议**：角色包只允许收紧默认权限，例如 Deny/AskEveryTime；任何放宽都应由独立 UI 展示差异、显式确认，并绑定包内容指纹。未知工具和未知策略必须拒绝。
 
@@ -66,10 +66,10 @@ P1 发布阻断队列已经关闭。显式 Bypass 模式、stdio 子进程本身
 
 **证据**：
 
-- `src-tauri/src/lib.rs:54-55`：只有全局 `HashMap<String, PermissionRule>`，没有 session id。
-- `src-tauri/src/permission/mod.rs:161-177`、`343-355`：Session 只以工具名为键；Project 保存时只使用 app data。
-- `src-tauri/src/permission/mod.rs:561-568`：所有 Project 规则固定写同一 `permissions.json`。
-- `src-tauri/src/lib.rs:1508-1586`：新建、切换、删除会话不切换或清理专属规则桶。
+- `backend/Demiurge-desktop/src/lib.rs:54-55`：只有全局 `HashMap<String, PermissionRule>`，没有 session id。
+- `backend/Demiurge-desktop/src/permission/mod.rs:161-177`、`343-355`：Session 只以工具名为键；Project 保存时只使用 app data。
+- `backend/Demiurge-desktop/src/permission/mod.rs:561-568`：所有 Project 规则固定写同一 `permissions.json`。
+- `backend/Demiurge-desktop/src/lib.rs:1508-1586`：新建、切换、删除会话不切换或清理专属规则桶。
 
 **建议**：Session 规则按 `(session_id, tool)` 分桶；Project 规则按 canonical workspace identity 分桶；审计记录同时包含 session、workspace 和实际能力。
 
@@ -83,10 +83,10 @@ P1 发布阻断队列已经关闭。显式 Bypass 模式、stdio 子进程本身
 
 **证据**：
 
-- `src-tauri/src/lib.rs:58-59`：全局 undo 栈。
-- `src-tauri/src/tools/edit_file.rs:10-18`：entry 只有相对 path 与 before/after。
-- `src-tauri/src/tools/edit_file.rs:128-140`：撤销按当前 `sandbox_dir` 重新解析相对路径。
-- `src-tauri/src/tools/edit_file.rs:425-449`：写入记录时没有保存工作区身份。
+- `backend/Demiurge-desktop/src/lib.rs:58-59`：全局 undo 栈。
+- `backend/Demiurge-desktop/src/tools/edit_file.rs:10-18`：entry 只有相对 path 与 before/after。
+- `backend/Demiurge-desktop/src/tools/edit_file.rs:128-140`：撤销按当前 `sandbox_dir` 重新解析相对路径。
+- `backend/Demiurge-desktop/src/tools/edit_file.rs:425-449`：写入记录时没有保存工作区身份。
 
 **建议**：entry 保存 canonical workspace/root、目标真实路径和内容摘要；撤销前要求当前工作区完全一致；工作区切换时清理或过滤栈。
 
@@ -100,9 +100,9 @@ P1 发布阻断队列已经关闭。显式 Bypass 模式、stdio 子进程本身
 
 **证据**：
 
-- `src-tauri/src/tools/open_path.rs:16-22`：Windows 使用 `cmd /C start`。
-- `src-tauri/src/tools/open_path.rs:34-48`：只检查 UNC/协议，没有拒绝命令元字符。
-- `src-tauri/src/lib.rs:855`、`1397`、`1611`：角色包、技能和工作区打开命令复用该逻辑。
+- `backend/Demiurge-desktop/src/tools/open_path.rs:16-22`：Windows 使用 `cmd /C start`。
+- `backend/Demiurge-desktop/src/tools/open_path.rs:34-48`：只检查 UNC/协议，没有拒绝命令元字符。
+- `backend/Demiurge-desktop/src/lib.rs:855`、`1397`、`1611`：角色包、技能和工作区打开命令复用该逻辑。
 
 **建议**：改用 `ShellExecuteW`、安全系统 opener 或对应桌面插件，不经过命令解释器；加入全部元字符、引号、空格、URL query 和本地路径回归测试。
 
@@ -116,9 +116,9 @@ P1 发布阻断队列已经关闭。显式 Bypass 模式、stdio 子进程本身
 
 **证据**：
 
-- `src-tauri/src/tools/http_get.rs:34-82`、`web_fetch.rs:53-83`、`222-238`：仅校验 http/https scheme。
-- `src-tauri/src/tools/mod.rs:400-422`：两个工具默认 Allow，却声明只访问公开 URL。
-- `src-tauri/src/lib.rs:2199-2202`：共享客户端没有逐跳私网重定向策略。
+- `backend/Demiurge-desktop/src/tools/http_get.rs:34-82`、`web_fetch.rs:53-83`、`222-238`：仅校验 http/https scheme。
+- `backend/Demiurge-desktop/src/tools/mod.rs:400-422`：两个工具默认 Allow，却声明只访问公开 URL。
+- `backend/Demiurge-desktop/src/lib.rs:2199-2202`：共享客户端没有逐跳私网重定向策略。
 
 **建议**：首跳与每次重定向都拒绝 loopback、私网、链路本地、组播、未指定/保留地址；连接前复核实际 DNS 解析结果；本机开发服务使用独立显式授权。在闭环前先把工具改为 Ask。
 
@@ -132,10 +132,10 @@ P1 发布阻断队列已经关闭。显式 Bypass 模式、stdio 子进程本身
 
 **证据**：
 
-- `src-tauri/src/pack/live2d.rs:150-188`：从不可信模型 JSON 读取资源引用。
-- `src-tauri/src/pack/live2d.rs:203-268`：直接 `dest.join(rel)` 后 rename，没有绝对路径/父目录/containment 校验。
-- `src-tauri/src/pack/live2d.rs:367-390`：已有安全解析器，但导入规范化阶段没有复用。
-- `src-tauri/src/pack/live2d.rs:73-99`：验证新模型前先删除旧目录。
+- `backend/Demiurge-desktop/src/pack/live2d.rs:150-188`：从不可信模型 JSON 读取资源引用。
+- `backend/Demiurge-desktop/src/pack/live2d.rs:203-268`：直接 `dest.join(rel)` 后 rename，没有绝对路径/父目录/containment 校验。
+- `backend/Demiurge-desktop/src/pack/live2d.rs:367-390`：已有安全解析器，但导入规范化阶段没有复用。
+- `backend/Demiurge-desktop/src/pack/live2d.rs:73-99`：验证新模型前先删除旧目录。
 
 **建议**：只允许 Normal path component，拒绝根、盘符、`..` 和链接逃逸；在独立临时目录完成复制、重写和全量验证，成功后原子替换。
 
@@ -149,9 +149,9 @@ P1 发布阻断队列已经关闭。显式 Bypass 模式、stdio 子进程本身
 
 **证据**：
 
-- `src-tauri/src/tools/execute_tool.rs:20-28`：一个 wrapper 分派多种敏感能力。
-- `src-tauri/src/tools/mod.rs:598-611`：注册表只有统一权限策略。
-- `src-tauri/src/agent/runner.rs:526-565`、`permission/mod.rs:302-349`：按外层名称决策和记忆。
+- `backend/Demiurge-desktop/src/tools/execute_tool.rs:20-28`：一个 wrapper 分派多种敏感能力。
+- `backend/Demiurge-desktop/src/tools/mod.rs:598-611`：注册表只有统一权限策略。
+- `backend/Demiurge-desktop/src/agent/runner.rs:526-565`、`permission/mod.rs:302-349`：按外层名称决策和记忆。
 
 **建议**：权限/审计身份使用 `execute_tool:<actual_tool_name>`，并使用目标工具自己的风险、预览和 affected paths；或禁止 wrapper 使用 Once 之外的记忆作用域。
 
@@ -165,9 +165,9 @@ P1 发布阻断队列已经关闭。显式 Bypass 模式、stdio 子进程本身
 
 **证据**：
 
-- `src-tauri/src/pack/manifest.rs:482-484`：`pack_dir` 只是 `packs_dir.join(id)`。
-- `src-tauri/src/pack/files.rs:106-185`：列表/读取把传入 id 作为新的 base。
-- `src-tauri/src/lib.rs:877-894`：IPC id 直接传入。
+- `backend/Demiurge-desktop/src/pack/manifest.rs:482-484`：`pack_dir` 只是 `packs_dir.join(id)`。
+- `backend/Demiurge-desktop/src/pack/files.rs:106-185`：列表/读取把传入 id 作为新的 base。
+- `backend/Demiurge-desktop/src/lib.rs:877-894`：IPC id 直接传入。
 
 **建议**：在 IPC 边界统一验证 id，只允许 packs 根的直接子目录；canonicalize 根和目标并验证 direct child；所有 pack API 复用同一受检解析器。
 
@@ -181,10 +181,10 @@ P1 发布阻断队列已经关闭。显式 Bypass 模式、stdio 子进程本身
 
 **证据**：
 
-- `src/App.tsx:511-534`：sessions/workspace 刷新无请求序号，workspace change fire-and-forget 刷会话。
-- `src/App.tsx:678-697`：tool-end 启动无 session 归属的工作区刷新。
-- `src/App.tsx:914-945`：会话选择/删除通过多个独立请求拼快照，无 navigation lock/epoch。
-- `src/components/Sidebar.tsx:188-195`：只按 Agent busy 禁用，会话导航本身不互斥。
+- `frontend/src/App.tsx:511-534`：sessions/workspace 刷新无请求序号，workspace change fire-and-forget 刷会话。
+- `frontend/src/App.tsx:678-697`：tool-end 启动无 session 归属的工作区刷新。
+- `frontend/src/App.tsx:914-945`：会话选择/删除通过多个独立请求拼快照，无 navigation lock/epoch。
+- `frontend/src/components/Sidebar.tsx:188-195`：只按 Agent busy 禁用，会话导航本身不互斥。
 
 **建议**：引入单调 navigation epoch 和 `navigationPending`；最好由后端原子返回 `{session_id, sessions, history, workspace, goal}`，提交前核对 id；所有晚到刷新丢弃。
 
@@ -198,8 +198,8 @@ P1 发布阻断队列已经关闭。显式 Bypass 模式、stdio 子进程本身
 
 **证据**：
 
-- `src/components/BranchSwitcher.tsx:19-64`：branches 跨打开保留，load 开始不清空、不绑定 `workspace.path`。
-- `src/components/BranchSwitcher.tsx:82-114`：切换只传 branch name，loading 时旧项仍可点击。
+- `frontend/src/components/BranchSwitcher.tsx:19-64`：branches 跨打开保留，load 开始不清空、不绑定 `workspace.path`。
+- `frontend/src/components/BranchSwitcher.tsx:82-114`：切换只传 branch name，loading 时旧项仍可点击。
 
 **建议**：项目变化时关闭菜单并清缓存；loading 时不展示/禁用旧项；响应绑定 generation；后端同时验证 expected workspace path。
 
@@ -213,10 +213,10 @@ P1 发布阻断队列已经关闭。显式 Bypass 模式、stdio 子进程本身
 
 **证据**：
 
-- `src-tauri/src/lib.rs:368`：send 开始捕获 A 并登记 turn。
-- `src-tauri/src/agent/runner.rs:182-204`：长初始化后重新读取当前 active session。
-- `src-tauri/src/workspace.rs:242-255`：busy 时仍允许切到同工作区会话。
-- `src-tauri/src/lib.rs:1530-1545`：该切换可以成功。
+- `backend/Demiurge-desktop/src/lib.rs:368`：send 开始捕获 A 并登记 turn。
+- `backend/Demiurge-desktop/src/agent/runner.rs:182-204`：长初始化后重新读取当前 active session。
+- `backend/Demiurge-desktop/src/workspace.rs:242-255`：busy 时仍允许切到同工作区会话。
+- `backend/Demiurge-desktop/src/lib.rs:1530-1545`：该切换可以成功。
 
 **建议**：把 begin_turn 捕获的 session id 显式传给 runner；整个 turn 不再从全局 active 推断目标；用可控初始化延迟增加并发回归。
 
@@ -230,8 +230,8 @@ P1 发布阻断队列已经关闭。显式 Bypass 模式、stdio 子进程本身
 
 **证据**：
 
-- `src-tauri/src/mcp/mod.rs:833-916`：外部注解映射为 `ToolRisk::ReadOnly`，尽管默认 permission 是 Ask。
-- `src-tauri/src/permission/mod.rs:189-209`：Auto 对所有 ReadOnly 直接 Allow。
+- `backend/Demiurge-desktop/src/mcp/mod.rs:833-916`：外部注解映射为 `ToolRisk::ReadOnly`，尽管默认 permission 是 Ask。
+- `backend/Demiurge-desktop/src/permission/mod.rs:189-209`：Auto 对所有 ReadOnly 直接 Allow。
 
 **建议**：外部动态工具风险下限固定 External/Privileged；注解只影响 UI/并发提示，不能降低权限；Auto 必须先尊重显式 Ask。
 
@@ -243,9 +243,9 @@ P1 发布阻断队列已经关闭。显式 Bypass 模式、stdio 子进程本身
 
 **证据**：
 
-- `src-tauri/src/llm/gemini.rs:67-93`：自有 `Vec<u8>` 只按 LF 拆单行 data，EOF 不 flush。
-- `src-tauri/src/llm/gemini.rs:223-230`：JSON 失败静默返回。
-- `src-tauri/src/llm/mod.rs:520-523`：空 finish 被归一为 stop。
+- `backend/Demiurge-desktop/src/llm/gemini.rs:67-93`：自有 `Vec<u8>` 只按 LF 拆单行 data，EOF 不 flush。
+- `backend/Demiurge-desktop/src/llm/gemini.rs:223-230`：JSON 失败静默返回。
+- `backend/Demiurge-desktop/src/llm/mod.rs:520-523`：空 finish 被归一为 stop。
 
 **建议**：复用公共 `SseDecoder`；显式处理 event/data error；JSON 格式错误返回受控诊断；增加无尾换行、多行 data、error、逐字节分片契约测试。
 
@@ -255,9 +255,9 @@ P1 发布阻断队列已经关闭。显式 Bypass 模式、stdio 子进程本身
 
 **证据**：
 
-- `src-tauri/src/llm/openai.rs:47-72`、`anthropic.rs:73-98`：EOF 后直接 finish，不要求协议终止。
-- `src-tauri/src/llm/sse.rs:16-20`、`40-42`、`94-109`：行/事件缓冲无字节上限。
-- `src-tauri/src/llm/mod.rs:520-523`：缺 finish reason 默认 stop。
+- `backend/Demiurge-desktop/src/llm/openai.rs:47-72`、`anthropic.rs:73-98`：EOF 后直接 finish，不要求协议终止。
+- `backend/Demiurge-desktop/src/llm/sse.rs:16-20`、`40-42`、`94-109`：行/事件缓冲无字节上限。
+- `backend/Demiurge-desktop/src/llm/mod.rs:520-523`：缺 finish reason 默认 stop。
 
 **建议**：跟踪协议 terminal marker；用户取消除外，缺终止条件返回 incomplete/error；设置单行、单事件、累计回复硬字节上限。
 
@@ -267,7 +267,7 @@ P1 发布阻断队列已经关闭。显式 Bypass 模式、stdio 子进程本身
 
 **证据**：
 
-- `src-tauri/src/tools/http_get.rs:51-56`、`web_fetch.rs:80-102`：`resp.text().await` 后才截断。
+- `backend/Demiurge-desktop/src/tools/http_get.rs:51-56`、`web_fetch.rs:80-102`：`resp.text().await` 后才截断。
 
 **建议**：统一有界响应读取器；预检 Content-Length，流式读取按字节硬截止，达到上限立即关闭响应；转换前后都保留上限。
 
@@ -277,9 +277,9 @@ P1 发布阻断队列已经关闭。显式 Bypass 模式、stdio 子进程本身
 
 **证据**：
 
-- `src-tauri/src/llm/openai.rs:33-49`、`anthropic.rs:58-75`、`gemini.rs:54-71`：send/next await 不可唤醒取消。
-- `src-tauri/src/agent/runner.rs:581-588`：进入 `tools::execute().await` 后不再监听。
-- `src-tauri/src/tools/shell.rs:377`、`mcp/mod.rs:437`：没有统一取消上下文。
+- `backend/Demiurge-desktop/src/llm/openai.rs:33-49`、`anthropic.rs:58-75`、`gemini.rs:54-71`：send/next await 不可唤醒取消。
+- `backend/Demiurge-desktop/src/agent/runner.rs:581-588`：进入 `tools::execute().await` 后不再监听。
+- `backend/Demiurge-desktop/src/tools/shell.rs:377`、`mcp/mod.rs:437`：没有统一取消上下文。
 
 **建议**：使用 `CancellationToken`/watch/Notify；网络 send/next、外部请求和工具执行使用 `tokio::select!`；shell 取消时终止整棵进程树。
 
@@ -289,8 +289,8 @@ P1 发布阻断队列已经关闭。显式 Bypass 模式、stdio 子进程本身
 
 **证据**：
 
-- `src-tauri/src/tools/shell.rs:395-416`：stdout/stderr pipe 后只 try_wait，退出后才 `wait_with_output`。
-- `src-tauri/src/tools/shell.rs:768`：截断发生在完整收集之后。
+- `backend/Demiurge-desktop/src/tools/shell.rs:395-416`：stdout/stderr pipe 后只 try_wait，退出后才 `wait_with_output`。
+- `backend/Demiurge-desktop/src/tools/shell.rs:768`：截断发生在完整收集之后。
 
 **建议**：改异步子进程并发读取两路输出；用有界 ring buffer 持续排空；将超时、取消、进程树终止放进同一 select。
 
@@ -300,8 +300,8 @@ P1 发布阻断队列已经关闭。显式 Bypass 模式、stdio 子进程本身
 
 **证据**：
 
-- `src-tauri/src/store/mod.rs:611-646`、`638`、`677`：直接 `fs::write`，解析失败回退。
-- `src-tauri/src/lib.rs:131-139`：后台保存错误被丢弃，序号仍标为已写。
+- `backend/Demiurge-desktop/src/store/mod.rs:611-646`、`638`、`677`：直接 `fs::write`，解析失败回退。
+- `backend/Demiurge-desktop/src/lib.rs:131-139`：后台保存错误被丢弃，序号仍标为已写。
 
 **建议**：同目录临时文件 + flush/fsync + 原子替换；保留最近备份；损坏文件隔离并向 UI 报告；应用退出等待保存队列。
 
@@ -311,8 +311,8 @@ P1 发布阻断队列已经关闭。显式 Bypass 模式、stdio 子进程本身
 
 **证据**：
 
-- `src-tauri/src/mcp/mod.rs:341-359`：检查后释放锁再 await，无 Pending/每服务互斥。
-- `src-tauri/src/mcp/mod.rs:483-524`：child 无 kill_on_drop，失败路径无显式 kill。
+- `backend/Demiurge-desktop/src/mcp/mod.rs:341-359`：检查后释放锁再 await，无 Pending/每服务互斥。
+- `backend/Demiurge-desktop/src/mcp/mod.rs:483-524`：child 无 kill_on_drop，失败路径无显式 kill。
 
 **建议**：每 server 使用 Connecting 状态/异步互斥；RAII 构建器只在完整成功后转移 child；启用 kill_on_drop 并在错误路径 kill + wait。
 
@@ -322,8 +322,8 @@ P1 发布阻断队列已经关闭。显式 Bypass 模式、stdio 子进程本身
 
 **证据**：
 
-- `src/App.tsx:190-222`：`buildHistory` 对每个 tool call 写死 `status: "done"`。
-- `src/components/ToolCard.tsx:120-131`：done 映射为“已编辑”。
+- `frontend/src/App.tsx:190-222`：`buildHistory` 对每个 tool call 写死 `status: "done"`。
+- `frontend/src/components/ToolCard.tsx:120-131`：done 映射为“已编辑”。
 
 后端历史只保存 result 文本，缺 ok/denied/duration/error metadata，前端无法可靠重建。字符串匹配不是长期方案。
 
@@ -335,8 +335,8 @@ P1 发布阻断队列已经关闭。显式 Bypass 模式、stdio 子进程本身
 
 **证据**：
 
-- `src/components/WorkspaceExplorer.tsx:74-117`：directory/changes 响应无 workspace generation。
-- `src/components/WorkspaceExplorer.tsx:146-166`：preview 无 request id，晚到 A 可覆盖 B。
+- `frontend/src/components/WorkspaceExplorer.tsx:74-117`：directory/changes 响应无 workspace generation。
+- `frontend/src/components/WorkspaceExplorer.tsx:146-166`：preview 无 request id，晚到 A 可覆盖 B。
 
 **建议**：组件维护 generationRef/previewRequestRef；捕获 `{workspace.path, generation, relativePath}`，全部仍匹配才提交。
 
@@ -346,9 +346,9 @@ P1 发布阻断队列已经关闭。显式 Bypass 模式、stdio 子进程本身
 
 **证据**：
 
-- `src/App.tsx:1688`、`MessageList.tsx:72-118`、`174`：内联 retry handler 破坏 memo。
-- `src/components/MessageList.tsx:148`：每次 items 变化都 smooth scroll。
-- `src/components/MarkdownRenderer.tsx:37`、`MermaidBlock.tsx:30-45`：流式阶段每次 chart 变化都 parse/render。
+- `frontend/src/App.tsx:1688`、`MessageList.tsx:72-118`、`174`：内联 retry handler 破坏 memo。
+- `frontend/src/components/MessageList.tsx:148`：每次 items 变化都 smooth scroll。
+- `frontend/src/components/MarkdownRenderer.tsx:37`、`MermaidBlock.tsx:30-45`：流式阶段每次 chart 变化都 parse/render。
 
 **建议**：稳定 handler、memo ToolCard/历史子树；只在用户原本接近底部时自动滚；流式帧用 auto；Mermaid 在消息完成后只渲染一次。
 
@@ -358,8 +358,8 @@ P1 发布阻断队列已经关闭。显式 Bypass 模式、stdio 子进程本身
 
 **证据**：
 
-- `src/App.tsx:606-614`：只要已有任意正文就丢弃 done 完整文本。
-- `src/App.tsx` 的 `onAssistantDone`：已有累计正文时仍保留累计值，而不是使用非空 done 正文复核/修复。
+- `frontend/src/App.tsx:606-614`：只要已有任意正文就丢弃 done 完整文本。
+- `frontend/src/App.tsx` 的 `onAssistantDone`：已有累计正文时仍保留累计值，而不是使用非空 done 正文复核/修复。
 
 **建议**：非空 done 文本作为 canonical value，并在不一致时记录诊断；后续 reducer 还应按 turn id 处理重复与乱序事件。
 
@@ -369,8 +369,8 @@ P1 发布阻断队列已经关闭。显式 Bypass 模式、stdio 子进程本身
 
 **证据**：
 
-- `src/components/WorkspaceExplorer.tsx:63`、`110-117`：项目变化未重置 tab。
-- `src/components/WorkspaceExplorer.tsx:314-371`：非 Git 只禁用按钮，仍按旧 tab 渲染 clean 文案。
+- `frontend/src/components/WorkspaceExplorer.tsx:63`、`110-117`：项目变化未重置 tab。
+- `frontend/src/components/WorkspaceExplorer.tsx:314-371`：非 Git 只禁用按钮，仍按旧 tab 渲染 clean 文案。
 
 **建议**：workspace path 变化时回到 Files；`!workspace.is_git` 时强制 Files。
 
@@ -392,9 +392,9 @@ P1 发布阻断队列已经关闭。显式 Bypass 模式、stdio 子进程本身
 
 ### P3-03 全仓 Rust 格式门禁当前未通过（已修复）
 
-**修复状态**：P1-06 对 `live2d.rs` 的业务修改已统一经过 rustfmt，原换行差异自然消失；`cargo fmt --manifest-path src-tauri/Cargo.toml -- --check` 已恢复通过。
+**修复状态**：P1-06 对 `live2d.rs` 的业务修改已统一经过 rustfmt，原换行差异自然消失；`cargo fmt --manifest-path backend/Demiurge-desktop/Cargo.toml -- --check` 已恢复通过。
 
-初始审查时，`cargo fmt --manifest-path src-tauri/Cargo.toml -- --check` 曾在 `src-tauri/src/pack/live2d.rs` 报告一处纯换行格式差异。P1-06 的业务修改统一经过 rustfmt 后，该差异自然消失；当前全仓格式门禁已通过，本项关闭。
+初始审查时，`cargo fmt --manifest-path backend/Demiurge-desktop/Cargo.toml -- --check` 曾在 `backend/Demiurge-desktop/src/pack/live2d.rs` 报告一处纯换行格式差异。P1-06 的业务修改统一经过 rustfmt 后，该差异自然消失；当前全仓格式门禁已通过，本项关闭。
 
 ## 6. 流式协议与渲染专项结论
 

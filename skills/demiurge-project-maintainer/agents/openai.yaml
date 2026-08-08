@@ -1,0 +1,4 @@
+interface:
+  display_name: "Demiurge 项目维护规范"
+  short_description: "按模块规范开发、验证并记录 Demiurge 变更"
+  default_prompt: "使用 $demiurge-project-maintainer 完成这项 Demiurge 修改，明确说明代码归属和调用链，完成必要验证，并给出可复查的中文交接记录。"

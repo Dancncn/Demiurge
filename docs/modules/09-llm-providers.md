@@ -3,8 +3,8 @@
 > 审阅状态（2026-07-12）：两类 SSE 适配路径现共享字节级解码器，统一处理任意分片、CR/LF、多行 data、无换行流尾与命名错误事件；前端继续只消费统一增量。固定行号请以符号名为准。
 
 > 存档级技术原理文档。读者：Demiurge 协作开发者。
-> 覆盖代码：`src-tauri/src/llm/mod.rs`、`openai.rs`、`anthropic.rs`、`gemini.rs`、`local.rs`、`src-tauri/src/connection_tests.rs`。
-> 约定：行号形如 `src-tauri/src/llm/mod.rs:225` 指向撰写本文时的源码状态。
+> 覆盖代码：`backend/Demiurge-desktop/src/llm/mod.rs`、`openai.rs`、`anthropic.rs`、`gemini.rs`、`local.rs`、`backend/Demiurge-desktop/src/connection_tests.rs`。
+> 约定：行号形如 `backend/Demiurge-desktop/src/llm/mod.rs:225` 指向撰写本文时的源码状态。
 
 ---
 
@@ -12,12 +12,12 @@
 
 Demiurge 把"对接哪一家大模型"这件事压缩成两层抽象：
 
-1. **能力画像（`ProviderProfile`）** —— 一个纯数据 + 纯函数的结构，回答"这家 provider / 这个模型能做什么、限制是什么、请求字段长什么样"。它是**唯一的能力入口**，由 `ProviderProfile::for_kind` 统一构造（`src-tauri/src/llm/mod.rs:225`）。
+1. **能力画像（`ProviderProfile`）** —— 一个纯数据 + 纯函数的结构，回答"这家 provider / 这个模型能做什么、限制是什么、请求字段长什么样"。它是**唯一的能力入口**，由 `ProviderProfile::for_kind` 统一构造（`backend/Demiurge-desktop/src/llm/mod.rs:225`）。
 2. **适配器（adapter）** —— 三套 HTTP/SSE 方言实现：OpenAI 兼容（`openai.rs`，本地端点 `local.rs` 复用之）、Anthropic（`anthropic.rs`）、Gemini（`gemini.rs`）。每个 adapter 负责构造请求体、解析自家流式协议、把结果归一化为统一的 `AssistantTurn`。
 
 设计动机是：上层（Agent runner、summary、memory、subagent、dream、连接测试）**永远只面对 `Settings + ProviderProfile`，不直接 if-else 判断 provider 字符串**。新增一家 OpenAI 兼容厂商，理论上只需在 `ProviderKind` 加一个枚举值，并在 `for_kind` 的兼容分支里挂上即可，无需改动任何请求构造或流式解析代码。
 
-`stream_completion`（`src-tauri/src/llm/mod.rs:558`）是对外的统一流式入口，根据 `profile.adapter_kind()` 把调用分发到对应 adapter 的 `stream_completion_with_profile`。
+`stream_completion`（`backend/Demiurge-desktop/src/llm/mod.rs:558`）是对外的统一流式入口，根据 `profile.adapter_kind()` 把调用分发到对应 adapter 的 `stream_completion_with_profile`。
 
 ```
 上层调用方 (runner / summary / memory / subagent / dream)
@@ -149,7 +149,7 @@ pub fn effective_max_input_tokens(self, settings) -> usize {
 
 对官方 OpenAI 而言，输入硬上限为 `272_000`、输出硬上限为 `128_000`（mod.rs:176-177）：用户设置 250K 输入 / 32K 输出时，两侧都低于硬顶，因此都原样保留（输入 250K、输出 32K），均不会被裁剪。
 
-`effective_token_budget` 的真正消费者是 `agent/budget.rs` 的 `history_budget_for_profile`（`src-tauri/src/agent/budget.rs:139-172`）：它在 profile 给出的 `max_input_tokens` / `reserved_output_tokens` 基础上，再扣除 system prompt、tools schema、保底 `MIN_HISTORY_BUDGET_TOKENS`，算出"历史消息能占多少 token"，用于历史裁剪与滚动摘要。**历史上 budget 曾作为硬约束的状态已不存在**——当前 profile 侧只做软性 clamp（取 min + 保底），真正决定截断的是 budget 模块，而非在 adapter 请求体里写死。adapter 侧唯一写入请求的限额是 `effective_reserved_output_tokens(cfg)`，作为各家的 `max_tokens` / `max_completion_tokens` / `maxOutputTokens`。
+`effective_token_budget` 的真正消费者是 `agent/budget.rs` 的 `history_budget_for_profile`（`backend/Demiurge-desktop/src/agent/budget.rs:139-172`）：它在 profile 给出的 `max_input_tokens` / `reserved_output_tokens` 基础上，再扣除 system prompt、tools schema、保底 `MIN_HISTORY_BUDGET_TOKENS`，算出"历史消息能占多少 token"，用于历史裁剪与滚动摘要。**历史上 budget 曾作为硬约束的状态已不存在**——当前 profile 侧只做软性 clamp（取 min + 保底），真正决定截断的是 budget 模块，而非在 adapter 请求体里写死。adapter 侧唯一写入请求的限额是 `effective_reserved_output_tokens(cfg)`，作为各家的 `max_tokens` / `max_completion_tokens` / `maxOutputTokens`。
 
 > 注：`effective_max_output_tokens(requested)`（mod.rs:406）和字段 `token_budget_multiplier` 目前**仅有 `#[allow(dead_code)]` 定义和单元测试，无生产调用点**，属于预留扩展位。
 

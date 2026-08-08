@@ -4,13 +4,17 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import net from "node:net";
 import path from "node:path";
 import process from "node:process";
+import { fileURLToPath } from "node:url";
 
 const PREFERRED_DEV_PORT = 38741;
 const EPHEMERAL_MIN = 49152;
 const EPHEMERAL_MAX = 65535;
 
 const args = process.argv.slice(2);
-const tauriCli = path.resolve("node_modules", "@tauri-apps", "cli", "tauri.js");
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const frontendDir = path.join(repoRoot, "frontend");
+const backendDir = path.join(repoRoot, "backend", "Demiurge-desktop");
+const tauriCli = path.join(repoRoot, "node_modules", "@tauri-apps", "cli", "tauri.js");
 
 function parsePort(value) {
   if (!value) return undefined;
@@ -50,6 +54,7 @@ function runTauri(nextArgs, env = process.env) {
     stdio: "inherit",
     env,
     shell: false,
+    cwd: backendDir,
   });
   child.on("exit", (code, signal) => {
     if (signal) {
@@ -65,7 +70,7 @@ async function runDev() {
   const host = process.env.TAURI_DEV_HOST || "127.0.0.1";
   const port = await chooseDevPort(host);
   const devUrl = `http://${host}:${port}`;
-  const generatedDir = path.resolve(".tauri-dev");
+  const generatedDir = path.join(repoRoot, ".tauri-dev");
   const generatedConfig = path.join(generatedDir, "tauri.dev.conf.json");
 
   mkdirSync(generatedDir, { recursive: true });
@@ -75,7 +80,7 @@ async function runDev() {
       {
         build: {
           devUrl,
-          beforeDevCommand: "npm run dev",
+          beforeDevCommand: "npm --prefix ../frontend run dev",
         },
       },
       null,

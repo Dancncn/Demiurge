@@ -37,9 +37,9 @@ asset protocol scope 只放行应用数据目录的 `packs/**`；导入时仍会
 
 `live2dcubismcore.min.js`（moc3 解析运行时，WASM 内嵌其中，无独立 .wasm）受 Live2D Proprietary Software License 约束，**禁止第三方再分发**。所以它不入库，由用户自行下载：
 
-- `scripts/fetch-cubism-core.mjs` 从 `cubism.live2d.com` 官方地址下载到 `public/core/live2dcubismcore.min.js`（失败则打印手动下载指引）。
-- `.gitignore` 排除该文件，`public/core/.gitkeep` 占位保目录。
-- 运行时由 `src/lib/live2d.ts` 的 `ensureCubismCore()` **动态**创建 `<script>` 标签注入 `<head>`，缺失时抛出指向 `npm run fetch:cubism-core` 的友好错误。不写进 `index.html`，保持懒加载——只有用户打开 Live2D 面板才加载。
+- `scripts/fetch-cubism-core.mjs` 从 `cubism.live2d.com` 官方地址下载到 `frontend/public/core/live2dcubismcore.min.js`（失败则打印手动下载指引）。
+- `.gitignore` 排除该文件，`frontend/public/core/.gitkeep` 占位保目录。
+- 运行时由 `frontend/src/lib/live2d.ts` 的 `ensureCubismCore()` **动态**创建 `<script>` 标签注入 `<head>`，缺失时抛出指向 `npm run fetch:cubism-core` 的友好错误。不写进 `index.html`，保持懒加载——只有用户打开 Live2D 面板才加载。
 
 非商业用途免费；商业用途需遵守 Live2D SDK Release License。
 
@@ -47,8 +47,8 @@ asset protocol scope 只放行应用数据目录的 `packs/**`；导入时仍会
 
 Pixi v8 + 引擎 + `@pixi/sound` 体积大（构建后 `vendor-live2d` chunk 约 1.1MB / 308KB gzip）。为不污染主 bundle：
 
-- `src/lib/live2d.ts` 里所有 `pixi.js` / `untitled-pixi-live2d-engine/cubism` 的 import 都是 `await import(...)` 动态形式。
-- `src/components/Live2DPanel.tsx` 用 `export default`，`src/App.tsx` 用 `React.lazy(() => import(...))` + `<Suspense>` 挂载。
+- `frontend/src/lib/live2d.ts` 里所有 `pixi.js` / `untitled-pixi-live2d-engine/cubism` 的 import 都是 `await import(...)` 动态形式。
+- `frontend/src/features/live2d/Live2DPanel.tsx` 用 `export default`，`frontend/src/app/App.tsx` 用 `React.lazy(() => import(...))` + `<Suspense>` 挂载。
 - `vite.config.ts` 的 `manualChunks` 把 `pixi.js` / `@pixi` / `untitled-pixi-live2d-engine` 归到 `vendor-live2d` chunk。
 
 效果：用户不点 Live2D nav，这些代码不会下载/执行。
@@ -94,21 +94,21 @@ Pixi v8 + 引擎 + `@pixi/sound` 体积大（构建后 `vendor-live2d` chunk 约
 
 | 关注点 | 位置 |
 |---|---|
-| manifest 字段 | `src-tauri/src/pack/manifest.rs` `PackManifest.live2d` |
+| manifest 字段 | `backend/Demiurge-desktop/src/pack/manifest.rs` `PackManifest.live2d` |
 | manifest 路径/存在性 | `validate_manifest_paths` / `validate_pack_files` |
-| 事务导入与回滚 | `src-tauri/src/pack/live2d.rs` `import_live2d_folder` / `install_prepared_live2d` |
+| 事务导入与回滚 | `backend/Demiurge-desktop/src/pack/live2d.rs` `import_live2d_folder` / `install_prepared_live2d` |
 | 内部引用边界 | `normalize_live2d_reference` / `resolve_model_relative_file` / `collect_live2d_refs_checked` |
 | 受检资源读取 | `live2d_bundle` / `resolve_live2d_model_path` |
-| 移除 | `src-tauri/src/pack/live2d.rs` `remove_live2d` |
+| 移除 | `backend/Demiurge-desktop/src/pack/live2d.rs` `remove_live2d` |
 | Tauri 命令 | `import_pack_live2d_folder` / `resolve_pack_live2d_path` / `pack_live2d_bundle` / `remove_pack_live2d` |
-| dialog 权限 | `src-tauri/capabilities/default.json` `dialog:default` |
-| asset URL 改写 | `src/lib/live2d.ts` `createLive2DAssetModelUrl` / `rewriteModelReferences` |
-| 引擎初始化 | `src/lib/live2d.ts` `ensureCubismCore` / `loadLive2DModel` |
-| 面板组件 | `src/components/Live2DPanel.tsx`（canvas/ticker 生命周期、进度、鼠标跟随、缩放、拖拽、重载） |
-| 独立窗口壳 | `src/components/Live2DWindowShell.tsx` + `src-tauri/src/lib.rs`（隐藏预创建、显隐事件、实例复用） |
-| 设置 UI | `src/components/SettingsDialog.tsx` Live2D 导入/移除区域 |
+| dialog 权限 | `backend/Demiurge-desktop/capabilities/default.json` `dialog:default` |
+| asset URL 改写 | `frontend/src/lib/live2d.ts` `createLive2DAssetModelUrl` / `rewriteModelReferences` |
+| 引擎初始化 | `frontend/src/lib/live2d.ts` `ensureCubismCore` / `loadLive2DModel` |
+| 面板组件 | `frontend/src/features/live2d/Live2DPanel.tsx`（canvas/ticker 生命周期、进度、鼠标跟随、缩放、拖拽、重载） |
+| 独立窗口壳 | `frontend/src/features/live2d/Live2DWindowShell.tsx` + `backend/Demiurge-desktop/src/biz/window.rs`（隐藏预创建、显隐事件、实例复用） |
+| 设置 UI | `frontend/src/features/settings/SettingsDialog.tsx` Live2D 导入/移除区域 |
 | Cubism Core 下载 | `scripts/fetch-cubism-core.mjs` |
-| bundle 隔离 | `vite.config.ts` `manualChunks`（`vendor-live2d`）+ `src/App.tsx` `React.lazy` |
+| bundle 隔离 | `vite.config.ts` `manualChunks`（`vendor-live2d`）+ `frontend/src/app/App.tsx` `React.lazy` |
 
 ## 5. 引擎 API 注意点
 

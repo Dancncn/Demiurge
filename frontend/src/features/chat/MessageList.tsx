@@ -1,0 +1,236 @@
+import { memo, useCallback, useEffect, useRef, useState } from "react";
+import type { DisplayItem } from "@/lib/types";
+import { isScrollNearBottom } from "@/lib/agentEventReducer";
+import { Markdown } from "@/shared/components/Markdown";
+import ToolCard from "@/features/agent/ToolCard";
+import { Dashboard } from "@/features/dashboard/Dashboard";
+import { CheckIcon, CopyIcon, RotateCwIcon } from "@/shared/components/Icons";
+import { useCopyToClipboard } from "@/lib/hooks";
+
+const AVATAR = "/demiurge.png";
+
+function ThinkingDots({ label }: { label: string }) {
+  return (
+    <span className="inline-flex items-center gap-2 text-[#9a9a9a]">
+      <span className="cf-dots text-[#b4b4b4]">
+        <span />
+        <span />
+        <span />
+      </span>
+      <span className="text-[#8a8a8a]">{label}</span>
+    </span>
+  );
+}
+
+const UserMessage = memo(function UserMessage({ text }: { text: string }) {
+  return (
+    <article className="cf-message-in flex justify-end">
+      <div className="user-message-content">
+        <div className="app-user-message md-type-body-large whitespace-pre-wrap rounded-lg bg-[#eef1f5] px-4 py-2.5 text-[#202124]">
+          {text}
+        </div>
+      </div>
+    </article>
+  );
+});
+
+// 推理型模型的思维链气泡：思考时展开显示「思考中…」，正文开始或回合结束后自动收起为
+// 「已深度思考」，用户可点击回看。消除推理阶段（实测可达数秒）界面无反馈的静默感。
+function ReasoningBlock({ text, active }: { text: string; active: boolean }) {
+  const [open, setOpen] = useState(true);
+  const wasActive = useRef(active);
+  useEffect(() => {
+    if (wasActive.current && !active) setOpen(false);
+    wasActive.current = active;
+  }, [active]);
+  return (
+    <div className="mb-2">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        className="md-type-label-medium inline-flex items-center gap-1.5 rounded-md px-1.5 py-0.5 text-[#8a9099] transition hover:bg-[#eef1f5] hover:text-[#202124]"
+      >
+        {active ? (
+          <span className="cf-dots">
+            <span />
+            <span />
+            <span />
+          </span>
+        ) : (
+          <span>💭</span>
+        )}
+        <span>{active ? "思考中…" : open ? "收起思考过程" : "已深度思考（点击展开）"}</span>
+      </button>
+      {open && (
+        <div className="md-type-body-medium mt-1 whitespace-pre-wrap border-l-2 border-[#e6e9ee] pl-3 text-[#6f7782]">
+          {text}
+        </div>
+      )}
+    </div>
+  );
+}
+
+const AssistantMessage = memo(function AssistantMessage({
+  text,
+  reasoning,
+  streaming,
+  error,
+  errorTitle,
+  errorHint,
+  retryText,
+  onRetry,
+}: {
+  text: string;
+  reasoning?: string;
+  streaming: boolean;
+  error?: boolean;
+  errorTitle?: string;
+  errorHint?: string;
+  retryText?: string;
+  onRetry?: (text: string) => void;
+}) {
+  const { copied, copy } = useCopyToClipboard();
+
+  return (
+    <article className="cf-message-in group flex justify-start">
+      <img src={AVATAR} alt="AI" className="mr-3 mt-0.5 size-10 shrink-0 rounded-md border border-[#dfe3e8] bg-white object-contain" />
+      <div className="assistant-message-content min-w-0">
+        <div className="md-type-body-large py-0.5">
+          {reasoning && reasoning.trim() && !error && (
+            <ReasoningBlock text={reasoning} active={streaming && !text} />
+          )}
+          {error ? (
+            <div className="rounded-lg border border-[#fde68a] bg-[#fffbeb] px-4 py-3 text-[13px] text-[#92400e]">
+              <div className="font-semibold text-[#7a3b00]">{errorTitle || "Request failed"}</div>
+              <div className="mt-1 whitespace-pre-wrap">{text}</div>
+              {errorHint && <div className="mt-2 text-[#8a5a00]">{errorHint}</div>}
+              {retryText && onRetry && (
+                <button
+                  type="button"
+                  onClick={() => onRetry(retryText)}
+                  className="mt-3 inline-flex h-8 items-center gap-2 rounded-md border border-[#f2d7a5] bg-white px-2.5 text-xs font-medium text-[#7a3b00] transition hover:bg-[#fff8e8]"
+                >
+                  <RotateCwIcon size={14} />
+                  Retry
+                </button>
+              )}
+            </div>
+          ) : (
+            <Markdown text={text} streaming={streaming} />
+          )}
+          {!streaming && !error && text && (
+            <div className="mt-1.5 flex items-center gap-0.5 text-[#8a8a8a] opacity-0 transition duration-200 group-hover:opacity-100">
+              <button
+                type="button"
+                onClick={() => void copy(text)}
+                title="Copy"
+                className="grid h-8 w-8 place-items-center rounded-md transition hover:bg-[#eef1f5] hover:text-[#202124]"
+              >
+                {copied ? <CheckIcon size={16} /> : <CopyIcon size={16} />}
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+    </article>
+  );
+});
+
+type Props = {
+  items: DisplayItem[];
+  thinking: boolean;
+  greeting: string;
+  onRetry: (text: string) => void;
+  onOpenFortune?: () => void;
+};
+
+export function MessageList({ items, thinking, greeting, onRetry, onOpenFortune }: Props) {
+  const viewportRef = useRef<HTMLDivElement | null>(null);
+  const followTailRef = useRef(true);
+  const onRetryRef = useRef(onRetry);
+  onRetryRef.current = onRetry;
+  const stableRetry = useCallback((text: string) => onRetryRef.current(text), []);
+
+  const trackScrollPosition = useCallback(() => {
+    const viewport = viewportRef.current;
+    if (viewport) followTailRef.current = isScrollNearBottom(viewport);
+  }, []);
+
+  useEffect(() => {
+    if (!followTailRef.current) return;
+    const frame = requestAnimationFrame(() => {
+      const viewport = viewportRef.current;
+      if (viewport) viewport.scrollTop = viewport.scrollHeight;
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [items, thinking]);
+
+  const showDashboard = items.length === 0 && !thinking;
+
+  return (
+    <div
+      ref={viewportRef}
+      onScroll={trackScrollPosition}
+      className="app-message-list min-h-0 flex-1 overflow-y-auto overscroll-contain bg-white [-webkit-overflow-scrolling:touch]"
+      role="log"
+      aria-live="polite"
+      aria-relevant="additions text"
+      aria-busy={thinking || items.some((item) => item.kind === "assistant" && item.streaming)}
+    >
+      <div
+        className={`message-list-content mx-auto flex w-full flex-col px-3 pb-40 sm:px-5 ${
+          showDashboard ? "is-dashboard pt-0" : "pt-5"
+        }`}
+      >
+        {showDashboard ? (
+          <div className="cf-message-in">
+            <Dashboard greeting={greeting} onOpenFortune={onOpenFortune} />
+          </div>
+        ) : (
+          <div className="space-y-5">
+            {items.map((item) =>
+              item.kind === "user" ? (
+                <UserMessage key={item.id} text={item.text} />
+              ) : item.kind === "assistant" ? (
+                <AssistantMessage
+                  key={item.id}
+                  text={item.text}
+                  reasoning={item.reasoning}
+                  streaming={item.streaming}
+                  error={item.error}
+                  errorTitle={item.errorTitle}
+                  errorHint={item.errorHint}
+                  retryText={item.retryText}
+                  onRetry={stableRetry}
+                />
+              ) : (
+                <ToolCard
+                  key={item.id}
+                  name={item.name}
+                  args={item.args}
+                  status={item.status}
+                  result={item.result}
+                  preview={item.preview}
+                  affected_paths={item.affected_paths}
+                  description={item.description}
+                  risk={item.risk}
+                  duration_ms={item.duration_ms}
+                  error_hint={item.error_hint}
+                  source_quality={item.source_quality}
+                />
+              ),
+            )}
+            {thinking && (
+              <article className="cf-message-in flex justify-start">
+                <img src={AVATAR} alt="AI" className="mr-3 mt-0.5 size-8 shrink-0 rounded-md border border-[#dfe3e8] bg-white object-contain" />
+                <div className="py-1.5">
+                  <ThinkingDots label="Thinking..." />
+                </div>
+              </article>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}

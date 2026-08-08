@@ -40,13 +40,13 @@ lorebook_section ── lorebook_context(packs_dir, data_dir, id, query, provide
 
 ## 关键结构与位置
 
-- `EmbeddingProvider` trait、`RemoteEmbeddingProvider`、`cosine`、`rrf_fuse`、`provider_from_settings`：`src-tauri/src/embed/mod.rs`。
-- `LoreChunk.embedding: Option<Vec<f32>>`、`LoreIndexCache.embedding_model: Option<String>`：`src-tauri/src/pack/mod.rs`。两者均 `#[serde(default)]`，旧缓存可向后兼容解析。
-- `score_all_lore_hits` / `select_lore_hits`：稀疏 + 稠密 + RRF 融合，`src-tauri/src/pack/mod.rs`。
-- `ensure_chunk_embeddings` / `load_lore_index_with_cache`：向量懒计算与缓存回写，`src-tauri/src/pack/mod.rs`。
-- `lorebook_context` / `lorebook_recall_detail`：provider + hybrid_weight 透传，`src-tauri/src/pack/mod.rs`。
-- Settings 字段 `embedding_enabled` / `embedding_provider` / `embedding_base_url` / `embedding_api_key` / `embedding_model` / `embedding_dims` / `hybrid_weight`：`src-tauri/src/store/mod.rs`。
-- 前端配置区：`src/components/SettingsDialog.tsx` 的 `settings.embedding.*`（context tab 内）。
+- `EmbeddingProvider` trait、`RemoteEmbeddingProvider`、`cosine`、`rrf_fuse`、`provider_from_settings`：`backend/Demiurge-desktop/src/embed/mod.rs`。
+- `LoreChunk.embedding: Option<Vec<f32>>`、`LoreIndexCache.embedding_model: Option<String>`：`backend/Demiurge-desktop/src/pack/mod.rs`。两者均 `#[serde(default)]`，旧缓存可向后兼容解析。
+- `score_all_lore_hits` / `select_lore_hits`：稀疏 + 稠密 + RRF 融合，`backend/Demiurge-desktop/src/pack/mod.rs`。
+- `ensure_chunk_embeddings` / `load_lore_index_with_cache`：向量懒计算与缓存回写，`backend/Demiurge-desktop/src/pack/mod.rs`。
+- `lorebook_context` / `lorebook_recall_detail`：provider + hybrid_weight 透传，`backend/Demiurge-desktop/src/pack/mod.rs`。
+- Settings 字段 `embedding_enabled` / `embedding_provider` / `embedding_base_url` / `embedding_api_key` / `embedding_model` / `embedding_dims` / `hybrid_weight`：`backend/Demiurge-desktop/src/store/mod.rs`。
+- 前端配置区：`frontend/src/features/settings/SettingsDialog.tsx` 的 `settings.embedding.*`（context tab 内）。
 
 ## 为什么 embed 是同步的
 
@@ -75,7 +75,7 @@ dense_rrf  = 1/(k + dense_rank + 1)，未上榜为 0
 
 ## 后续扩展点（预留，未实现）
 
-- **本地 fastembed**：cargo feature `embeddings-local`（`src-tauri/Cargo.toml`）。启用后编译 `LocalEmbeddingProvider` 桩，当前 `embed` 返回明确错误；后续接入 `fastembed` crate + BGE-small-zh 模型 + 模型下载 UX（复用 OCR 的可选下载范式）。默认不启用，避免 ONNX runtime 增 ~20–40MB 包体。
+- **本地 fastembed**：cargo feature `embeddings-local`（`backend/Demiurge-desktop/Cargo.toml`）。启用后编译 `LocalEmbeddingProvider` 桩，当前 `embed` 返回明确错误；后续接入 `fastembed` crate + BGE-small-zh 模型 + 模型下载 UX（复用 OCR 的可选下载范式）。默认不启用，避免 ONNX runtime 增 ~20–40MB 包体。
 - **Cross-encoder reranker**：在 `select_lore_hits` 取 top-N 后、`render_lore_hits` 前插入 reranker 步骤；可用 `reranker`/`ort` crate 加载 MiniLM cross-encoder。当前未接入。
 - **凭据管理**：`embedding_api_key` 目前存 settings（明文），后续应迁入 `credentials.rs` keyring，与 LLM API Key 一致。
 

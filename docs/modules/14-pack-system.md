@@ -7,9 +7,9 @@
 > 存档级技术原理文档。覆盖角色包的清单校验、persona 注入、头像 data URL 生成、zip 导入安全校验、默认包落地，以及角色包作为 memory / skills 作用域载体的衔接逻辑。
 >
 > 主要源文件：
-> - `src-tauri/src/pack/mod.rs`
-> - `src-tauri/src/agent/persona.rs`
-> - 衔接点：`src-tauri/src/agent/prompt.rs`、`src-tauri/src/agent/memory.rs`、`src-tauri/src/agent/skills.rs`、`src-tauri/src/lib.rs`
+> - `backend/Demiurge-desktop/src/pack/mod.rs`
+> - `backend/Demiurge-desktop/src/agent/persona.rs`
+> - 衔接点：`backend/Demiurge-desktop/src/agent/prompt.rs`、`backend/Demiurge-desktop/src/agent/memory.rs`、`backend/Demiurge-desktop/src/agent/skills.rs`、`backend/Demiurge-desktop/src/lib.rs`
 
 ---
 
@@ -20,7 +20,7 @@
 模块边界划得很清楚，分成两层：
 
 - **`pack/mod.rs`**：纯文件系统层。负责清单的解析与校验、persona 正文读取、头像编码成 data URL、zip 包的导入与安全落地、首启动时落地默认包。它**不**关心这些内容如何拼进 system prompt。
-- **`agent/persona.rs`**：仅持有「引擎基础指令」常量 `ENGINE_BASE`（`src-tauri/src/agent/persona.rs:4`），它是与具体角色无关的通用规则。注意：本文件**不读取角色包**，它和角色包是 prompt 装配阶段才汇合的两块输入。
+- **`agent/persona.rs`**：仅持有「引擎基础指令」常量 `ENGINE_BASE`（`backend/Demiurge-desktop/src/agent/persona.rs:4`），它是与具体角色无关的通用规则。注意：本文件**不读取角色包**，它和角色包是 prompt 装配阶段才汇合的两块输入。
 
 这种拆分的设计意图是：角色包是可被用户替换、可被第三方制作分发的「皮」，而引擎规则是不可被角色包覆盖的「骨」。两者在 `agent/prompt.rs` 中以不同优先级合成，保证再花哨的角色设定也无法改写工具/安全约束。
 
@@ -33,7 +33,7 @@
 ### 2.1 清单与运行时类型
 
 ```rust
-// src-tauri/src/pack/mod.rs:12
+// backend/Demiurge-desktop/src/pack/mod.rs:12
 pub struct PackManifest {
     pub id: String,
     pub name: String,
@@ -49,7 +49,7 @@ pub struct PackManifest {
 `live2d` 与 `avatar` 走**不同路径**：清单只存 model3 相对路径，不把大模型内联进 manifest。打开面板时，`pack_live2d_bundle` 解析 model3，使用与导入相同的引用校验器读取 Moc/纹理/物理/Pose/DisplayInfo/UserData/表情/动作/声音，编码为 bundle；前端把图片转 data URL、其余资源转 blob URL，并重写 model3 引用后交给渲染引擎。磁盘绝对路径不会直接成为模型加载基址。
 
 ```rust
-// src-tauri/src/pack/mod.rs:28
+// backend/Demiurge-desktop/src/pack/mod.rs:28
 pub struct Pack {
     pub manifest: PackManifest, // #[allow(dead_code)]，目前只用 persona_text
     pub persona_text: String,
@@ -60,15 +60,15 @@ pub struct Pack {
 
 | 函数 | 位置 | 职责 | 调用方 |
 | --- | --- | --- | --- |
-| `ensure_default` | `pack/mod.rs:47` | 首启动落地 `packs/default` | `lib.rs:1665`（setup） |
+| `ensure_default` | `pack/mod.rs:47` | 首启动落地 `resources/packs/default` | `lib.rs:1665`（setup） |
 | `list_packs` | `pack/mod.rs:62` | 枚举所有合法角色包 | Tauri 命令 `list_packs`（`lib.rs:777`） |
 | `resolve_pack_dir` | `pack/manifest.rs` | 验证 id，解析 canonical 根与非链接直接子目录 | 所有按 id 访问包路径的 IPC 与运行时入口 |
 | `load_pack` | `pack/mod.rs:85` | 按 id 读清单 + persona 正文 | runner / subagent / context panel |
 | `import_zip` | `pack/mod.rs:97` | 导入并安全落地 zip 角色包 | Tauri 命令 `import_pack_zip`（`lib.rs:783`） |
 
-`persona.rs` 侧的入口仅有 `engine_base()`（`src-tauri/src/agent/persona.rs:17`），返回 `&'static str`。
+`persona.rs` 侧的入口仅有 `engine_base()`（`backend/Demiurge-desktop/src/agent/persona.rs:17`），返回 `&'static str`。
 
-`packs_dir` 的真实根目录在应用启动时确定为 `app_data_dir()/packs`（`src-tauri/src/lib.rs:1663`），随后 `ensure_default` 在其下创建并重新解析 `default` 子目录。`AppState` 用 `Mutex<PathBuf>` 持有该路径（`src-tauri/src/lib.rs:60`）；保存设置前也必须确认 `current_pack` 能被同一解析器解析为现有包。
+`packs_dir` 的真实根目录在应用启动时确定为 `app_data_dir()/packs`（`backend/Demiurge-desktop/src/lib.rs:1663`），随后 `ensure_default` 在其下创建并重新解析 `default` 子目录。`AppState` 用 `Mutex<PathBuf>` 持有该路径（`backend/Demiurge-desktop/src/lib.rs:60`）；保存设置前也必须确认 `current_pack` 能被同一解析器解析为现有包。
 
 ---
 
@@ -189,7 +189,7 @@ extract_archive(prefix → temp)                           pack/mod.rs:141 / 289
 
 ### 3.5 默认包落地
 
-`ensure_default`（`pack/mod.rs:47`）在 `packs/default` 下幂等地写 `manifest.json` 与 `persona.md`（`!exists()` 才写，不覆盖用户已改的内容）。默认清单 `DEFAULT_MANIFEST`（`pack/mod.rs:35`）的 `name` 是中立的 `"Demiurge"`，persona `DEFAULT_PERSONA`（`pack/mod.rs:41`）是一段通用的「桌面伴侣」人设，注释强调「通用、不绑定任何特定角色」（`pack/mod.rs:34`）。这保证了首启动即有一个可用 `current_pack=default`，runner 不会因为找不到包而拿到空 persona。
+`ensure_default`（`pack/mod.rs:47`）在 `resources/packs/default` 下幂等地写 `manifest.json` 与 `persona.md`（`!exists()` 才写，不覆盖用户已改的内容）。默认清单 `DEFAULT_MANIFEST`（`pack/mod.rs:35`）的 `name` 是中立的 `"Demiurge"`，persona `DEFAULT_PERSONA`（`pack/mod.rs:41`）是一段通用的「桌面伴侣」人设，注释强调「通用、不绑定任何特定角色」（`pack/mod.rs:34`）。这保证了首启动即有一个可用 `current_pack=default`，runner 不会因为找不到包而拿到空 persona。
 
 ### 3.6 列举与排序
 

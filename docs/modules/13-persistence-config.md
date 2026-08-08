@@ -4,9 +4,9 @@
 
 > 存档级技术原理文档。读者为协作开发者。
 > 覆盖源文件：
-> - `src-tauri/src/store/mod.rs`（设置 / 会话的数据结构与落盘）
-> - `src-tauri/src/credentials.rs`（keyring 凭据读写、明文迁移与水合）
-> - `src-tauri/src/connection_tests.rs`（provider / web_search 连接测试，纯探测、不落盘）
+> - `backend/Demiurge-desktop/src/store/mod.rs`（设置 / 会话的数据结构与落盘）
+> - `backend/Demiurge-desktop/src/credentials.rs`（keyring 凭据读写、明文迁移与水合）
+> - `backend/Demiurge-desktop/src/connection_tests.rs`（provider / web_search 连接测试，纯探测、不落盘）
 >
 > 本篇侧重「持久化与凭据」视角。connection_tests 的 provider/adapter 细节与第 09 篇（LLM provider）交叉，本篇只讲它如何复用 `Settings` 并刻意绕开落盘。
 
@@ -14,7 +14,7 @@
 
 ## ① 模块职责与定位
 
-这是整个引擎的「记忆层」。`store/mod.rs` 顶部注释直言其设计取舍（`src-tauri/src/store/mod.rs:1`）：
+这是整个引擎的「记忆层」。`store/mod.rs` 顶部注释直言其设计取舍（`backend/Demiurge-desktop/src/store/mod.rs:1`）：
 
 ```rust
 //! 组件 9：持久化。设置 / 多会话写入磁盘，下次启动可恢复。
@@ -29,7 +29,7 @@
 | `credentials.rs` | 所有 secret 字段进出系统凭据管理器（keyring），并在启动时迁移历史明文 | 系统钥匙串（非项目文件） |
 | `connection_tests.rs` | provider / web search 端点的「最小请求」连通性探测 | **不落盘**（核心设计点，见 ③） |
 
-落盘目录由 Tauri 的 `app.path().app_data_dir()` 决定，启动时写入 `AppState.data_dir`（`src-tauri/src/lib.rs:1659`、`:1674`）。同一目录下还有其他模块的文件，构成完整的磁盘记忆：
+落盘目录由 Tauri 的 `app.path().app_data_dir()` 决定，启动时写入 `AppState.data_dir`（`backend/Demiurge-desktop/src/lib.rs:1659`、`:1674`）。同一目录下还有其他模块的文件，构成完整的磁盘记忆：
 
 ```
 <app_data_dir>/
@@ -52,7 +52,7 @@
 
 ### `Settings`（`store/mod.rs:224`）
 
-运行时全量设置。类型注释点明了贯穿全篇的核心约定（`src-tauri/src/store/mod.rs:222`）：
+运行时全量设置。类型注释点明了贯穿全篇的核心约定（`backend/Demiurge-desktop/src/store/mod.rs:222`）：
 
 ```rust
 /// 运行时设置。`api_key` 只保留在内存和前端表单里，落盘时会被清空；
@@ -324,7 +324,7 @@ ConnectionTestResult { ok, target, detail, latency_ms }   ← 不落盘、不写
 
 ## ⑥ 已知限制与扩展点
 
-- **向量 RAG 已实现**：lorebook/记忆检索走 BM25 + dense + RRF 混合召回，dense 向量由 `src-tauri/src/embed/mod.rs` 的 `RemoteEmbeddingProvider`（OpenAI 兼容 `/v1/embeddings`）提供，详见 [modules/20](./20-lorebook-vector-rag.md)。`sessions.json` 仍全量保存会话，rolling summary 是对话层的「压缩」手段；向量索引独立维护，不与 `sessions.json` 混写。`store/mod.rs:2` 头注释的历史口径（"MVP 不做向量 RAG"）已被 modules/20 的实现覆盖，以 modules/20 为准。
+- **向量 RAG 已实现**：lorebook/记忆检索走 BM25 + dense + RRF 混合召回，dense 向量由 `backend/Demiurge-desktop/src/embed/mod.rs` 的 `RemoteEmbeddingProvider`（OpenAI 兼容 `/v1/embeddings`）提供，详见 [modules/20](./20-lorebook-vector-rag.md)。`sessions.json` 仍全量保存会话，rolling summary 是对话层的「压缩」手段；向量索引独立维护，不与 `sessions.json` 混写。`store/mod.rs:2` 头注释的历史口径（"MVP 不做向量 RAG"）已被 modules/20 的实现覆盖，以 modules/20 为准。
 - **整文件覆盖写**：`save_sessions` / `save_settings` 都是 `fs::write` 全量覆盖（`store/mod.rs:487`、`:449`），非原子写、无 WAL。进程在写盘中途崩溃可能损坏文件；但 `load_*` 解析失败会回退默认/空，不会崩。
 - **goal token 预算为软约束**：`token_budget` 仅切换状态到 `BudgetLimited`（`goal.rs:486`），不硬性熔断进行中的请求。若需硬约束需在 runner 侧增加拦截。
 - **voice 相关字段为占位**：`voice_stt_backend` / `voice_tts_backend` 默认 `"none"`（`store/mod.rs:63`、`:67`），`voice_enabled` 默认 `false`（`:16`）；这些字段已能持久化，但其后端能力本篇范围内仅作为配置项存在，实际语音链路状态见对应模块文档，不应视为已完整接通。

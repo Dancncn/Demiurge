@@ -1,4 +1,4 @@
-// 下载 Live2D Cubism Core（live2dcubismcore.min.js）到 public/core/。
+// 下载 Live2D Cubism Core（live2dcubismcore.min.js）到 frontend/public/core/。
 //
 // Cubism Core 是 Live2D 官方的私有运行时（WASM 内嵌在该 JS 中），
 // 许可证禁止第三方再分发，因此不随仓库分发，需用户自行下载。
@@ -12,7 +12,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
-const DEST = join(ROOT, "public", "core", "live2dcubismcore.min.js");
+const DEST = join(ROOT, "frontend", "public", "core", "live2dcubismcore.min.js");
 const MIN_BYTES = 10 * 1024;
 
 // 候选下载地址（按顺序尝试）。
@@ -48,7 +48,9 @@ async function manualInstructions() {
   console.error("  1. 访问 https://www.live2d.com/en/sdk/download/web/");
   console.error("  2. 下载 Cubism SDK for Web（接受许可证）");
   console.error("  3. 解压 zip");
-  console.error("  4. 将 Core/live2dcubismcore.min.js 复制到 public/core/live2dcubismcore.min.js");
+  console.error(
+    "  4. 将 Core/live2dcubismcore.min.js 复制到 frontend/public/core/live2dcubismcore.min.js",
+  );
   console.error("  5. 重新运行 npm run fetch:cubism-core 验证");
   process.exit(1);
 }
