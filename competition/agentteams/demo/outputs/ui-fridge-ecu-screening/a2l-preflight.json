@@ -1,0 +1,385 @@
+{
+  "agent": "data-processing-expert",
+  "purpose": "筛选可解析的 A2L 文件并保留失败原因",
+  "selected_file": "fridge-ecu-good.a2l",
+  "results": [
+    {
+      "file": "fridge-ecu-broken.a2l",
+      "status": "rejected",
+      "reason": "unbalanced_measurement_blocks;no_measurement_blocks",
+      "encoding": "utf-8-sig",
+      "measurement_count": 0,
+      "signals": []
+    },
+    {
+      "file": "fridge-ecu-good.a2l",
+      "status": "accepted",
+      "reason": "ok",
+      "encoding": "utf-8-sig",
+      "measurement_count": 72,
+      "signals": [
+        {
+          "signal_id": "BOX_TEMP_C",
+          "unit": "degC",
+          "source_file": "fridge-ecu-good.a2l"
+        },
+        {
+          "signal_id": "EVAPORATOR_TEMP_C",
+          "unit": "degC",
+          "source_file": "fridge-ecu-good.a2l"
+        },
+        {
+          "signal_id": "AMBIENT_TEMP_C",
+          "unit": "degC",
+          "source_file": "fridge-ecu-good.a2l"
+        },
+        {
+          "signal_id": "SUPPLY_VOLTAGE_V",
+          "unit": "V",
+          "source_file": "fridge-ecu-good.a2l"
+        },
+        {
+          "signal_id": "COMPRESSOR_CURRENT_A",
+          "unit": "A",
+          "source_file": "fridge-ecu-good.a2l"
+        },
+        {
+          "signal_id": "COMPRESSOR_STATE",
+          "unit": "bool",
+          "source_file": "fridge-ecu-good.a2l"
+        },
+        {
+          "signal_id": "HUMIDITY_PERCENT",
+          "unit": "percent",
+          "source_file": "fridge-ecu-good.a2l"
+        },
+        {
+          "signal_id": "CONDENSATION_FLAG",
+          "unit": "bool",
+          "source_file": "fridge-ecu-good.a2l"
+        },
+        {
+          "signal_id": "CAN_ERROR_COUNT",
+          "unit": "count",
+          "source_file": "fridge-ecu-good.a2l"
+        },
+        {
+          "signal_id": "DOOR_SWITCH",
+          "unit": "bool",
+          "source_file": "fridge-ecu-good.a2l"
+        },
+        {
+          "signal_id": "FAN_SPEED_RPM",
+          "unit": "rpm",
+          "source_file": "fridge-ecu-good.a2l"
+        },
+        {
+          "signal_id": "RUN_TIME_S",
+          "unit": "s",
+          "source_file": "fridge-ecu-good.a2l"
+        },
+        {
+          "signal_id": "AUX_SIGNAL_01",
+          "unit": "raw",
+          "source_file": "fridge-ecu-good.a2l"
+        },
+        {
+          "signal_id": "AUX_SIGNAL_02",
+          "unit": "raw",
+          "source_file": "fridge-ecu-good.a2l"
+        },
+        {
+          "signal_id": "AUX_SIGNAL_03",
+          "unit": "raw",
+          "source_file": "fridge-ecu-good.a2l"
+        },
+        {
+          "signal_id": "AUX_SIGNAL_04",
+          "unit": "raw",
+          "source_file": "fridge-ecu-good.a2l"
+        },
+        {
+          "signal_id": "AUX_SIGNAL_05",
+          "unit": "raw",
+          "source_file": "fridge-ecu-good.a2l"
+        },
+        {
+          "signal_id": "AUX_SIGNAL_06",
+          "unit": "raw",
+          "source_file": "fridge-ecu-good.a2l"
+        },
+        {
+          "signal_id": "AUX_SIGNAL_07",
+          "unit": "raw",
+          "source_file": "fridge-ecu-good.a2l"
+        },
+        {
+          "signal_id": "AUX_SIGNAL_08",
+          "unit": "raw",
+          "source_file": "fridge-ecu-good.a2l"
+        },
+        {
+          "signal_id": "AUX_SIGNAL_09",
+          "unit": "raw",
+          "source_file": "fridge-ecu-good.a2l"
+        },
+        {
+          "signal_id": "AUX_SIGNAL_10",
+          "unit": "raw",
+          "source_file": "fridge-ecu-good.a2l"
+        },
+        {
+          "signal_id": "AUX_SIGNAL_11",
+          "unit": "raw",
+          "source_file": "fridge-ecu-good.a2l"
+        },
+        {
+          "signal_id": "AUX_SIGNAL_12",
+          "unit": "raw",
+          "source_file": "fridge-ecu-good.a2l"
+        },
+        {
+          "signal_id": "AUX_SIGNAL_13",
+          "unit": "raw",
+          "source_file": "fridge-ecu-good.a2l"
+        },
+        {
+          "signal_id": "AUX_SIGNAL_14",
+          "unit": "raw",
+          "source_file": "fridge-ecu-good.a2l"
+        },
+        {
+          "signal_id": "AUX_SIGNAL_15",
+          "unit": "raw",
+          "source_file": "fridge-ecu-good.a2l"
+        },
+        {
+          "signal_id": "AUX_SIGNAL_16",
+          "unit": "raw",
+          "source_file": "fridge-ecu-good.a2l"
+        },
+        {
+          "signal_id": "AUX_SIGNAL_17",
+          "unit": "raw",
+          "source_file": "fridge-ecu-good.a2l"
+        },
+        {
+          "signal_id": "AUX_SIGNAL_18",
+          "unit": "raw",
+          "source_file": "fridge-ecu-good.a2l"
+        },
+        {
+          "signal_id": "AUX_SIGNAL_19",
+          "unit": "raw",
+          "source_file": "fridge-ecu-good.a2l"
+        },
+        {
+          "signal_id": "AUX_SIGNAL_20",
+          "unit": "raw",
+          "source_file": "fridge-ecu-good.a2l"
+        },
+        {
+          "signal_id": "AUX_SIGNAL_21",
+          "unit": "raw",
+          "source_file": "fridge-ecu-good.a2l"
+        },
+        {
+          "signal_id": "AUX_SIGNAL_22",
+          "unit": "raw",
+          "source_file": "fridge-ecu-good.a2l"
+        },
+        {
+          "signal_id": "AUX_SIGNAL_23",
+          "unit": "raw",
+          "source_file": "fridge-ecu-good.a2l"
+        },
+        {
+          "signal_id": "AUX_SIGNAL_24",
+          "unit": "raw",
+          "source_file": "fridge-ecu-good.a2l"
+        },
+        {
+          "signal_id": "AUX_SIGNAL_25",
+          "unit": "raw",
+          "source_file": "fridge-ecu-good.a2l"
+        },
+        {
+          "signal_id": "AUX_SIGNAL_26",
+          "unit": "raw",
+          "source_file": "fridge-ecu-good.a2l"
+        },
+        {
+          "signal_id": "AUX_SIGNAL_27",
+          "unit": "raw",
+          "source_file": "fridge-ecu-good.a2l"
+        },
+        {
+          "signal_id": "AUX_SIGNAL_28",
+          "unit": "raw",
+          "source_file": "fridge-ecu-good.a2l"
+        },
+        {
+          "signal_id": "AUX_SIGNAL_29",
+          "unit": "raw",
+          "source_file": "fridge-ecu-good.a2l"
+        },
+        {
+          "signal_id": "AUX_SIGNAL_30",
+          "unit": "raw",
+          "source_file": "fridge-ecu-good.a2l"
+        },
+        {
+          "signal_id": "AUX_SIGNAL_31",
+          "unit": "raw",
+          "source_file": "fridge-ecu-good.a2l"
+        },
+        {
+          "signal_id": "AUX_SIGNAL_32",
+          "unit": "raw",
+          "source_file": "fridge-ecu-good.a2l"
+        },
+        {
+          "signal_id": "AUX_SIGNAL_33",
+          "unit": "raw",
+          "source_file": "fridge-ecu-good.a2l"
+        },
+        {
+          "signal_id": "AUX_SIGNAL_34",
+          "unit": "raw",
+          "source_file": "fridge-ecu-good.a2l"
+        },
+        {
+          "signal_id": "AUX_SIGNAL_35",
+          "unit": "raw",
+          "source_file": "fridge-ecu-good.a2l"
+        },
+        {
+          "signal_id": "AUX_SIGNAL_36",
+          "unit": "raw",
+          "source_file": "fridge-ecu-good.a2l"
+        },
+        {
+          "signal_id": "AUX_SIGNAL_37",
+          "unit": "raw",
+          "source_file": "fridge-ecu-good.a2l"
+        },
+        {
+          "signal_id": "AUX_SIGNAL_38",
+          "unit": "raw",
+          "source_file": "fridge-ecu-good.a2l"
+        },
+        {
+          "signal_id": "AUX_SIGNAL_39",
+          "unit": "raw",
+          "source_file": "fridge-ecu-good.a2l"
+        },
+        {
+          "signal_id": "AUX_SIGNAL_40",
+          "unit": "raw",
+          "source_file": "fridge-ecu-good.a2l"
+        },
+        {
+          "signal_id": "AUX_SIGNAL_41",
+          "unit": "raw",
+          "source_file": "fridge-ecu-good.a2l"
+        },
+        {
+          "signal_id": "AUX_SIGNAL_42",
+          "unit": "raw",
+          "source_file": "fridge-ecu-good.a2l"
+        },
+        {
+          "signal_id": "AUX_SIGNAL_43",
+          "unit": "raw",
+          "source_file": "fridge-ecu-good.a2l"
+        },
+        {
+          "signal_id": "AUX_SIGNAL_44",
+          "unit": "raw",
+          "source_file": "fridge-ecu-good.a2l"
+        },
+        {
+          "signal_id": "AUX_SIGNAL_45",
+          "unit": "raw",
+          "source_file": "fridge-ecu-good.a2l"
+        },
+        {
+          "signal_id": "AUX_SIGNAL_46",
+          "unit": "raw",
+          "source_file": "fridge-ecu-good.a2l"
+        },
+        {
+          "signal_id": "AUX_SIGNAL_47",
+          "unit": "raw",
+          "source_file": "fridge-ecu-good.a2l"
+        },
+        {
+          "signal_id": "AUX_SIGNAL_48",
+          "unit": "raw",
+          "source_file": "fridge-ecu-good.a2l"
+        },
+        {
+          "signal_id": "AUX_SIGNAL_49",
+          "unit": "raw",
+          "source_file": "fridge-ecu-good.a2l"
+        },
+        {
+          "signal_id": "AUX_SIGNAL_50",
+          "unit": "raw",
+          "source_file": "fridge-ecu-good.a2l"
+        },
+        {
+          "signal_id": "AUX_SIGNAL_51",
+          "unit": "raw",
+          "source_file": "fridge-ecu-good.a2l"
+        },
+        {
+          "signal_id": "AUX_SIGNAL_52",
+          "unit": "raw",
+          "source_file": "fridge-ecu-good.a2l"
+        },
+        {
+          "signal_id": "AUX_SIGNAL_53",
+          "unit": "raw",
+          "source_file": "fridge-ecu-good.a2l"
+        },
+        {
+          "signal_id": "AUX_SIGNAL_54",
+          "unit": "raw",
+          "source_file": "fridge-ecu-good.a2l"
+        },
+        {
+          "signal_id": "AUX_SIGNAL_55",
+          "unit": "raw",
+          "source_file": "fridge-ecu-good.a2l"
+        },
+        {
+          "signal_id": "AUX_SIGNAL_56",
+          "unit": "raw",
+          "source_file": "fridge-ecu-good.a2l"
+        },
+        {
+          "signal_id": "AUX_SIGNAL_57",
+          "unit": "raw",
+          "source_file": "fridge-ecu-good.a2l"
+        },
+        {
+          "signal_id": "AUX_SIGNAL_58",
+          "unit": "raw",
+          "source_file": "fridge-ecu-good.a2l"
+        },
+        {
+          "signal_id": "AUX_SIGNAL_59",
+          "unit": "raw",
+          "source_file": "fridge-ecu-good.a2l"
+        },
+        {
+          "signal_id": "AUX_SIGNAL_60",
+          "unit": "raw",
+          "source_file": "fridge-ecu-good.a2l"
+        }
+      ]
+    }
+  ],
+  "human_review_required": true
+}

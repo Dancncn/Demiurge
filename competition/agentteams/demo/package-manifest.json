@@ -1,0 +1,65 @@
+{
+  "name": "goai-ecu-environmental-test-demo",
+  "version": "0.1.0",
+  "purpose": "Runnable sanitized simulation package for the GOAI Track 1 initial submission.",
+  "official_agentteams_manifest": "../agentteams-goai.yaml",
+  "mcp_contract": "../mcp-contract.yaml",
+  "runtime": {
+    "language": "python",
+    "minimum_version": "3.10",
+    "third_party_dependencies": [],
+    "network_required": false,
+    "production_data_allowed": false
+  },
+  "entrypoints": {
+    "demo": "run.py",
+    "local_mcp_stdio": "mcp_server.py",
+    "regression_checks": "test_run.py",
+    "ui_repository_runner": "mcp_server.py#run_goai_demo"
+  },
+  "sample_inputs": [
+    "config/demo-config.json",
+    "samples/a2l/fridge-ecu-good.a2l",
+    "samples/a2l/fridge-ecu-broken.a2l",
+    "samples/can_trace.csv",
+    "samples/docs/trial_outline.json",
+    "samples/docs/process_manual.json",
+    "samples/docs/report_spec.json"
+  ],
+  "sample_outputs": [
+    "outputs/a2l-preflight.json",
+    "outputs/raw-data.xlsx",
+    "outputs/compliance-model.json",
+    "outputs/trial-report.docx",
+    "outputs/trial-report.md",
+    "outputs/validation-result.json",
+    "outputs/run-evidence.json",
+    "outputs/ui-fridge-ecu-screening/ui-invocation.json",
+    "outputs/llm-review.json (optional --llm mode)"
+  ],
+  "evidence": {
+    "runtime_record": "outputs/run-evidence.json",
+    "ppt_visuals": [],
+    "ppt_note": "The latest competition/GOAI-赛道一-方案PPT.pptx uses editable text and native tables for actual raw-data.xlsx and validation-result.json contents; only real UI runtime screenshots are embedded as images.",
+    "runtime_screenshots": [
+      "evidence/runtime-screenshots/10-ui-repository-mcp-connected.jpg",
+      "evidence/runtime-screenshots/11-ui-repository-prompt-entered.jpg",
+      "evidence/runtime-screenshots/12-ui-repository-running.jpg",
+      "evidence/runtime-screenshots/13-ui-repository-final-verdict.jpg",
+      "evidence/runtime-screenshots/14-ui-repository-final-fields.jpg"
+    ],
+    "runtime_output_dir": "outputs/ui-fridge-ecu-screening",
+    "runtime_note": "Captured from Demiurge UI through the connected goai-ecu-repository MCP server; the MCP tool executed competition/agentteams/demo/run.py and wrote outputs inside the repository. All inputs and outputs are synthetic."
+  },
+  "llm_mode": {
+    "optional": true,
+    "command": "python run.py --llm",
+    "secret_env": "DEEPSEEK_API_KEY",
+    "deterministic_outputs_remain_source_of_truth": true
+  },
+  "limitations": [
+    "MDA capture is synthetic replay.",
+    "A2L fixture contains 72 synthetic measurements but does not represent production semantics.",
+    "No real ECU, CAN card, TSMaster, enterprise network, or customer document is connected."
+  ]
+}

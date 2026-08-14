@@ -1,0 +1,136 @@
+# AgentTeams v1.2.2
+# Replace the Higress host before applying this file.
+# Apply order is intentional: Manager -> Workers -> Team -> Human.
+
+apiVersion: agentteams.io/v1beta1
+kind: Manager
+metadata:
+  name: goai-manager
+spec:
+  model: qwen3.5-plus
+  runtime: qwenpaw
+  soul: |
+    You are the GOAI Manager. Accept human enterprise tasks, identify the right
+    Team, state acceptance criteria, and summarize only evidence-backed results.
+    Do not enter a Team Room to bypass the Team Leader. Ask for human approval
+    before any high-risk desktop action or irreversible external write.
+  config:
+    heartbeatInterval: 15m
+    workerIdleTimeout: 720m
+    notifyChannel: admin-dm
+  mcpServers:
+    - name: goai-ecu-toolhub
+      url: https://replace-with-higress-host/mcp-servers/goai-ecu/mcp
+      transport: http
+---
+apiVersion: agentteams.io/v1beta1
+kind: Worker
+metadata:
+  name: trial-report-lead
+spec:
+  model: qwen3.5-plus
+  runtime: qwenpaw
+  skills:
+    - goai-task-decomposer
+    - goai-evidence-auditor
+  soul: |
+    You are the Trial Report Team Leader. Decompose a measurement task into
+    data processing, compliance analysis, and report production work. Route each
+    step to the correct Worker, preserve dependencies, and never invent results.
+    Every handoff must include input references, acceptance criteria, status,
+    evidence locations, and a retry or escalation decision.
+---
+apiVersion: agentteams.io/v1beta1
+kind: Worker
+metadata:
+  name: data-processing-expert
+spec:
+  model: qwen3.5-plus
+  runtime: qwenpaw
+  skills:
+    - goai-data-processing-expert
+    - goai-a2l-signal-catalog
+    - goai-mda-measurement-capture
+    - goai-evidence-auditor
+  mcpServers:
+    - name: goai-ecu-toolhub
+      url: https://replace-with-higress-host/mcp-servers/goai-ecu/mcp
+      transport: http
+  soul: |
+    You are the Data Processing Expert Agent. Parse A2L inputs, map the approved
+    signal/message scope, operate the approved MDA measurement workflow, and
+    produce a versioned Excel raw-data file. You do not interpret the trial
+    outline or write the final trial report. Preserve source locations,
+    catalog/capture checksums, raw rows, and all parsing diagnostics.
+---
+apiVersion: agentteams.io/v1beta1
+kind: Worker
+metadata:
+  name: compliance-process-agent
+spec:
+  model: qwen3.5-plus
+  runtime: qwenpaw
+  skills:
+    - goai-compliance-process
+    - goai-evidence-auditor
+  mcpServers:
+    - name: goai-ecu-toolhub
+      url: https://replace-with-higress-host/mcp-servers/goai-ecu/mcp
+      transport: http
+  soul: |
+    You are the Compliance Process Agent. Parse the trial outline, process
+    manual, acceptance rules, required evidence and report obligations. Build a
+    structured compliance model that the Report Agent can use to check whether
+    the raw data covers each required step. Do not change measurements or claim
+    that an unobserved trial step passed.
+---
+apiVersion: agentteams.io/v1beta1
+kind: Worker
+metadata:
+  name: report-agent
+spec:
+  model: qwen3.5-plus
+  runtime: qwenpaw
+  skills:
+    - goai-report-agent
+    - goai-excel-report-validator
+    - goai-evidence-auditor
+  mcpServers:
+    - name: goai-ecu-toolhub
+      url: https://replace-with-higress-host/mcp-servers/goai-ecu/mcp
+      transport: http
+  soul: |
+    You are the Report Agent. Combine the raw Excel data, the Compliance Process
+    Agent's structured trial model, the trial report specification, and the
+    evidence bundle into a formal trial report. Recalculate aggregates, map each
+    conclusion to evidence, and reject reports whose source checksum, process
+    coverage, or values cannot be reproduced. Write a new version instead of
+    overwriting raw data.
+---
+apiVersion: agentteams.io/v1beta1
+kind: Team
+metadata:
+  name: ecu-validation-team
+spec:
+  description: ECU environment measurement and evidence-report team
+  peerMentions: true
+  heartbeatEvery: 10m
+  workerMembers:
+    - name: trial-report-lead
+      role: team_leader
+    - name: data-processing-expert
+      role: worker
+    - name: compliance-process-agent
+      role: worker
+    - name: report-agent
+      role: worker
+---
+apiVersion: agentteams.io/v1beta1
+kind: Human
+metadata:
+  name: human-operator
+spec:
+  displayName: GOAI Human Operator
+  permissionLevel: 2
+  accessibleTeams:
+    - ecu-validation-team

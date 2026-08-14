@@ -1,0 +1,426 @@
+{
+  "verdict": "needs_human_review",
+  "data_verdict": "pass",
+  "acceptance_criteria_checks": [
+    {
+      "criterion_id": "TEMP-BOX-MIN",
+      "requirement_id": "ENV-TEMP-SHOCK",
+      "description": "冷藏箱温度不得低于试验大纲下限",
+      "signal_id": "BOX_TEMP_C",
+      "metric": "min",
+      "unit": "degC",
+      "operator": "gte",
+      "expected": {
+        "value": -20
+      },
+      "evidence_refs": [
+        "raw-data.xlsx",
+        "compliance-model.json"
+      ],
+      "status": "pass",
+      "observed": {
+        "min": -18.7,
+        "max": -16.7,
+        "average": -17.7
+      },
+      "evaluated_rows": 6,
+      "row_results": [
+        {
+          "ecu_id": "SIM-ECU-01",
+          "value": -18.7,
+          "pass": true
+        },
+        {
+          "ecu_id": "SIM-ECU-02",
+          "value": -18.3,
+          "pass": true
+        },
+        {
+          "ecu_id": "SIM-ECU-03",
+          "value": -17.9,
+          "pass": true
+        },
+        {
+          "ecu_id": "SIM-ECU-04",
+          "value": -17.5,
+          "pass": true
+        },
+        {
+          "ecu_id": "SIM-ECU-05",
+          "value": -17.1,
+          "pass": true
+        },
+        {
+          "ecu_id": "SIM-ECU-06",
+          "value": -16.7,
+          "pass": true
+        }
+      ],
+      "findings": []
+    },
+    {
+      "criterion_id": "TEMP-BOX-MAX",
+      "requirement_id": "ENV-TEMP-SHOCK",
+      "description": "冷藏箱温度不得高于试验大纲上限",
+      "signal_id": "BOX_TEMP_C",
+      "metric": "max",
+      "unit": "degC",
+      "operator": "lte",
+      "expected": {
+        "value": 60
+      },
+      "evidence_refs": [
+        "raw-data.xlsx",
+        "compliance-model.json"
+      ],
+      "status": "pass",
+      "observed": {
+        "min": -17.3,
+        "max": -15.3,
+        "average": -16.3
+      },
+      "evaluated_rows": 6,
+      "row_results": [
+        {
+          "ecu_id": "SIM-ECU-01",
+          "value": -17.3,
+          "pass": true
+        },
+        {
+          "ecu_id": "SIM-ECU-02",
+          "value": -16.9,
+          "pass": true
+        },
+        {
+          "ecu_id": "SIM-ECU-03",
+          "value": -16.5,
+          "pass": true
+        },
+        {
+          "ecu_id": "SIM-ECU-04",
+          "value": -16.1,
+          "pass": true
+        },
+        {
+          "ecu_id": "SIM-ECU-05",
+          "value": -15.7,
+          "pass": true
+        },
+        {
+          "ecu_id": "SIM-ECU-06",
+          "value": -15.3,
+          "pass": true
+        }
+      ],
+      "findings": []
+    },
+    {
+      "criterion_id": "COND-HUMIDITY-MAX",
+      "requirement_id": "ENV-CONDENSATION",
+      "description": "湿度峰值不得超过试验大纲上限",
+      "signal_id": "HUMIDITY_PERCENT",
+      "metric": "max",
+      "unit": "percent",
+      "operator": "lte",
+      "expected": {
+        "value": 95
+      },
+      "evidence_refs": [
+        "raw-data.xlsx",
+        "compliance-model.json"
+      ],
+      "status": "pass",
+      "observed": {
+        "min": 74.5,
+        "max": 93.7,
+        "average": 77.7
+      },
+      "evaluated_rows": 6,
+      "row_results": [
+        {
+          "ecu_id": "SIM-ECU-01",
+          "value": 74.5,
+          "pass": true
+        },
+        {
+          "ecu_id": "SIM-ECU-02",
+          "value": 74.5,
+          "pass": true
+        },
+        {
+          "ecu_id": "SIM-ECU-03",
+          "value": 93.7,
+          "pass": true
+        },
+        {
+          "ecu_id": "SIM-ECU-04",
+          "value": 74.5,
+          "pass": true
+        },
+        {
+          "ecu_id": "SIM-ECU-05",
+          "value": 74.5,
+          "pass": true
+        },
+        {
+          "ecu_id": "SIM-ECU-06",
+          "value": 74.5,
+          "pass": true
+        }
+      ],
+      "findings": []
+    },
+    {
+      "criterion_id": "COND-FLAG-RANGE",
+      "requirement_id": "ENV-CONDENSATION",
+      "description": "结露指示信号必须保持在合法枚举范围",
+      "signal_id": "CONDENSATION_FLAG",
+      "metric": "max",
+      "unit": "bool",
+      "operator": "lte",
+      "expected": {
+        "value": 1
+      },
+      "evidence_refs": [
+        "raw-data.xlsx",
+        "compliance-model.json"
+      ],
+      "status": "pass",
+      "observed": {
+        "min": 0.0,
+        "max": 0.0,
+        "average": 0.0
+      },
+      "evaluated_rows": 6,
+      "row_results": [
+        {
+          "ecu_id": "SIM-ECU-01",
+          "value": 0.0,
+          "pass": true
+        },
+        {
+          "ecu_id": "SIM-ECU-02",
+          "value": 0.0,
+          "pass": true
+        },
+        {
+          "ecu_id": "SIM-ECU-03",
+          "value": 0.0,
+          "pass": true
+        },
+        {
+          "ecu_id": "SIM-ECU-04",
+          "value": 0.0,
+          "pass": true
+        },
+        {
+          "ecu_id": "SIM-ECU-05",
+          "value": 0.0,
+          "pass": true
+        },
+        {
+          "ecu_id": "SIM-ECU-06",
+          "value": 0.0,
+          "pass": true
+        }
+      ],
+      "findings": []
+    },
+    {
+      "criterion_id": "CAN-ERROR-MAX",
+      "requirement_id": "ENV-CAN-QUALITY",
+      "description": "CAN 错误计数应为零",
+      "signal_id": "CAN_ERROR_COUNT",
+      "metric": "max",
+      "unit": "count",
+      "operator": "lte",
+      "expected": {
+        "value": 0
+      },
+      "evidence_refs": [
+        "raw-data.xlsx",
+        "compliance-model.json"
+      ],
+      "status": "pass",
+      "observed": {
+        "min": 0.0,
+        "max": 0.0,
+        "average": 0.0
+      },
+      "evaluated_rows": 6,
+      "row_results": [
+        {
+          "ecu_id": "SIM-ECU-01",
+          "value": 0.0,
+          "pass": true
+        },
+        {
+          "ecu_id": "SIM-ECU-02",
+          "value": 0.0,
+          "pass": true
+        },
+        {
+          "ecu_id": "SIM-ECU-03",
+          "value": 0.0,
+          "pass": true
+        },
+        {
+          "ecu_id": "SIM-ECU-04",
+          "value": 0.0,
+          "pass": true
+        },
+        {
+          "ecu_id": "SIM-ECU-05",
+          "value": 0.0,
+          "pass": true
+        },
+        {
+          "ecu_id": "SIM-ECU-06",
+          "value": 0.0,
+          "pass": true
+        }
+      ],
+      "findings": []
+    },
+    {
+      "criterion_id": "CAN-VOLTAGE-RANGE",
+      "requirement_id": "ENV-CAN-QUALITY",
+      "description": "ECU 供电电压应处于模拟试验允许区间",
+      "signal_id": "SUPPLY_VOLTAGE_V",
+      "metric": "min",
+      "unit": "V",
+      "operator": "between",
+      "expected": {
+        "lower": 11,
+        "upper": 13
+      },
+      "evidence_refs": [
+        "raw-data.xlsx",
+        "compliance-model.json"
+      ],
+      "status": "pass",
+      "observed": {
+        "min": 11.3,
+        "max": 11.55,
+        "average": 11.433
+      },
+      "evaluated_rows": 6,
+      "row_results": [
+        {
+          "ecu_id": "SIM-ECU-01",
+          "value": 11.3,
+          "pass": true
+        },
+        {
+          "ecu_id": "SIM-ECU-02",
+          "value": 11.4,
+          "pass": true
+        },
+        {
+          "ecu_id": "SIM-ECU-03",
+          "value": 11.4,
+          "pass": true
+        },
+        {
+          "ecu_id": "SIM-ECU-04",
+          "value": 11.45,
+          "pass": true
+        },
+        {
+          "ecu_id": "SIM-ECU-05",
+          "value": 11.5,
+          "pass": true
+        },
+        {
+          "ecu_id": "SIM-ECU-06",
+          "value": 11.55,
+          "pass": true
+        }
+      ],
+      "findings": []
+    }
+  ],
+  "section_checks": [
+    {
+      "section_id": "测试目的",
+      "status": "pass",
+      "evidence_refs": [
+        "raw-data.xlsx",
+        "compliance-model.json"
+      ],
+      "findings": []
+    },
+    {
+      "section_id": "测试环境",
+      "status": "pass",
+      "evidence_refs": [
+        "raw-data.xlsx",
+        "compliance-model.json"
+      ],
+      "findings": []
+    },
+    {
+      "section_id": "A2L 文件预筛选",
+      "status": "needs_human_review",
+      "evidence_refs": [
+        "raw-data.xlsx",
+        "compliance-model.json"
+      ],
+      "findings": [
+        "存在被 A2L 预筛选拒绝的文件"
+      ]
+    },
+    {
+      "section_id": "原始数据摘要",
+      "status": "pass",
+      "evidence_refs": [
+        "raw-data.xlsx",
+        "compliance-model.json"
+      ],
+      "findings": []
+    },
+    {
+      "section_id": "原始数据合规判定",
+      "status": "pass",
+      "evidence_refs": [
+        "raw-data.xlsx",
+        "compliance-model.json"
+      ],
+      "findings": []
+    },
+    {
+      "section_id": "合规覆盖",
+      "status": "pass",
+      "evidence_refs": [
+        "raw-data.xlsx",
+        "compliance-model.json"
+      ],
+      "findings": []
+    },
+    {
+      "section_id": "验证结论",
+      "status": "needs_human_review",
+      "evidence_refs": [
+        "raw-data.xlsx",
+        "compliance-model.json"
+      ],
+      "findings": []
+    },
+    {
+      "section_id": "证据索引",
+      "status": "pass",
+      "evidence_refs": [
+        "raw-data.xlsx",
+        "compliance-model.json"
+      ],
+      "findings": []
+    }
+  ],
+  "traceability": {
+    "a2l_preflight_checksum": "52cc746f5a1e2e784752b61f147a65d296d03166ecf212c7c9f2497c6664f98b",
+    "raw_data_checksum": "cd6370969d5eead3acce184b62113b582e678f99162fc0b931eba9c6322c3132",
+    "compliance_model_checksum": "e9a21996311a6628ed7f07080b06acc24cc915264f819629613b5b9e9f92ab8e",
+    "evidence_complete": true
+  },
+  "human_review_reason": "A2L 文件可用性存在拒绝项"
+}

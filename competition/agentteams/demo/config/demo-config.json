@@ -1,0 +1,30 @@
+{
+  "task_id": "demo-fridge-ecu-environment-001",
+  "a2l_dir": "samples/a2l",
+  "can_trace": "samples/can_trace.csv",
+  "trial_outline": "samples/docs/trial_outline.json",
+  "process_manual": "samples/docs/process_manual.json",
+  "report_specification": "samples/docs/report_spec.json",
+  "output_dir": "outputs",
+  "ecu_ids": [
+    "SIM-ECU-01",
+    "SIM-ECU-02",
+    "SIM-ECU-03",
+    "SIM-ECU-04",
+    "SIM-ECU-05",
+    "SIM-ECU-06"
+  ],
+  "sample_count": 5,
+  "llm": {
+    "provider": "deepseek",
+    "base_url": "https://api.deepseek.com/v1",
+    "model": "deepseek-v4-flash",
+    "api_key_env": "DEEPSEEK_API_KEY"
+  },
+  "data_policy": {
+    "synthetic": true,
+    "production_data_allowed": false,
+    "external_network_required": false,
+    "hardware_driver": "synthetic_mda_replay"
+  }
+}

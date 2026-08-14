@@ -6,7 +6,7 @@ use futures_util::{pin_mut, Stream, StreamExt};
 use serde_json::{json, Value};
 
 use crate::agent::conversation::{FunctionCall, Message, ToolCall};
-use crate::store::Settings;
+use crate::store::{ProviderKind, Settings};
 
 use super::sse::{SseDecoder, SseEvent};
 use super::{
@@ -133,6 +133,18 @@ pub fn build_openai_body_with_structured_output(
     }
     if let Some(effort) = profile.openai_chat_reasoning_effort(cfg) {
         body["reasoning_effort"] = json!(effort);
+    }
+    // DeepSeek V4 defaults to thinking mode, which can leave a short interactive
+    // request in a long silent reasoning phase. Keep the normal Demiurge chat
+    // path responsive; callers that need deep reasoning can use a dedicated
+    // provider profile or explicit agent workflow later.
+    if matches!(cfg.provider, ProviderKind::DeepSeek)
+        && matches!(
+            cfg.model.trim().to_ascii_lowercase().as_str(),
+            "deepseek-v4-flash" | "deepseek-v4-pro"
+        )
+    {
+        body["thinking"] = json!({ "type": "disabled" });
     }
     if profile.supports_non_empty_tools(tools) {
         body["tools"] = tools.clone();
@@ -352,6 +364,20 @@ mod tests {
         assert_eq!(body["stream"], true);
         assert!(body["tools"].is_array());
         assert_eq!(body["tool_choice"], "auto");
+    }
+
+    #[test]
+    fn deepseek_v4_body_disables_default_thinking_mode() {
+        let mut cfg = settings(ProviderKind::DeepSeek, "sk-test");
+        cfg.model = "deepseek-v4-flash".to_string();
+        let body = build_openai_body(
+            &cfg,
+            &[Message::user("hi")],
+            &json!([]),
+            ProviderProfile::for_kind(ProviderKind::DeepSeek),
+        )
+        .unwrap();
+        assert_eq!(body["thinking"]["type"], "disabled");
     }
 
     #[test]

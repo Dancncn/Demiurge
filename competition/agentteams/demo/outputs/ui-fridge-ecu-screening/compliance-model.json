@@ -1,0 +1,144 @@
+{
+  "title": "车载冷藏设备 ECU 温度冲击与结露模拟测试",
+  "revision": "SIM-R1",
+  "environment": {
+    "low_temperature_c": -20,
+    "high_temperature_c": 60,
+    "humidity_percent": 95,
+    "note": "Illustrative values only; not a production acceptance standard."
+  },
+  "ordered_steps": [
+    "确认 A2L 文件可解析并记录拒绝项",
+    "加载模拟测量目录并建立信号映射",
+    "回放温度冲击和高湿结露阶段数据",
+    "生成原始数据 Excel",
+    "校验试验大纲覆盖和证据链",
+    "生成正式试验报告并提交人工审核"
+  ],
+  "report_sections": [
+    "测试目的",
+    "测试环境",
+    "A2L 文件预筛选",
+    "原始数据摘要",
+    "原始数据合规判定",
+    "合规覆盖",
+    "验证结论",
+    "证据索引"
+  ],
+  "coverage": [
+    {
+      "requirement_id": "ENV-TEMP-SHOCK",
+      "source": "trial_outline",
+      "status": "covered",
+      "evidence_refs": [
+        "raw-data.xlsx",
+        "a2l-preflight.json"
+      ],
+      "acceptance_criteria_ids": [
+        "TEMP-BOX-MIN",
+        "TEMP-BOX-MAX"
+      ]
+    },
+    {
+      "requirement_id": "ENV-CONDENSATION",
+      "source": "trial_outline",
+      "status": "covered",
+      "evidence_refs": [
+        "raw-data.xlsx",
+        "a2l-preflight.json"
+      ],
+      "acceptance_criteria_ids": [
+        "COND-HUMIDITY-MAX",
+        "COND-FLAG-RANGE"
+      ]
+    },
+    {
+      "requirement_id": "ENV-CAN-QUALITY",
+      "source": "trial_outline",
+      "status": "covered",
+      "evidence_refs": [
+        "raw-data.xlsx",
+        "a2l-preflight.json"
+      ],
+      "acceptance_criteria_ids": [
+        "CAN-ERROR-MAX",
+        "CAN-VOLTAGE-RANGE"
+      ]
+    }
+  ],
+  "acceptance_criteria": [
+    {
+      "id": "TEMP-BOX-MIN",
+      "description": "冷藏箱温度不得低于试验大纲下限",
+      "signal_id": "BOX_TEMP_C",
+      "metric": "min",
+      "operator": "gte",
+      "value": -20,
+      "unit": "degC",
+      "requirement_id": "ENV-TEMP-SHOCK",
+      "source": "trial_outline"
+    },
+    {
+      "id": "TEMP-BOX-MAX",
+      "description": "冷藏箱温度不得高于试验大纲上限",
+      "signal_id": "BOX_TEMP_C",
+      "metric": "max",
+      "operator": "lte",
+      "value": 60,
+      "unit": "degC",
+      "requirement_id": "ENV-TEMP-SHOCK",
+      "source": "trial_outline"
+    },
+    {
+      "id": "COND-HUMIDITY-MAX",
+      "description": "湿度峰值不得超过试验大纲上限",
+      "signal_id": "HUMIDITY_PERCENT",
+      "metric": "max",
+      "operator": "lte",
+      "value": 95,
+      "unit": "percent",
+      "requirement_id": "ENV-CONDENSATION",
+      "source": "trial_outline"
+    },
+    {
+      "id": "COND-FLAG-RANGE",
+      "description": "结露指示信号必须保持在合法枚举范围",
+      "signal_id": "CONDENSATION_FLAG",
+      "metric": "max",
+      "operator": "lte",
+      "value": 1,
+      "unit": "bool",
+      "requirement_id": "ENV-CONDENSATION",
+      "source": "trial_outline"
+    },
+    {
+      "id": "CAN-ERROR-MAX",
+      "description": "CAN 错误计数应为零",
+      "signal_id": "CAN_ERROR_COUNT",
+      "metric": "max",
+      "operator": "lte",
+      "value": 0,
+      "unit": "count",
+      "requirement_id": "ENV-CAN-QUALITY",
+      "source": "trial_outline"
+    },
+    {
+      "id": "CAN-VOLTAGE-RANGE",
+      "description": "ECU 供电电压应处于模拟试验允许区间",
+      "signal_id": "SUPPLY_VOLTAGE_V",
+      "metric": "min",
+      "operator": "between",
+      "lower": 11,
+      "upper": 13,
+      "unit": "V",
+      "requirement_id": "ENV-CAN-QUALITY",
+      "source": "trial_outline"
+    }
+  ],
+  "source_documents": {
+    "trial_outline": "samples/docs/trial_outline.json",
+    "process_manual": "samples/docs/process_manual.json",
+    "report_specification": "samples/docs/report_spec.json"
+  },
+  "model_checksum": "e9a21996311a6628ed7f07080b06acc24cc915264f819629613b5b9e9f92ab8e"
+}

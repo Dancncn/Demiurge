@@ -1,0 +1,10 @@
+{
+  "name": "goai-ecu-simulator",
+  "enabled": false,
+  "transport": "stdio",
+  "command": "python",
+  "args": [
+    "competition/agentteams/demo/mcp_server.py"
+  ],
+  "env": []
+}

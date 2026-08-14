@@ -1,0 +1,20 @@
+{
+  "source_uri": "samples/docs/report_spec.json",
+  "revision": "SIM-R1",
+  "required_sections": [
+    "测试目的",
+    "测试环境",
+    "A2L 文件预筛选",
+    "原始数据摘要",
+    "原始数据合规判定",
+    "合规覆盖",
+    "验证结论",
+    "证据索引"
+  ],
+  "required_artifacts": [
+    "a2l-preflight.json",
+    "raw-data.xlsx",
+    "compliance-model.json",
+    "validation-result.json"
+  ]
+}

@@ -1,0 +1,250 @@
+name: goai-ecu-toolhub
+version: 0.1.0
+transport:
+  protocol: MCP
+  entrypoint: https://replace-with-higress-host/mcp-servers/goai-ecu/mcp
+  authentication: AgentTeams Consumer Token through Higress
+  credential_policy: Workers never receive upstream MDA, file-share, or LLM credentials
+
+tools:
+  - name: ecu_read_a2l
+    purpose: Parse an A2L file into a normalized signal/message catalog.
+    risk: read_only
+    input:
+      type: object
+      required: [source_uri]
+      properties:
+        source_uri: {type: string}
+        encoding: {type: string, default: utf-8}
+        ecu_filter: {type: array, items: {type: string}}
+    output:
+      type: object
+      required: [source_checksum, signals, diagnostics]
+      properties:
+        source_checksum: {type: string}
+        signals: {type: array}
+        diagnostics: {type: array}
+    failure:
+      retry: false
+      action: return_parse_diagnostics_without_partial_catalog
+    audit: record source_uri, source_checksum, caller, duration, result_count
+
+  - name: mda_capture_measurements
+    purpose: Execute an approved MDA measurement session for selected signals.
+    risk: external_privileged
+    input:
+      type: object
+      required: [task_id, catalog_checksum, signal_ids, idempotency_key]
+      properties:
+        task_id: {type: string}
+        catalog_checksum: {type: string}
+        signal_ids: {type: array, items: {type: string}}
+        ecu_ids: {type: array, items: {type: string}}
+        duration_ms: {type: integer, minimum: 1}
+        idempotency_key: {type: string}
+    output:
+      type: object
+      required: [capture_id, rows, status, evidence_uri]
+      properties:
+        capture_id: {type: string}
+        rows: {type: array}
+        status: {type: string, enum: [complete, partial, failed]}
+        evidence_uri: {type: string}
+    approval:
+      required: true
+      prompt_fields: [target_application, ecu_ids, signal_count, duration_ms, affected_files]
+    failure:
+      retry: idempotent_only
+      max_attempts: 2
+      preserve_original_capture: true
+      escalation: human_operator
+    audit: record task_id, catalog_checksum, idempotency_key, caller, approval, status, evidence_uri
+
+  - name: excel_build_raw_data
+    purpose: Write the approved raw measurement rows to a versioned Excel intermediate artifact.
+    risk: mutating_artifact
+    input:
+      type: object
+      required: [task_id, capture_id, catalog_checksum, rows, raw_data_template]
+      properties:
+        task_id: {type: string}
+        capture_id: {type: string}
+        catalog_checksum: {type: string}
+        rows: {type: array}
+        raw_data_template: {type: string}
+        output_uri: {type: string}
+    output:
+      type: object
+      required: [raw_data_uri, raw_data_checksum, row_count, evidence_uri]
+      properties:
+        raw_data_uri: {type: string}
+        raw_data_checksum: {type: string}
+        row_count: {type: integer}
+        evidence_uri: {type: string}
+    failure:
+      retry: safe_new_version_only
+      preserve_previous_raw_data: true
+      escalation: human_operator
+    audit: record task_id, capture_id, catalog_checksum, raw_data_checksum, row_count, output_uri
+
+  - name: trial_parse_outline
+    purpose: Parse the trial outline into required steps, inputs, acceptance rules and evidence obligations.
+    risk: read_only
+    input:
+      type: object
+      required: [outline_uri, revision]
+      properties:
+        outline_uri: {type: string}
+        revision: {type: string}
+    output:
+      type: object
+      required: [outline_checksum, requirements, evidence_requirements, diagnostics]
+      properties:
+        outline_checksum: {type: string}
+        requirements: {type: array}
+        evidence_requirements: {type: array}
+        diagnostics: {type: array}
+    failure:
+      retry: false
+      action: needs_human_review_on_missing_or_ambiguous_requirement
+    audit: record outline_uri, outline_checksum, revision, caller, requirement_count, diagnostics_count
+
+  - name: trial_parse_process_manual
+    purpose: Parse the trial process manual into ordered procedure steps and report obligations.
+    risk: read_only
+    input:
+      type: object
+      required: [manual_uri, revision]
+      properties:
+        manual_uri: {type: string}
+        revision: {type: string}
+    output:
+      type: object
+      required: [manual_checksum, ordered_steps, report_rules, diagnostics]
+      properties:
+        manual_checksum: {type: string}
+        ordered_steps: {type: array}
+        report_rules: {type: array}
+        diagnostics: {type: array}
+    failure:
+      retry: false
+      action: needs_human_review_on_revision_conflict
+    audit: record manual_uri, manual_checksum, revision, caller, step_count, diagnostics_count
+
+  - name: trial_build_report
+    purpose: Produce a formal trial report from the raw Excel intermediate artifact, the compliance model and the approved report specification. This is the formal report path; excel_build_report remains a generic low-level measurement utility.
+    risk: mutating_artifact
+    input:
+      type: object
+      required: [task_id, raw_data_uri, raw_data_checksum, compliance_model_uri, report_specification_uri]
+      properties:
+        task_id: {type: string}
+        raw_data_uri: {type: string}
+        raw_data_checksum: {type: string}
+        compliance_model_uri: {type: string}
+        report_specification_uri: {type: string}
+        output_format: {type: string, enum: [docx, pdf, xlsx, bundle]}
+        output_uri: {type: string}
+    output:
+      type: object
+      required: [report_uri, report_checksum, section_results, evidence_uri]
+      properties:
+        report_uri: {type: string}
+        report_checksum: {type: string}
+        section_results: {type: array}
+        evidence_uri: {type: string}
+    failure:
+      retry: safe_new_version_only
+      preserve_previous_report: true
+      escalation: human_operator
+    audit: record task_id, raw_data_checksum, compliance_model_checksum, report_checksum, output_uri
+
+  - name: trial_validate_report
+    purpose: Validate the formal report's chapter coverage, calculations and evidence traceability against the trial outline, process manual, approved report specification and raw Excel intermediate artifact.
+    risk: read_only
+    input:
+      type: object
+      required: [report_uri, raw_data_uri, compliance_model_uri, report_specification_uri, acceptance_rules]
+      properties:
+        report_uri: {type: string}
+        raw_data_uri: {type: string}
+        compliance_model_uri: {type: string}
+        report_specification_uri: {type: string}
+        acceptance_rules: {type: object}
+    output:
+      type: object
+      required: [verdict, section_checks, evidence_uri]
+      properties:
+        verdict: {type: string, enum: [pass, fail, needs_human_review]}
+        section_checks: {type: array}
+        evidence_uri: {type: string}
+    failure:
+      retry: false
+      action: preserve_report_and_return_section_findings
+    audit: record report_uri, raw_data_uri, compliance_model_uri, verdict, failed_section_count, evidence_uri
+
+  - name: excel_build_report
+    purpose: Generate a versioned generic Excel measurement summary from raw rows and a template. This low-level utility is retained for compatibility and is not the formal trial report; the formal report is produced by trial_build_report.
+    risk: mutating_artifact
+    input:
+      type: object
+      required: [task_id, capture_id, rows, report_template]
+      properties:
+        task_id: {type: string}
+        capture_id: {type: string}
+        rows: {type: array}
+        report_template: {type: string}
+        output_uri: {type: string}
+    output:
+      type: object
+      required: [report_uri, report_checksum, summary]
+      properties:
+        report_uri: {type: string}
+        report_checksum: {type: string}
+        summary: {type: object}
+    failure:
+      retry: safe_new_version_only
+      preserve_previous_report: true
+      escalation: report-agent
+    audit: record task_id, capture_id, source_checksum, report_checksum, output_uri
+
+  - name: excel_validate_report
+    purpose: Recompute aggregates and validate report completeness and traceability.
+    risk: read_only
+    input:
+      type: object
+      required: [report_uri, capture_id, acceptance_rules]
+      properties:
+        report_uri: {type: string}
+        capture_id: {type: string}
+        acceptance_rules: {type: object}
+    output:
+      type: object
+      required: [verdict, checks, evidence_uri]
+      properties:
+        verdict: {type: string, enum: [pass, fail, needs_human_review]}
+        checks: {type: array}
+        evidence_uri: {type: string}
+    failure:
+      retry: false
+      action: preserve_report_and_return_failed_checks
+    audit: record report_uri, capture_id, verdict, failed_check_count, evidence_uri
+
+shared_state:
+  task_root: MinIO://shared/tasks/task-{task_id}/
+  files:
+    - meta.json
+    - spec.md
+    - signal-catalog.json
+    - capture-result.json
+    - raw-data.xlsx
+    - trial-outline.json
+    - process-manual.json
+    - compliance-model.json
+    - report-specification.json
+    - trial-report.docx
+    - trial-report.pdf
+    - validation-result.json
+    - evidence.jsonl
+  knowledge_root: MinIO://shared/knowledge/
+  write_policy: append_or_new_version_only

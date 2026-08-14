@@ -1,0 +1,56 @@
+{
+  "task_id": "demo-ecu-validation-001",
+  "source": {
+    "a2l_uri": "file:///approved-inputs/demo.a2l",
+    "ecu_ids": ["ECU-01", "ECU-02", "ECU-03", "ECU-04", "ECU-05", "ECU-06"],
+    "signal_scope": "70+ approved measurement messages"
+  },
+  "documents": {
+    "trial_outline_uri": "file:///approved-inputs/trial-outline.docx",
+    "process_manual_uri": "file:///approved-inputs/process-manual.pdf",
+    "report_specification_uri": "file:///approved-inputs/trial-report-standard.docx",
+    "revision": "R3"
+  },
+  "measurement": {
+    "expected_signal_count": 72,
+    "minimum_signal_count": 70,
+    "ecu_count": 6,
+    "duration_ms": 60000,
+    "mda_session": "approved-session-reference",
+    "statistics": ["max", "min", "average"],
+    "raw_data_artifact": {
+      "format": "xlsx",
+      "is_intermediate": true,
+      "final_report_requires_compliance_inputs": true
+    }
+  },
+  "report": {
+    "raw_data_format": "xlsx",
+    "final_report_format": "docx",
+    "template": "engineering-trial-report-v1",
+    "required_sections": [
+      "purpose",
+      "environment",
+      "procedure",
+      "raw_data_summary",
+      "requirement_coverage",
+      "deviations",
+      "conclusion",
+      "evidence_index"
+    ],
+    "required_aggregates": ["max", "min", "average", "sample_count"],
+    "pipeline": {
+      "raw_data_tool": "excel_build_raw_data",
+      "formal_report_tool": "trial_build_report",
+      "validation_tool": "trial_validate_report"
+    },
+    "acceptance": {
+      "missing_signal_policy": "needs_human_review",
+      "unit_mismatch_policy": "fail",
+      "source_traceability_required": true,
+      "chapter_coverage_required": true,
+      "evidence_reference_required": true,
+      "raw_excel_is_final_report": false
+    }
+  }
+}

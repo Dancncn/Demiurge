@@ -13,7 +13,10 @@
     "test:navigation": "node --test --experimental-strip-types tests/navigationEpoch.test.ts",
     "preview": "vite preview",
     "tauri": "node scripts/tauri.mjs",
-    "fetch:cubism-core": "node scripts/fetch-cubism-core.mjs"
+    "fetch:cubism-core": "node scripts/fetch-cubism-core.mjs",
+    "agentteams:check": "node scripts/agentteams.mjs check",
+    "agentteams:apply": "node scripts/agentteams.mjs apply",
+    "agentteams:demo": "python competition/agentteams/demo/run.py"
   },
   "dependencies": {
     "@fontsource-variable/inter": "^5.2.8",

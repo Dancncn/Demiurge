@@ -1,0 +1,153 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "GOAI ECU Trial Report Contract",
+  "type": "object",
+  "required": ["task_id", "raw_data", "compliance", "trial_report", "validation"],
+  "properties": {
+    "task_id": {"type": "string"},
+    "raw_data": {
+      "type": "object",
+      "required": ["uri", "checksum", "format", "capture_id", "ecu_count", "signal_count", "statistics", "row_schema", "intermediate_only"],
+      "properties": {
+        "uri": {"type": "string"},
+        "checksum": {"type": "string"},
+        "format": {"enum": ["xlsx"]},
+        "capture_id": {"type": "string"},
+        "ecu_count": {"type": "integer", "minimum": 1},
+        "signal_count": {"type": "integer", "minimum": 70},
+        "statistics": {
+          "type": "array",
+          "minItems": 3,
+          "uniqueItems": true,
+          "items": {"enum": ["max", "min", "average"]}
+        },
+        "row_schema": {
+          "type": "object",
+          "required": ["ecu_id", "signal_id", "unit", "sample_count", "max", "min", "average"],
+          "properties": {
+            "ecu_id": {"type": "string"},
+            "signal_id": {"type": "string"},
+            "unit": {"type": "string"},
+            "sample_count": {"type": "integer", "minimum": 1},
+            "max": {"type": "number"},
+            "min": {"type": "number"},
+            "average": {"type": "number"}
+          }
+        },
+        "intermediate_only": {"const": true},
+        "evidence_uri": {"type": "string"}
+      }
+    },
+    "compliance": {
+      "type": "object",
+      "required": ["trial_outline", "process_manual", "report_specification", "model_checksum", "coverage"],
+      "properties": {
+        "trial_outline": {
+          "type": "object",
+          "required": ["uri", "checksum"],
+          "properties": {
+            "uri": {"type": "string"},
+            "checksum": {"type": "string"}
+          }
+        },
+        "process_manual": {
+          "type": "object",
+          "required": ["uri", "checksum"],
+          "properties": {
+            "uri": {"type": "string"},
+            "checksum": {"type": "string"}
+          }
+        },
+        "report_specification": {
+          "type": "object",
+          "required": ["uri", "checksum"],
+          "properties": {
+            "uri": {"type": "string"},
+            "checksum": {"type": "string"}
+          }
+        },
+        "model_checksum": {"type": "string"},
+        "coverage": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": ["requirement_id", "source", "status", "evidence_refs"],
+            "properties": {
+              "requirement_id": {"type": "string"},
+              "source": {"enum": ["trial_outline", "process_manual", "report_specification"]},
+              "status": {"enum": ["covered", "partially_covered", "not_covered", "needs_human_review"]},
+              "evidence_refs": {"type": "array", "items": {"type": "string"}}
+            }
+          }
+        }
+      }
+    },
+    "trial_report": {
+      "type": "object",
+      "required": ["uri", "checksum", "format", "sections", "section_coverage", "generated_from", "evidence_refs"],
+      "properties": {
+        "uri": {"type": "string"},
+        "checksum": {"type": "string"},
+        "format": {"enum": ["docx", "pdf", "bundle"]},
+        "sections": {"type": "array", "minItems": 1, "items": {"type": "string"}},
+        "section_coverage": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": ["section_id", "status", "evidence_refs"],
+            "properties": {
+              "section_id": {"type": "string"},
+              "status": {"enum": ["complete", "partial", "missing", "needs_human_review"]},
+              "evidence_refs": {"type": "array", "items": {"type": "string"}}
+            }
+          }
+        },
+        "generated_from": {
+          "type": "object",
+          "required": ["raw_data_uri", "compliance_model_checksum", "report_specification_uri"],
+          "properties": {
+            "raw_data_uri": {"type": "string"},
+            "compliance_model_checksum": {"type": "string"},
+            "report_specification_uri": {"type": "string"}
+          }
+        },
+        "evidence_refs": {"type": "array", "minItems": 1, "items": {"type": "string"}}
+      }
+    },
+    "validation": {
+      "type": "object",
+      "required": ["verdict", "section_checks", "evidence_uri", "traceability"],
+      "properties": {
+        "verdict": {"enum": ["pass", "fail", "needs_human_review"]},
+        "evidence_uri": {"type": "string"},
+        "section_checks": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": ["section_id", "status", "evidence_refs"],
+            "properties": {
+              "section_id": {"type": "string"},
+              "status": {"enum": ["pass", "fail", "needs_human_review"]},
+              "evidence_refs": {"type": "array", "items": {"type": "string"}},
+              "findings": {"type": "array", "items": {"type": "string"}}
+            }
+          }
+        },
+        "traceability": {
+          "type": "object",
+          "required": ["raw_data_checksum", "outline_checksum", "manual_checksum", "report_specification_checksum", "evidence_complete"],
+          "properties": {
+            "raw_data_checksum": {"type": "string"},
+            "outline_checksum": {"type": "string"},
+            "manual_checksum": {"type": "string"},
+            "report_specification_checksum": {"type": "string"},
+            "evidence_complete": {"type": "boolean"}
+          }
+        }
+      }
+    }
+  }
+}

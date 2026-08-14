@@ -36,3 +36,16 @@ scripts/start-gpt-sovits-dan.ps1
 .DS_Store
 /.agent-worktrees
 /.demiurge/compat
+
+# GOAI 本地提交附件：比赛只提交代码仓库链接，不把演示稿、PDF、压缩包或检查输出混入 Git
+competition/*.pptx
+competition/*.pdf
+competition/*.zip
+competition/*.inspect.ndjson
+competition/agentteams/demo/__pycache__/
+competition/agentteams/demo/evidence/generate_visuals.py
+
+# 只保留一份可复核的 canonical 运行结果；其他历史运行目录和根目录重复输出为本地产物
+competition/agentteams/demo/outputs/*
+!competition/agentteams/demo/outputs/ui-fridge-ecu-screening/
+!competition/agentteams/demo/outputs/ui-fridge-ecu-screening/**

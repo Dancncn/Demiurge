@@ -1,0 +1,9 @@
+/begin PROJECT SIM_FRIDGE_ECU_BROKEN "Synthetic unreadable candidate"
+  /begin MODULE SIM_FRIDGE_MODULE_BROKEN
+    /begin MEASUREMENT BROKEN_SIGNAL
+      "Missing closing measurement block"
+      FLOAT32 NO_RESCALE -40 85
+      READ_ONLY 0 0
+      UNIT "degC"
+  /end MODULE
+/end PROJECT

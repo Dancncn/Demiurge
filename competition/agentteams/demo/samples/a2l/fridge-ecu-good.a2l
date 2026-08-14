@@ -1,0 +1,436 @@
+/begin PROJECT SIM_FRIDGE_ECU "Synthetic vehicle refrigerator ECU"
+  /begin MODULE SIM_FRIDGE_MODULE
+    /begin MEASUREMENT BOX_TEMP_C
+      "Synthetic refrigerator box temperature"
+      FLOAT32 NO_RESCALE -40 85
+      READ_ONLY 0 0
+      UNIT "degC"
+    /end MEASUREMENT
+    /begin MEASUREMENT EVAPORATOR_TEMP_C
+      "Synthetic evaporator temperature"
+      FLOAT32 NO_RESCALE -40 85
+      READ_ONLY 0 0
+      UNIT "degC"
+    /end MEASUREMENT
+    /begin MEASUREMENT AMBIENT_TEMP_C
+      "Synthetic ambient temperature"
+      FLOAT32 NO_RESCALE -40 85
+      READ_ONLY 0 0
+      UNIT "degC"
+    /end MEASUREMENT
+    /begin MEASUREMENT SUPPLY_VOLTAGE_V
+      "Synthetic ECU supply voltage"
+      FLOAT32 NO_RESCALE 0 24
+      READ_ONLY 0 0
+      UNIT "V"
+    /end MEASUREMENT
+    /begin MEASUREMENT COMPRESSOR_CURRENT_A
+      "Synthetic compressor current"
+      FLOAT32 NO_RESCALE 0 30
+      READ_ONLY 0 0
+      UNIT "A"
+    /end MEASUREMENT
+    /begin MEASUREMENT COMPRESSOR_STATE
+      "Synthetic compressor state"
+      UBYTE NO_RESCALE 0 1
+      READ_ONLY 0 0
+      UNIT "bool"
+    /end MEASUREMENT
+    /begin MEASUREMENT HUMIDITY_PERCENT
+      "Synthetic chamber humidity"
+      FLOAT32 NO_RESCALE 0 100
+      READ_ONLY 0 100
+      UNIT "percent"
+    /end MEASUREMENT
+    /begin MEASUREMENT CONDENSATION_FLAG
+      "Synthetic condensation indication"
+      UBYTE NO_RESCALE 0 1
+      READ_ONLY 0 1
+      UNIT "bool"
+    /end MEASUREMENT
+    /begin MEASUREMENT CAN_ERROR_COUNT
+      "Synthetic CAN error count"
+      ULONG NO_RESCALE 0 1000
+      READ_ONLY 0 0
+      UNIT "count"
+    /end MEASUREMENT
+    /begin MEASUREMENT DOOR_SWITCH
+      "Synthetic refrigerator door switch"
+      UBYTE NO_RESCALE 0 1
+      READ_ONLY 0 1
+      UNIT "bool"
+    /end MEASUREMENT
+    /begin MEASUREMENT FAN_SPEED_RPM
+      "Synthetic condenser fan speed"
+      ULONG NO_RESCALE 0 5000
+      READ_ONLY 0 0
+      UNIT "rpm"
+    /end MEASUREMENT
+    /begin MEASUREMENT RUN_TIME_S
+      "Synthetic compressor run time"
+      ULONG NO_RESCALE 0 100000
+      READ_ONLY 0 0
+      UNIT "s"
+    /end MEASUREMENT
+    /begin MEASUREMENT AUX_SIGNAL_01
+      "Synthetic auxiliary refrigerator signal 01"
+      FLOAT32 NO_RESCALE -1000 1000
+      READ_ONLY 0 0
+      UNIT "raw"
+    /end MEASUREMENT
+    /begin MEASUREMENT AUX_SIGNAL_02
+      "Synthetic auxiliary refrigerator signal 02"
+      FLOAT32 NO_RESCALE -1000 1000
+      READ_ONLY 0 0
+      UNIT "raw"
+    /end MEASUREMENT
+    /begin MEASUREMENT AUX_SIGNAL_03
+      "Synthetic auxiliary refrigerator signal 03"
+      FLOAT32 NO_RESCALE -1000 1000
+      READ_ONLY 0 0
+      UNIT "raw"
+    /end MEASUREMENT
+    /begin MEASUREMENT AUX_SIGNAL_04
+      "Synthetic auxiliary refrigerator signal 04"
+      FLOAT32 NO_RESCALE -1000 1000
+      READ_ONLY 0 0
+      UNIT "raw"
+    /end MEASUREMENT
+    /begin MEASUREMENT AUX_SIGNAL_05
+      "Synthetic auxiliary refrigerator signal 05"
+      FLOAT32 NO_RESCALE -1000 1000
+      READ_ONLY 0 0
+      UNIT "raw"
+    /end MEASUREMENT
+    /begin MEASUREMENT AUX_SIGNAL_06
+      "Synthetic auxiliary refrigerator signal 06"
+      FLOAT32 NO_RESCALE -1000 1000
+      READ_ONLY 0 0
+      UNIT "raw"
+    /end MEASUREMENT
+    /begin MEASUREMENT AUX_SIGNAL_07
+      "Synthetic auxiliary refrigerator signal 07"
+      FLOAT32 NO_RESCALE -1000 1000
+      READ_ONLY 0 0
+      UNIT "raw"
+    /end MEASUREMENT
+    /begin MEASUREMENT AUX_SIGNAL_08
+      "Synthetic auxiliary refrigerator signal 08"
+      FLOAT32 NO_RESCALE -1000 1000
+      READ_ONLY 0 0
+      UNIT "raw"
+    /end MEASUREMENT
+    /begin MEASUREMENT AUX_SIGNAL_09
+      "Synthetic auxiliary refrigerator signal 09"
+      FLOAT32 NO_RESCALE -1000 1000
+      READ_ONLY 0 0
+      UNIT "raw"
+    /end MEASUREMENT
+    /begin MEASUREMENT AUX_SIGNAL_10
+      "Synthetic auxiliary refrigerator signal 10"
+      FLOAT32 NO_RESCALE -1000 1000
+      READ_ONLY 0 0
+      UNIT "raw"
+    /end MEASUREMENT
+    /begin MEASUREMENT AUX_SIGNAL_11
+      "Synthetic auxiliary refrigerator signal 11"
+      FLOAT32 NO_RESCALE -1000 1000
+      READ_ONLY 0 0
+      UNIT "raw"
+    /end MEASUREMENT
+    /begin MEASUREMENT AUX_SIGNAL_12
+      "Synthetic auxiliary refrigerator signal 12"
+      FLOAT32 NO_RESCALE -1000 1000
+      READ_ONLY 0 0
+      UNIT "raw"
+    /end MEASUREMENT
+    /begin MEASUREMENT AUX_SIGNAL_13
+      "Synthetic auxiliary refrigerator signal 13"
+      FLOAT32 NO_RESCALE -1000 1000
+      READ_ONLY 0 0
+      UNIT "raw"
+    /end MEASUREMENT
+    /begin MEASUREMENT AUX_SIGNAL_14
+      "Synthetic auxiliary refrigerator signal 14"
+      FLOAT32 NO_RESCALE -1000 1000
+      READ_ONLY 0 0
+      UNIT "raw"
+    /end MEASUREMENT
+    /begin MEASUREMENT AUX_SIGNAL_15
+      "Synthetic auxiliary refrigerator signal 15"
+      FLOAT32 NO_RESCALE -1000 1000
+      READ_ONLY 0 0
+      UNIT "raw"
+    /end MEASUREMENT
+    /begin MEASUREMENT AUX_SIGNAL_16
+      "Synthetic auxiliary refrigerator signal 16"
+      FLOAT32 NO_RESCALE -1000 1000
+      READ_ONLY 0 0
+      UNIT "raw"
+    /end MEASUREMENT
+    /begin MEASUREMENT AUX_SIGNAL_17
+      "Synthetic auxiliary refrigerator signal 17"
+      FLOAT32 NO_RESCALE -1000 1000
+      READ_ONLY 0 0
+      UNIT "raw"
+    /end MEASUREMENT
+    /begin MEASUREMENT AUX_SIGNAL_18
+      "Synthetic auxiliary refrigerator signal 18"
+      FLOAT32 NO_RESCALE -1000 1000
+      READ_ONLY 0 0
+      UNIT "raw"
+    /end MEASUREMENT
+    /begin MEASUREMENT AUX_SIGNAL_19
+      "Synthetic auxiliary refrigerator signal 19"
+      FLOAT32 NO_RESCALE -1000 1000
+      READ_ONLY 0 0
+      UNIT "raw"
+    /end MEASUREMENT
+    /begin MEASUREMENT AUX_SIGNAL_20
+      "Synthetic auxiliary refrigerator signal 20"
+      FLOAT32 NO_RESCALE -1000 1000
+      READ_ONLY 0 0
+      UNIT "raw"
+    /end MEASUREMENT
+    /begin MEASUREMENT AUX_SIGNAL_21
+      "Synthetic auxiliary refrigerator signal 21"
+      FLOAT32 NO_RESCALE -1000 1000
+      READ_ONLY 0 0
+      UNIT "raw"
+    /end MEASUREMENT
+    /begin MEASUREMENT AUX_SIGNAL_22
+      "Synthetic auxiliary refrigerator signal 22"
+      FLOAT32 NO_RESCALE -1000 1000
+      READ_ONLY 0 0
+      UNIT "raw"
+    /end MEASUREMENT
+    /begin MEASUREMENT AUX_SIGNAL_23
+      "Synthetic auxiliary refrigerator signal 23"
+      FLOAT32 NO_RESCALE -1000 1000
+      READ_ONLY 0 0
+      UNIT "raw"
+    /end MEASUREMENT
+    /begin MEASUREMENT AUX_SIGNAL_24
+      "Synthetic auxiliary refrigerator signal 24"
+      FLOAT32 NO_RESCALE -1000 1000
+      READ_ONLY 0 0
+      UNIT "raw"
+    /end MEASUREMENT
+    /begin MEASUREMENT AUX_SIGNAL_25
+      "Synthetic auxiliary refrigerator signal 25"
+      FLOAT32 NO_RESCALE -1000 1000
+      READ_ONLY 0 0
+      UNIT "raw"
+    /end MEASUREMENT
+    /begin MEASUREMENT AUX_SIGNAL_26
+      "Synthetic auxiliary refrigerator signal 26"
+      FLOAT32 NO_RESCALE -1000 1000
+      READ_ONLY 0 0
+      UNIT "raw"
+    /end MEASUREMENT
+    /begin MEASUREMENT AUX_SIGNAL_27
+      "Synthetic auxiliary refrigerator signal 27"
+      FLOAT32 NO_RESCALE -1000 1000
+      READ_ONLY 0 0
+      UNIT "raw"
+    /end MEASUREMENT
+    /begin MEASUREMENT AUX_SIGNAL_28
+      "Synthetic auxiliary refrigerator signal 28"
+      FLOAT32 NO_RESCALE -1000 1000
+      READ_ONLY 0 0
+      UNIT "raw"
+    /end MEASUREMENT
+    /begin MEASUREMENT AUX_SIGNAL_29
+      "Synthetic auxiliary refrigerator signal 29"
+      FLOAT32 NO_RESCALE -1000 1000
+      READ_ONLY 0 0
+      UNIT "raw"
+    /end MEASUREMENT
+    /begin MEASUREMENT AUX_SIGNAL_30
+      "Synthetic auxiliary refrigerator signal 30"
+      FLOAT32 NO_RESCALE -1000 1000
+      READ_ONLY 0 0
+      UNIT "raw"
+    /end MEASUREMENT
+    /begin MEASUREMENT AUX_SIGNAL_31
+      "Synthetic auxiliary refrigerator signal 31"
+      FLOAT32 NO_RESCALE -1000 1000
+      READ_ONLY 0 0
+      UNIT "raw"
+    /end MEASUREMENT
+    /begin MEASUREMENT AUX_SIGNAL_32
+      "Synthetic auxiliary refrigerator signal 32"
+      FLOAT32 NO_RESCALE -1000 1000
+      READ_ONLY 0 0
+      UNIT "raw"
+    /end MEASUREMENT
+    /begin MEASUREMENT AUX_SIGNAL_33
+      "Synthetic auxiliary refrigerator signal 33"
+      FLOAT32 NO_RESCALE -1000 1000
+      READ_ONLY 0 0
+      UNIT "raw"
+    /end MEASUREMENT
+    /begin MEASUREMENT AUX_SIGNAL_34
+      "Synthetic auxiliary refrigerator signal 34"
+      FLOAT32 NO_RESCALE -1000 1000
+      READ_ONLY 0 0
+      UNIT "raw"
+    /end MEASUREMENT
+    /begin MEASUREMENT AUX_SIGNAL_35
+      "Synthetic auxiliary refrigerator signal 35"
+      FLOAT32 NO_RESCALE -1000 1000
+      READ_ONLY 0 0
+      UNIT "raw"
+    /end MEASUREMENT
+    /begin MEASUREMENT AUX_SIGNAL_36
+      "Synthetic auxiliary refrigerator signal 36"
+      FLOAT32 NO_RESCALE -1000 1000
+      READ_ONLY 0 0
+      UNIT "raw"
+    /end MEASUREMENT
+    /begin MEASUREMENT AUX_SIGNAL_37
+      "Synthetic auxiliary refrigerator signal 37"
+      FLOAT32 NO_RESCALE -1000 1000
+      READ_ONLY 0 0
+      UNIT "raw"
+    /end MEASUREMENT
+    /begin MEASUREMENT AUX_SIGNAL_38
+      "Synthetic auxiliary refrigerator signal 38"
+      FLOAT32 NO_RESCALE -1000 1000
+      READ_ONLY 0 0
+      UNIT "raw"
+    /end MEASUREMENT
+    /begin MEASUREMENT AUX_SIGNAL_39
+      "Synthetic auxiliary refrigerator signal 39"
+      FLOAT32 NO_RESCALE -1000 1000
+      READ_ONLY 0 0
+      UNIT "raw"
+    /end MEASUREMENT
+    /begin MEASUREMENT AUX_SIGNAL_40
+      "Synthetic auxiliary refrigerator signal 40"
+      FLOAT32 NO_RESCALE -1000 1000
+      READ_ONLY 0 0
+      UNIT "raw"
+    /end MEASUREMENT
+    /begin MEASUREMENT AUX_SIGNAL_41
+      "Synthetic auxiliary refrigerator signal 41"
+      FLOAT32 NO_RESCALE -1000 1000
+      READ_ONLY 0 0
+      UNIT "raw"
+    /end MEASUREMENT
+    /begin MEASUREMENT AUX_SIGNAL_42
+      "Synthetic auxiliary refrigerator signal 42"
+      FLOAT32 NO_RESCALE -1000 1000
+      READ_ONLY 0 0
+      UNIT "raw"
+    /end MEASUREMENT
+    /begin MEASUREMENT AUX_SIGNAL_43
+      "Synthetic auxiliary refrigerator signal 43"
+      FLOAT32 NO_RESCALE -1000 1000
+      READ_ONLY 0 0
+      UNIT "raw"
+    /end MEASUREMENT
+    /begin MEASUREMENT AUX_SIGNAL_44
+      "Synthetic auxiliary refrigerator signal 44"
+      FLOAT32 NO_RESCALE -1000 1000
+      READ_ONLY 0 0
+      UNIT "raw"
+    /end MEASUREMENT
+    /begin MEASUREMENT AUX_SIGNAL_45
+      "Synthetic auxiliary refrigerator signal 45"
+      FLOAT32 NO_RESCALE -1000 1000
+      READ_ONLY 0 0
+      UNIT "raw"
+    /end MEASUREMENT
+    /begin MEASUREMENT AUX_SIGNAL_46
+      "Synthetic auxiliary refrigerator signal 46"
+      FLOAT32 NO_RESCALE -1000 1000
+      READ_ONLY 0 0
+      UNIT "raw"
+    /end MEASUREMENT
+    /begin MEASUREMENT AUX_SIGNAL_47
+      "Synthetic auxiliary refrigerator signal 47"
+      FLOAT32 NO_RESCALE -1000 1000
+      READ_ONLY 0 0
+      UNIT "raw"
+    /end MEASUREMENT
+    /begin MEASUREMENT AUX_SIGNAL_48
+      "Synthetic auxiliary refrigerator signal 48"
+      FLOAT32 NO_RESCALE -1000 1000
+      READ_ONLY 0 0
+      UNIT "raw"
+    /end MEASUREMENT
+    /begin MEASUREMENT AUX_SIGNAL_49
+      "Synthetic auxiliary refrigerator signal 49"
+      FLOAT32 NO_RESCALE -1000 1000
+      READ_ONLY 0 0
+      UNIT "raw"
+    /end MEASUREMENT
+    /begin MEASUREMENT AUX_SIGNAL_50
+      "Synthetic auxiliary refrigerator signal 50"
+      FLOAT32 NO_RESCALE -1000 1000
+      READ_ONLY 0 0
+      UNIT "raw"
+    /end MEASUREMENT
+    /begin MEASUREMENT AUX_SIGNAL_51
+      "Synthetic auxiliary refrigerator signal 51"
+      FLOAT32 NO_RESCALE -1000 1000
+      READ_ONLY 0 0
+      UNIT "raw"
+    /end MEASUREMENT
+    /begin MEASUREMENT AUX_SIGNAL_52
+      "Synthetic auxiliary refrigerator signal 52"
+      FLOAT32 NO_RESCALE -1000 1000
+      READ_ONLY 0 0
+      UNIT "raw"
+    /end MEASUREMENT
+    /begin MEASUREMENT AUX_SIGNAL_53
+      "Synthetic auxiliary refrigerator signal 53"
+      FLOAT32 NO_RESCALE -1000 1000
+      READ_ONLY 0 0
+      UNIT "raw"
+    /end MEASUREMENT
+    /begin MEASUREMENT AUX_SIGNAL_54
+      "Synthetic auxiliary refrigerator signal 54"
+      FLOAT32 NO_RESCALE -1000 1000
+      READ_ONLY 0 0
+      UNIT "raw"
+    /end MEASUREMENT
+    /begin MEASUREMENT AUX_SIGNAL_55
+      "Synthetic auxiliary refrigerator signal 55"
+      FLOAT32 NO_RESCALE -1000 1000
+      READ_ONLY 0 0
+      UNIT "raw"
+    /end MEASUREMENT
+    /begin MEASUREMENT AUX_SIGNAL_56
+      "Synthetic auxiliary refrigerator signal 56"
+      FLOAT32 NO_RESCALE -1000 1000
+      READ_ONLY 0 0
+      UNIT "raw"
+    /end MEASUREMENT
+    /begin MEASUREMENT AUX_SIGNAL_57
+      "Synthetic auxiliary refrigerator signal 57"
+      FLOAT32 NO_RESCALE -1000 1000
+      READ_ONLY 0 0
+      UNIT "raw"
+    /end MEASUREMENT
+    /begin MEASUREMENT AUX_SIGNAL_58
+      "Synthetic auxiliary refrigerator signal 58"
+      FLOAT32 NO_RESCALE -1000 1000
+      READ_ONLY 0 0
+      UNIT "raw"
+    /end MEASUREMENT
+    /begin MEASUREMENT AUX_SIGNAL_59
+      "Synthetic auxiliary refrigerator signal 59"
+      FLOAT32 NO_RESCALE -1000 1000
+      READ_ONLY 0 0
+      UNIT "raw"
+    /end MEASUREMENT
+    /begin MEASUREMENT AUX_SIGNAL_60
+      "Synthetic auxiliary refrigerator signal 60"
+      FLOAT32 NO_RESCALE -1000 1000
+      READ_ONLY 0 0
+      UNIT "raw"
+    /end MEASUREMENT
+  /end MODULE
+/end PROJECT

@@ -1,0 +1,89 @@
+{
+  "source_uri": "samples/docs/trial_outline.json",
+  "revision": "SIM-R1",
+  "title": "车载冷藏设备 ECU 温度冲击与结露模拟测试",
+  "environment": {
+    "low_temperature_c": -20,
+    "high_temperature_c": 60,
+    "humidity_percent": 95,
+    "note": "Illustrative values only; not a production acceptance standard."
+  },
+  "requirements": [
+    {
+      "id": "ENV-TEMP-SHOCK",
+      "text": "完成低温到高温的温度冲击循环并记录 ECU 关键信号。",
+      "evidence": ["raw-data.xlsx", "run-evidence.json"],
+      "acceptance_criteria": [
+        {
+          "id": "TEMP-BOX-MIN",
+          "description": "冷藏箱温度不得低于试验大纲下限",
+          "signal_id": "BOX_TEMP_C",
+          "metric": "min",
+          "operator": "gte",
+          "value": -20,
+          "unit": "degC"
+        },
+        {
+          "id": "TEMP-BOX-MAX",
+          "description": "冷藏箱温度不得高于试验大纲上限",
+          "signal_id": "BOX_TEMP_C",
+          "metric": "max",
+          "operator": "lte",
+          "value": 60,
+          "unit": "degC"
+        }
+      ]
+    },
+    {
+      "id": "ENV-CONDENSATION",
+      "text": "在高湿条件下记录湿度、温度和结露指示信号。",
+      "evidence": ["raw-data.xlsx", "run-evidence.json"],
+      "acceptance_criteria": [
+        {
+          "id": "COND-HUMIDITY-MAX",
+          "description": "湿度峰值不得超过试验大纲上限",
+          "signal_id": "HUMIDITY_PERCENT",
+          "metric": "max",
+          "operator": "lte",
+          "value": 95,
+          "unit": "percent"
+        },
+        {
+          "id": "COND-FLAG-RANGE",
+          "description": "结露指示信号必须保持在合法枚举范围",
+          "signal_id": "CONDENSATION_FLAG",
+          "metric": "max",
+          "operator": "lte",
+          "value": 1,
+          "unit": "bool"
+        }
+      ]
+    },
+    {
+      "id": "ENV-CAN-QUALITY",
+      "text": "采集期间 CAN 错误计数必须可追溯。",
+      "evidence": ["raw-data.xlsx", "a2l-preflight.json"],
+      "acceptance_criteria": [
+        {
+          "id": "CAN-ERROR-MAX",
+          "description": "CAN 错误计数应为零",
+          "signal_id": "CAN_ERROR_COUNT",
+          "metric": "max",
+          "operator": "lte",
+          "value": 0,
+          "unit": "count"
+        },
+        {
+          "id": "CAN-VOLTAGE-RANGE",
+          "description": "ECU 供电电压应处于模拟试验允许区间",
+          "signal_id": "SUPPLY_VOLTAGE_V",
+          "metric": "min",
+          "operator": "between",
+          "lower": 11,
+          "upper": 13,
+          "unit": "V"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,67 @@
+{
+  "demo": "goai-ecu-environmental-test",
+  "generated_at": "2026-08-14T16:52:58.690272+00:00",
+  "synthetic_data": true,
+  "llm_mode": false,
+  "agent_trace": [
+    {
+      "agent": "goai-manager",
+      "action": "decompose_task",
+      "status": "complete"
+    },
+    {
+      "agent": "data-processing-expert",
+      "action": "a2l_preflight_and_mda_replay",
+      "status": "complete"
+    },
+    {
+      "agent": "compliance-process-agent",
+      "action": "parse_outline_and_manual",
+      "status": "complete"
+    },
+    {
+      "agent": "report-agent",
+      "action": "build_and_validate_report",
+      "status": "complete"
+    },
+    {
+      "agent": "human-operator",
+      "action": "review_required_for_rejected_a2l",
+      "status": "pending"
+    }
+  ],
+  "artifacts": {
+    "a2l-preflight.json": {
+      "path": "a2l-preflight.json",
+      "sha256": "52cc746f5a1e2e784752b61f147a65d296d03166ecf212c7c9f2497c6664f98b"
+    },
+    "raw-data.xlsx": {
+      "path": "raw-data.xlsx",
+      "sha256": "cd6370969d5eead3acce184b62113b582e678f99162fc0b931eba9c6322c3132"
+    },
+    "compliance-model.json": {
+      "path": "compliance-model.json",
+      "sha256": "93d26bc1df5e99509a6cb3c8511dd71c05cad8499b0cb696dd58de1cd42ea0b5"
+    },
+    "trial-report.docx": {
+      "path": "trial-report.docx",
+      "sha256": "eaca2890b6a0dd3fb977931329d5f4e602c858c77798d2da5989cb27c244f38d"
+    },
+    "trial-report.md": {
+      "path": "trial-report.md",
+      "sha256": "e330fbe83bdfe1a9969da72c520baf3eaf3c99036af3c7d2bc4f3dc501a0367a"
+    },
+    "validation-result.json": {
+      "path": "validation-result.json",
+      "sha256": "7c37dba1d2615978e87fad15db49ab3f030d0da5c102cbec5f7d353333c6d506"
+    }
+  },
+  "validation_verdict": "needs_human_review",
+  "data_verdict": "pass",
+  "acceptance_criteria": {
+    "total": 6,
+    "passed": 6,
+    "failed": 0,
+    "needs_human_review": 0
+  }
+}

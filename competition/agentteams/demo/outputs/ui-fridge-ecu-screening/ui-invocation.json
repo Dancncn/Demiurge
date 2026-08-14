@@ -1,0 +1,23 @@
+{
+  "caller": "Demiurge UI via MCP",
+  "mcp_server": "goai-ecu-repository",
+  "mcp_tool": "run_goai_demo",
+  "entrypoint": "competition/agentteams/demo/run.py",
+  "working_directory": "D:\\Project\\Project-1\\Demiurge\\competition\\agentteams\\demo",
+  "command": "python competition/agentteams/demo/run.py --config competition/agentteams/demo/config/demo-config.json --output <generated-ui-output>",
+  "synthetic_data": true,
+  "summary": {
+    "output_dir": "D:\\Project\\Project-1\\Demiurge\\competition\\agentteams\\demo\\outputs\\ui-fridge-ecu-screening",
+    "selected_a2l": "fridge-ecu-good.a2l",
+    "accepted_a2l": 1,
+    "rejected_a2l": 1,
+    "ecu_count": 6,
+    "signal_count": 72,
+    "capture_id": "sim-mda-8d17f0b0e16f",
+    "verdict": "needs_human_review",
+    "data_verdict": "pass",
+    "acceptance_criteria_passed": 6,
+    "acceptance_criteria_total": 6,
+    "llm_mode": false
+  }
+}
