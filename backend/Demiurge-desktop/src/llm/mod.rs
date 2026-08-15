@@ -18,6 +18,11 @@ pub struct Usage {
     pub input_tokens: Option<usize>,
     pub output_tokens: Option<usize>,
     pub total_tokens: Option<usize>,
+    /// Provider-reported cached input portions. `input_tokens` may already
+    /// include this value (OpenAI-compatible APIs), so pricing keeps it
+    /// separate instead of double charging it as fresh input.
+    pub cache_read_tokens: Option<usize>,
+    pub cache_creation_tokens: Option<usize>,
 }
 
 impl Usage {
@@ -44,6 +49,8 @@ impl Usage {
             input_tokens,
             output_tokens,
             total_tokens,
+            cache_read_tokens: next.cache_read_tokens.or(self.cache_read_tokens),
+            cache_creation_tokens: next.cache_creation_tokens.or(self.cache_creation_tokens),
         }
     }
 }
@@ -548,15 +555,28 @@ pub(crate) fn normalize_finish_reason(
     }
 }
 
-/// 流式增量的类型：`Content` 是要展示给用户的正文；`Reasoning` 是推理型模型
+/// Provider 到 Agent 的统一流式块协议：`Content` 是要展示给用户的正文；`Reasoning` 是推理型模型
 /// （DeepSeek-R1/V4、Kimi、qwen `*-flash` 思考版等）在正文之前输出的思维链
 /// （OpenAI 兼容端点的 `delta.reasoning_content`、Anthropic 的 `thinking_delta`、
 /// Gemini 的 thought part）。两者分开回调，前端可把推理单独渲染成「思考中」气泡，
-/// 避免推理阶段界面长时间无任何反馈。
+/// 避免推理阶段界面长时间无任何反馈。后续 provider 适配器只能扩展这一协议，
+/// 不应把 provider-specific delta 泄漏到 Agent 循环。
 #[derive(Clone, Copy, Debug)]
-pub enum StreamDelta<'a> {
+pub enum StreamChunk<'a> {
     Content(&'a str),
     Reasoning(&'a str),
+}
+
+/// 兼容已有 provider 调用点的旧名称。新代码应使用 `StreamChunk`。
+pub type StreamDelta<'a> = StreamChunk<'a>;
+
+/// Stable provider label used by durable request envelopes. Keep this at the
+/// LLM seam so audit records do not depend on Rust Debug formatting.
+pub fn provider_name(provider: ProviderKind) -> String {
+    serde_json::to_value(provider)
+        .ok()
+        .and_then(|value| value.as_str().map(str::to_owned))
+        .unwrap_or_else(|| format!("{provider:?}"))
 }
 
 /// 流式调用当前设置选择的 provider。

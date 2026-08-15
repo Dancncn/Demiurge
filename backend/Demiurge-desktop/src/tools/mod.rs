@@ -166,6 +166,11 @@ pub const SUBAGENT_READONLY_TOOL_NAMES: &[&str] = &[
     "context_inspect",
 ];
 
+/// Explicit write slot for document agents. This is intentionally narrower
+/// than the main mutating tool set and is checked again at execution time.
+pub const SUBAGENT_DOCS_WRITE_TOOL_NAMES: &[&str] =
+    &["write_file", "edit_file", "multi_edit", "apply_patch"];
+
 pub fn is_deferred_tool(name: &str) -> bool {
     DEFERRED_TOOL_NAMES.contains(&name)
 }
@@ -510,7 +515,7 @@ pub fn registry() -> Vec<ToolDefinition> {
         },
         ToolDefinition {
             name: "agent_spawn",
-            description: "启动一个只读子 Agent 来独立探索、审查、验证或反驳一个子任务。子 Agent 继承项目指令/记忆/会话摘要，可使用只读搜索与文件读取工具，结果只返回给主 Agent。",
+            description: "启动一个隔离子 Agent。默认只读，可按明确作用域使用 docs_write 修改 docs/** 或根目录 Markdown；子 Agent 继承项目指令/记忆/会话摘要，结果只返回给主 Agent。",
             risk: ToolRisk::External,
             concurrency: ToolConcurrency::SerialOnly,
             permission: PermissionPolicy::ask("会额外调用 LLM，并可能把项目上下文和只读工具结果发送给模型服务。"),
@@ -522,6 +527,9 @@ pub fn registry() -> Vec<ToolDefinition> {
                     "label": { "type": "string", "description": "可选：3-6 个词的短标签，用于区分多个子 Agent。" },
                     "agent_type": { "type": "string", "description": "可选：探索类型，如 Explore、Reviewer、Verifier、Critic、Planner。也会尝试匹配 .demiurge/agents/*.json。" },
                     "agent_name": { "type": "string", "description": "可选：.demiurge/agents/*.json 中的自定义 Agent 名称，优先于 agent_type。" },
+                    "model": { "type": "string", "description": "可选：显式模型 ID；优先级高于模型档位绑定。" },
+                    "model_tier": { "type": "string", "enum": ["haiku", "sonnet", "opus"], "description": "可选：模型档位。researcher 默认 haiku，documenter 默认 sonnet，planner 默认 opus。" },
+                    "scope": { "type": "string", "enum": ["read_only", "docs_write"], "description": "可选：作用域。默认 read_only；docs_write 只允许 docs/** 或根目录 Markdown 文档写入。" },
                     "context_mode": { "type": "string", "description": "可选：brief、recent 或 fork。brief 只给摘要和少量最近消息；recent 给更多最近消息；fork 继承父消息并用 placeholder 修复未配对 tool_call。默认 brief。" },
                     "max_total_tokens": { "type": "integer", "description": "可选：该子 Agent 的硬 token 预算。provider 返回 usage 时使用精确统计，否则回退本地估算。多 reviewer 时会均分到每个 reviewer，保证总预算硬上限。" },
                     "output_format": { "type": "string", "enum": ["plain", "evidence_packet"], "description": "可选：plain 普通结论；evidence_packet 要求输出 verdict、confidence_score、findings/evidence、uncertainties、next_actions 结构化证据包。" },
@@ -971,6 +979,112 @@ pub async fn execute_subagent_readonly(
     }
 }
 
+pub async fn execute_subagent_scoped(
+    state: &crate::AppState,
+    name: &str,
+    args: Value,
+    scope: crate::agent::subagent::SubagentScope,
+) -> Result<String, String> {
+    if matches!(scope, crate::agent::subagent::SubagentScope::ReadOnly) {
+        return execute_subagent_readonly(state, name, args).await;
+    }
+    if !SUBAGENT_DOCS_WRITE_TOOL_NAMES.contains(&name) {
+        if SUBAGENT_READONLY_TOOL_NAMES.contains(&name) {
+            return execute_subagent_readonly(state, name, args).await;
+        }
+        return Err(format!("文档写入作用域不允许工具：{name}"));
+    }
+    validate_subagent_doc_paths(state, name, &args)?;
+    match name {
+        "write_file" => write_file::run(state, args),
+        "edit_file" => edit_file::run(state, args),
+        "multi_edit" => edit_file::multi_run(state, args),
+        "apply_patch" => edit_file::patch_run(state, args),
+        _ => Err(format!("文档写入工具未接入执行分支：{name}")),
+    }
+}
+
+fn is_document_path(rel: &str) -> bool {
+    let path = Path::new(rel);
+    if rel.trim().is_empty() || path.is_absolute() {
+        return false;
+    }
+    let components = path.components().collect::<Vec<_>>();
+    if components
+        .iter()
+        .any(|component| matches!(component, Component::ParentDir))
+    {
+        return false;
+    }
+    let under_docs = matches!(
+        components.first(),
+        Some(Component::Normal(component)) if component.to_string_lossy().eq_ignore_ascii_case("docs")
+    );
+    let markdown_extension = matches!(
+        path.extension().and_then(|ext| ext.to_str()),
+        Some(ext) if matches!(ext.to_ascii_lowercase().as_str(), "md" | "mdx" | "txt" | "rst")
+    );
+    let root_document = components.len() == 1 && markdown_extension;
+    (under_docs && markdown_extension) || root_document
+}
+
+fn validate_subagent_doc_paths(
+    state: &crate::AppState,
+    name: &str,
+    args: &Value,
+) -> Result<(), String> {
+    let mut paths = Vec::new();
+    match name {
+        "write_file" | "edit_file" => {
+            paths.push(
+                args.get("path")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| format!("{name} 缺少 path"))?,
+            );
+        }
+        "multi_edit" => {
+            let edits = args
+                .get("edits")
+                .and_then(Value::as_array)
+                .ok_or_else(|| "multi_edit 缺少 edits".to_string())?;
+            for edit in edits {
+                paths.push(
+                    edit.get("path")
+                        .and_then(Value::as_str)
+                        .ok_or_else(|| "multi_edit 的 edit 缺少 path".to_string())?,
+                );
+            }
+        }
+        "apply_patch" => {
+            let hunks = args
+                .get("hunks")
+                .and_then(Value::as_array)
+                .ok_or_else(|| "apply_patch 缺少 hunks".to_string())?;
+            for hunk in hunks {
+                paths.push(
+                    hunk.get("path")
+                        .and_then(Value::as_str)
+                        .ok_or_else(|| "apply_patch 的 hunk 缺少 path".to_string())?,
+                );
+            }
+        }
+        _ => return Err(format!("不支持校验文档路径的工具：{name}")),
+    }
+    if paths.is_empty() {
+        return Err("文档写入至少需要一个目标路径".to_string());
+    }
+    let sandbox = state.sandbox_dir.lock().unwrap().clone();
+    for path in paths {
+        if !is_document_path(path) {
+            return Err(format!(
+                "docs_write 只允许 docs/** 或根目录 Markdown 文档，拒绝路径：{path}"
+            ));
+        }
+        resolve_in_sandbox(&sandbox, path)?;
+    }
+    Ok(())
+}
+
 pub fn permission_summary(name: &str, args: &Value) -> String {
     let str_arg = |key: &str| args.get(key).and_then(Value::as_str).unwrap_or("").trim();
     let int_arg = |key: &str| args.get(key).and_then(Value::as_i64);
@@ -1350,6 +1464,19 @@ mod registry_tests {
         assert!(SUBAGENT_READONLY_TOOL_NAMES.contains(&"list_dir"));
         assert!(SUBAGENT_READONLY_TOOL_NAMES.contains(&"http_get"));
         assert!(SUBAGENT_READONLY_TOOL_NAMES.contains(&"package_scripts"));
+    }
+
+    #[test]
+    fn docs_write_scope_is_narrow_and_fail_closed() {
+        assert!(is_document_path("docs/architecture.md"));
+        assert!(is_document_path("README.md"));
+        assert!(is_document_path("docs\\notes\\plan.rst"));
+        assert!(!is_document_path("src/main.rs"));
+        assert!(!is_document_path("docs/private.key"));
+        assert!(!is_document_path("docs/script.rs"));
+        assert!(!is_document_path("docs/../src/main.rs"));
+        assert!(!is_document_path("notes/design.pdf"));
+        assert!(!is_document_path("C:\\outside\\README.md"));
     }
 
     #[test]

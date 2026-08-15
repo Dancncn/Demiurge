@@ -4,30 +4,100 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use serde_json::json;
 
 use super::conversation::Message;
+use crate::agent::session_engine::SessionTurnStore;
 use crate::llm;
+use crate::model_routing::{stream_with_failover, FailoverRequest};
 use crate::store::Settings;
+use crate::AppState;
 
 const MAX_REMOVED_CHARS: usize = 12_000;
 const MAX_SUMMARY_CHARS: usize = 6_000;
 
 pub async fn update_session_summary(
+    state: &AppState,
+    session_id: &str,
     client: &reqwest::Client,
     settings: &Settings,
     existing_summary: Option<&str>,
     removed_messages: &[Message],
     cancel: &AtomicBool,
 ) -> Result<Option<String>, String> {
+    // Keep the parameter for API compatibility with callers that own the
+    // configured HTTP client. The routing seam uses the shared AppState
+    // client so every auxiliary attempt follows the same bounded failover
+    // policy as subagents.
+    let _ = client;
+    let Some((messages, tools)) =
+        build_summary_request(settings, existing_summary, removed_messages, cancel)
+    else {
+        return Ok(existing_summary.map(str::to_string));
+    };
+    let turn_result = stream_with_failover(
+        FailoverRequest {
+            state,
+            settings,
+            messages: &messages,
+            tools: &tools,
+            primary_model: &settings.model,
+            fallback_models: &settings.model_routing.fallback_models,
+            cancel,
+            request_cancel: None,
+            session_id,
+            purpose: "compaction",
+        },
+        |model| {
+            // Record every actual provider request, including fallback
+            // attempts. The compaction caller may already have recorded the
+            // primary envelope; duplicate append-only envelopes are safer
+            // than leaving a fallback context unobservable.
+            SessionTurnStore::new(state, session_id.to_string()).append_model_request(
+                &messages,
+                &tools,
+                &llm::provider_name(settings.provider),
+                model,
+                "compaction",
+            );
+        },
+        |_failed_model, _next_model| {},
+        |_| {},
+    )
+    .await
+    .map(|routed| routed.turn);
+    let turn = turn_result?;
+
+    if cancel.load(Ordering::Relaxed) || turn.finish_reason == "interrupted" {
+        return Ok(existing_summary.map(str::to_string));
+    }
+
+    let summary = cap_chars(turn.content.trim(), MAX_SUMMARY_CHARS);
+    if summary.trim().is_empty() {
+        Ok(existing_summary.map(str::to_string))
+    } else {
+        Ok(Some(summary))
+    }
+}
+
+/// Build the exact auxiliary request used by compaction. Callers that own a
+/// session can record this envelope immediately before invoking
+/// `update_session_summary`, keeping summary input reconstructible without
+/// moving compaction into the main agent loop.
+pub fn build_summary_request(
+    settings: &Settings,
+    existing_summary: Option<&str>,
+    removed_messages: &[Message],
+    cancel: &AtomicBool,
+) -> Option<(Vec<Message>, serde_json::Value)> {
     let profile = llm::ProviderProfile::for_kind(settings.provider);
     if removed_messages.is_empty()
         || (profile.requires_api_key && settings.api_key.trim().is_empty())
         || cancel.load(Ordering::Relaxed)
     {
-        return Ok(existing_summary.map(str::to_string));
+        return None;
     }
 
     let removed_text = compact_messages(removed_messages);
     if removed_text.trim().is_empty() {
-        return Ok(existing_summary.map(str::to_string));
+        return None;
     }
 
     let current = existing_summary.unwrap_or("（暂无）");
@@ -49,23 +119,13 @@ pub async fn update_session_summary(
 请输出更新后的会话摘要，不要添加额外说明。"#
     );
 
-    let messages = vec![
-        Message::system("你是 Demiurge 的会话摘要器。你只输出摘要文本。"),
-        Message::user(prompt),
-    ];
-    let tools = json!([]);
-    let turn = llm::stream_completion(client, settings, &messages, &tools, |_| {}, cancel).await?;
-
-    if cancel.load(Ordering::Relaxed) || turn.finish_reason == "interrupted" {
-        return Ok(existing_summary.map(str::to_string));
-    }
-
-    let summary = cap_chars(turn.content.trim(), MAX_SUMMARY_CHARS);
-    if summary.trim().is_empty() {
-        Ok(existing_summary.map(str::to_string))
-    } else {
-        Ok(Some(summary))
-    }
+    Some((
+        vec![
+            Message::system("你是 Demiurge 的会话摘要器。你只输出摘要文本。"),
+            Message::user(prompt),
+        ],
+        json!([]),
+    ))
 }
 
 fn compact_messages(messages: &[Message]) -> String {

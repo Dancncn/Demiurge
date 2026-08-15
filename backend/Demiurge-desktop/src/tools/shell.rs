@@ -4,6 +4,7 @@ use serde_json::Value;
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
+use std::sync::{Mutex, OnceLock};
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
@@ -120,9 +121,44 @@ pub struct ShellRiskRuleView {
 pub struct ShellContainmentView {
     pub process_group: bool,
     pub kill_process_tree_on_timeout: bool,
+    pub enforcement: &'static str,
     pub filesystem_sandbox: &'static str,
     pub network_sandbox: &'static str,
     pub notes: Vec<&'static str>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ShellEnforcement {
+    Full,
+    Partial,
+}
+
+impl ShellEnforcement {
+    fn label(self) -> &'static str {
+        match self {
+            ShellEnforcement::Full => "full",
+            ShellEnforcement::Partial => "partial",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ShellConfine {
+    Partial,
+    Full { runtime: &'static str },
+}
+
+impl ShellConfine {
+    fn enforcement(self) -> ShellEnforcement {
+        match self {
+            ShellConfine::Full { .. } => ShellEnforcement::Full,
+            ShellConfine::Partial => ShellEnforcement::Partial,
+        }
+    }
+
+    fn enforcement_label(self) -> &'static str {
+        self.enforcement().label()
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -146,6 +182,28 @@ impl ShellIsolationMode {
             self,
             ShellIsolationMode::Strict | ShellIsolationMode::Sandboxed
         )
+    }
+
+    /// Contract for the command that will actually be executed.
+    ///
+    /// `Partial` is intentional for standard/strict: cwd containment,
+    /// environment reduction, risk policy, and process-tree handling do not
+    /// constitute an OS filesystem/network sandbox. `Full` is only returned
+    /// after a known platform wrapper has passed a functional probe.
+    fn confine(self) -> Result<ShellConfine, String> {
+        match self {
+            ShellIsolationMode::Standard | ShellIsolationMode::Strict => Ok(ShellConfine::Partial),
+            ShellIsolationMode::Sandboxed => {
+                let runtime = platform_sandbox_runtime()
+                    .ok_or_else(|| "当前平台不支持 shell sandboxed isolation".to_string())?;
+                if !sandbox_runtime_probe(runtime) {
+                    return Err(format!(
+                        "shell sandboxed isolation 需要 `{runtime}`，但运行时不可用或功能探测失败"
+                    ));
+                }
+                Ok(ShellConfine::Full { runtime })
+            }
+        }
     }
 }
 
@@ -312,33 +370,56 @@ fn risk_view(class: ShellRiskClass) -> ShellRiskView {
 }
 
 fn containment_view() -> ShellContainmentView {
+    let sandboxed_enforcement = ShellIsolationMode::Sandboxed
+        .confine()
+        .map(|confine| confine.enforcement_label())
+        .unwrap_or(ShellEnforcement::Partial.label());
+
     ShellContainmentView {
-        process_group: true,
-        kill_process_tree_on_timeout: true,
+        process_group: process_group_supported(),
+        kill_process_tree_on_timeout: process_tree_termination_supported(),
+        enforcement: sandboxed_enforcement,
         filesystem_sandbox: platform_filesystem_sandbox(),
         network_sandbox: platform_network_sandbox(),
         notes: vec![
-            "所有 shell 子进程都会以独立进程组/进程树启动，并在超时时终止整棵进程树",
+            "支持的平台会为 shell 子进程设置独立进程组/进程树，并在超时时终止整棵进程树",
             "strict 会拒绝联网、依赖安装、破坏性、提权和外部执行类命令，并强制最小环境",
-            "sandboxed 模式在 macOS 使用 sandbox-exec，在 Linux/WSL 使用 bubblewrap；运行时不可用会 fail closed",
+            "sandboxed 的 enforcement 只有在已验证 OS sandbox wrapper 后才是 full；运行时不可用会 fail closed",
         ],
     }
 }
 
 fn platform_filesystem_sandbox() -> &'static str {
-    match std::env::consts::OS {
-        "macos" => "sandbox-exec in sandboxed mode",
-        "linux" => "bubblewrap in sandboxed mode",
-        "windows" => "unsupported on native Windows; process-tree containment only",
-        _ => "unsupported on this platform; process-tree containment only",
+    match ShellIsolationMode::Sandboxed.confine() {
+        Ok(ShellConfine::Full {
+            runtime: "sandbox-exec",
+        }) => "sandbox-exec enforces filesystem policy in sandboxed mode",
+        Ok(ShellConfine::Full { runtime: "bwrap" }) => {
+            "bubblewrap enforces filesystem policy in sandboxed mode"
+        }
+        Ok(ShellConfine::Full { .. }) => "unknown sandbox wrapper; execution must fail closed",
+        Ok(ShellConfine::Partial) => "partial enforcement; no OS filesystem sandbox",
+        Err(_) if platform_sandbox_runtime().is_none() => {
+            "unsupported on this platform; sandboxed execution fails closed"
+        }
+        Err(_) => "sandbox wrapper unavailable; sandboxed execution fails closed",
     }
 }
 
 fn platform_network_sandbox() -> &'static str {
-    match std::env::consts::OS {
-        "macos" => "sandbox-exec denies network in sandboxed mode",
-        "linux" => "bubblewrap unshares network in sandboxed mode",
-        _ => "policy_only",
+    match ShellIsolationMode::Sandboxed.confine() {
+        Ok(ShellConfine::Full {
+            runtime: "sandbox-exec",
+        }) => "sandbox-exec denies network in sandboxed mode",
+        Ok(ShellConfine::Full { runtime: "bwrap" }) => {
+            "bubblewrap unshares network in sandboxed mode"
+        }
+        Ok(ShellConfine::Full { .. }) => "unknown sandbox wrapper; execution must fail closed",
+        Ok(ShellConfine::Partial) => "partial enforcement; network is not OS-isolated",
+        Err(_) if platform_sandbox_runtime().is_none() => {
+            "unsupported on this platform; sandboxed execution fails closed"
+        }
+        Err(_) => "sandbox wrapper unavailable; sandboxed execution fails closed",
     }
 }
 
@@ -354,11 +435,11 @@ pub fn preview(state: &crate::AppState, args: Value) -> Result<String, String> {
     }
 
     let profile = classify_command(&req.command);
-    validate_isolation_policy(&req, &profile)?;
+    let confine = validate_isolation_policy(&req, &profile)?;
     let env_policy = env_policy_label(&req);
 
     Ok(format!(
-        "将在沙盒内执行 shell 命令：\n\n$ {}\n\n工作目录：{}\n超时：{} 秒\n风险分类：{} ({})\n风险原因：{}\n隔离模式：{}\n隔离策略：cwd 限定在沙盒、stdin 关闭、独立进程组/进程树、超时终止整棵进程树、输出截断；{}\n平台 containment：文件系统={}；网络={}\n注意：strict 模式会清空环境后仅注入白名单变量，并拒绝联网、依赖安装、破坏性、提权或外部执行类命令；sandboxed 模式还会要求平台 OS sandbox wrapper 可用。",
+        "将在沙盒内执行 shell 命令：\n\n$ {}\n\n工作目录：{}\n超时：{} 秒\n风险分类：{} ({})\n风险原因：{}\n隔离模式：{}\n隔离 enforcement：{}\n隔离策略：cwd 限定在沙盒、stdin 关闭、独立进程组/进程树、超时终止整棵进程树、输出截断；{}\n平台 containment：文件系统={}；网络={}\n注意：strict 模式会清空环境后仅注入白名单变量，并拒绝联网、依赖安装、破坏性、提权或外部执行类命令；sandboxed 模式还会要求平台 OS sandbox wrapper 可用。",
         req.command,
         cwd.strip_prefix(&sandbox)
             .map(|p| p.to_string_lossy().replace('\\', "/"))
@@ -368,6 +449,7 @@ pub fn preview(state: &crate::AppState, args: Value) -> Result<String, String> {
         profile.risk.severity(),
         profile.reasons.join("；"),
         req.isolation.label(),
+        confine.enforcement_label(),
         env_policy,
         platform_filesystem_sandbox(),
         platform_network_sandbox(),
@@ -386,9 +468,9 @@ pub fn run(state: &crate::AppState, args: Value) -> Result<String, String> {
     }
 
     let profile = classify_command(&req.command);
-    validate_isolation_policy(&req, &profile)?;
+    let confine = validate_isolation_policy(&req, &profile)?;
 
-    let mut cmd = build_shell_command(&req, &sandbox, &cwd)?;
+    let mut cmd = build_shell_command(&req, &sandbox, &cwd, confine)?;
     if !req.inherit_env || req.isolation.blocks_high_risk() {
         cmd.env_clear().envs(safe_env());
     }
@@ -503,7 +585,7 @@ fn classify_command(command: &str) -> ShellSafetyProfile {
 fn validate_isolation_policy(
     req: &ShellRequest,
     profile: &ShellSafetyProfile,
-) -> Result<(), String> {
+) -> Result<ShellConfine, String> {
     if req.isolation.blocks_high_risk() && profile.risk.blocked_in_strict() {
         return Err(format!(
             "{} isolation 拒绝执行 {} 命令：{}",
@@ -512,21 +594,7 @@ fn validate_isolation_policy(
             profile.reasons.join("；")
         ));
     }
-    if req.isolation == ShellIsolationMode::Sandboxed {
-        ensure_sandbox_runtime_available()?;
-    }
-    Ok(())
-}
-
-fn ensure_sandbox_runtime_available() -> Result<(), String> {
-    let runtime = platform_sandbox_runtime()
-        .ok_or_else(|| "当前平台不支持 shell sandboxed isolation".to_string())?;
-    if !command_available(runtime) {
-        return Err(format!(
-            "shell sandboxed isolation 需要 `{runtime}`，但当前 PATH 中不可用"
-        ));
-    }
-    Ok(())
+    req.isolation.confine()
 }
 
 fn env_policy_label(req: &ShellRequest) -> &'static str {
@@ -556,12 +624,18 @@ fn safe_env() -> BTreeMap<String, String> {
         .collect()
 }
 
-fn build_shell_command(req: &ShellRequest, sandbox: &Path, cwd: &Path) -> Result<Command, String> {
+fn build_shell_command(
+    req: &ShellRequest,
+    sandbox: &Path,
+    cwd: &Path,
+    confine: ShellConfine,
+) -> Result<Command, String> {
     let base = shell_command_spec(&req.command);
-    let spec = if req.isolation == ShellIsolationMode::Sandboxed {
-        sandboxed_shell_spec(&base, sandbox, cwd)?
-    } else {
-        base
+    let spec = match confine {
+        ShellConfine::Partial => base,
+        ShellConfine::Full { runtime } => {
+            sandboxed_shell_spec_for_runtime(runtime, &base, sandbox, cwd)?
+        }
     };
     let mut cmd = command_from_spec(spec);
     apply_process_containment(&mut cmd);
@@ -590,29 +664,18 @@ fn shell_command_spec(command: &str) -> ShellCommandSpec {
     }
 }
 
-fn sandboxed_shell_spec(
-    base: &ShellCommandSpec,
-    sandbox: &Path,
-    cwd: &Path,
-) -> Result<ShellCommandSpec, String> {
-    ensure_sandbox_runtime_available()?;
-    let runtime = platform_sandbox_runtime()
-        .ok_or_else(|| "当前平台不支持 shell sandboxed isolation".to_string())?;
-    Ok(sandboxed_shell_spec_for_runtime(
-        runtime, base, sandbox, cwd,
-    ))
-}
-
 fn sandboxed_shell_spec_for_runtime(
     runtime: &str,
     base: &ShellCommandSpec,
     sandbox: &Path,
     cwd: &Path,
-) -> ShellCommandSpec {
+) -> Result<ShellCommandSpec, String> {
     match runtime {
-        "bwrap" => bubblewrap_spec(base, sandbox, cwd),
-        "sandbox-exec" => sandbox_exec_spec(base, sandbox),
-        _ => base.clone(),
+        "bwrap" => Ok(bubblewrap_spec(base, sandbox, cwd)),
+        "sandbox-exec" => Ok(sandbox_exec_spec(base, sandbox)),
+        other => Err(format!(
+            "不支持 shell sandbox backend `{other}`；拒绝裸 shell 回退"
+        )),
     }
 }
 
@@ -701,6 +764,67 @@ fn command_available(program: &str) -> bool {
         }
         false
     })
+}
+
+/// PATH presence is not evidence that a sandbox can enforce its policy. Run a
+/// side-effect-free probe once per runtime and cache the result for policy
+/// views and execution gates. Any probe failure remains fail-closed.
+fn sandbox_runtime_probe(runtime: &str) -> bool {
+    static PROBES: OnceLock<Mutex<BTreeMap<String, bool>>> = OnceLock::new();
+    let probes = PROBES.get_or_init(|| Mutex::new(BTreeMap::new()));
+    if let Ok(cache) = probes.lock() {
+        if let Some(result) = cache.get(runtime) {
+            return *result;
+        }
+    }
+
+    if !command_available(runtime) {
+        return false;
+    }
+
+    let result = match runtime {
+        "bwrap" => Command::new(runtime)
+            .args([
+                "--die-with-parent",
+                "--unshare-net",
+                "--ro-bind",
+                "/",
+                "/",
+                "--dev",
+                "/dev",
+                "--proc",
+                "/proc",
+                "true",
+            ])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(false),
+        "sandbox-exec" => Command::new(runtime)
+            .args(["-p", "(version 1) (allow process*)", "/usr/bin/true"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(false),
+        _ => false,
+    };
+
+    if let Ok(mut cache) = probes.lock() {
+        cache.insert(runtime.to_string(), result);
+    }
+    result
+}
+
+fn process_group_supported() -> bool {
+    cfg!(any(unix, windows))
+}
+
+fn process_tree_termination_supported() -> bool {
+    cfg!(any(unix, windows))
 }
 
 fn apply_process_containment(cmd: &mut Command) {
@@ -899,9 +1023,75 @@ mod tests {
                 && rule.blocked_in_strict
                 && rule.patterns.contains(&"npm install")
         }));
-        assert!(state.containment.process_group);
-        assert!(state.containment.kill_process_tree_on_timeout);
+        assert_eq!(state.containment.process_group, process_group_supported());
+        assert_eq!(
+            state.containment.kill_process_tree_on_timeout,
+            process_tree_termination_supported()
+        );
+        assert!(matches!(state.containment.enforcement, "full" | "partial"));
         assert_ne!(state.containment.filesystem_sandbox, "not_configured");
+    }
+
+    #[test]
+    fn standard_and_strict_confine_contracts_are_partial() {
+        assert_eq!(
+            ShellIsolationMode::Standard
+                .confine()
+                .unwrap()
+                .enforcement(),
+            ShellEnforcement::Partial
+        );
+        assert_eq!(
+            ShellIsolationMode::Strict.confine().unwrap().enforcement(),
+            ShellEnforcement::Partial
+        );
+    }
+
+    #[test]
+    fn sandboxed_confine_is_full_only_after_wrapper_validation() {
+        let result = ShellIsolationMode::Sandboxed.confine();
+        match platform_sandbox_runtime() {
+            Some(runtime) if sandbox_runtime_probe(runtime) => {
+                assert_eq!(result.unwrap().enforcement(), ShellEnforcement::Full);
+            }
+            _ => assert!(result.is_err()),
+        }
+    }
+
+    #[test]
+    fn unsupported_sandbox_backend_fails_closed_instead_of_running_base_shell() {
+        let base = ShellCommandSpec {
+            program: "sh".to_string(),
+            args: vec![
+                "-lc".to_string(),
+                "echo should-not-run-unconfined".to_string(),
+            ],
+        };
+        let err = sandboxed_shell_spec_for_runtime(
+            "container",
+            &base,
+            Path::new("/tmp/demiurge-sandbox"),
+            Path::new("/tmp/demiurge-sandbox"),
+        )
+        .unwrap_err();
+
+        assert!(err.contains("拒绝裸 shell 回退"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_sandboxed_mode_is_partial_in_policy_and_fails_closed() {
+        assert_eq!(platform_sandbox_runtime(), None);
+        assert_eq!(policy_state().containment.enforcement, "partial");
+        assert!(ShellIsolationMode::Sandboxed.confine().is_err());
+    }
+
+    #[cfg(not(any(unix, windows)))]
+    #[test]
+    fn unsupported_platform_is_partial_and_fails_closed() {
+        assert_eq!(platform_sandbox_runtime(), None);
+        assert_eq!(policy_state().containment.enforcement, "partial");
+        assert!(ShellIsolationMode::Sandboxed.confine().is_err());
     }
 
     #[test]
@@ -915,7 +1105,8 @@ mod tests {
             &base,
             Path::new("/tmp/demiurge-sandbox"),
             Path::new("/tmp/demiurge-sandbox/app"),
-        );
+        )
+        .unwrap();
 
         assert_eq!(spec.program, "bwrap");
         assert!(spec.args.contains(&"--unshare-net".to_string()));
@@ -935,7 +1126,8 @@ mod tests {
             &base,
             Path::new("/tmp/demiurge-sandbox"),
             Path::new("/tmp/demiurge-sandbox"),
-        );
+        )
+        .unwrap();
 
         assert_eq!(spec.program, "sandbox-exec");
         let profile = &spec.args[1];

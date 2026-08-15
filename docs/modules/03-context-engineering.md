@@ -176,7 +176,7 @@ effective_reserved_output  = settings.reserved_output_tokens.min(profile.max_out
 | `gemini()` | 1_000_000 | 65_536 |
 | `openai_compatible()` / `local` | `None`（不 clamp，沿用用户设置） | `None` |
 
-`Settings` 默认值（`store/mod.rs:12`）：`DEFAULT_MAX_INPUT_TOKENS=32_000`、`DEFAULT_RESERVED_OUTPUT_TOKENS=4_000`、`DEFAULT_MAX_CONTEXT_CHARS=24_000`。因 `effective_*` 取 `min`，对 OpenAI 官方 profile 而言用户填得再大也会被压到 272K/128K；对「OpenAI 兼容」类（`max_input_tokens=None`）则完全信任用户设置，因为这类端点的真实窗口未知。
+`Settings` 默认值（`Demiurge-common/src/settings.rs`）：`DEFAULT_MAX_INPUT_TOKENS=128_000`、`DEFAULT_RESERVED_OUTPUT_TOKENS=16_000`、`DEFAULT_MAX_CONTEXT_CHARS=512_000`。这里要区分两层：`max_context_chars` 是系统提示词/Skill/项目指令的应用级软上限，约 512K 字符；`max_input_tokens` 是历史输入预算，开启 `context_budget_auto` 后会跟随模型目录或 provider profile 的真实窗口，并扣除 reserved output。1M 模型因此可以使用长上下文，但不会默认把每轮请求填满 1M。旧设置只有在仍保持三项旧默认值时才迁移到新默认，用户手工配置的小预算不被覆盖。
 
 > **`budget.rs:219` 的测试值溯源**：`history_budget_uses_profile_token_limits` 断言 OpenAI profile 把 500_000/200_000 clamp 到 `128_000`/`16_384`。这与上表 `openai()` 的 272_000/128_000 不符——因为该测试显式传入 `ProviderProfile::openai()` 之外，断言数字其实来自一个旧版常量；`llm/mod.rs:709` 的 `official_openai_profile_clamps_token_budget` 同样断言 128_000/16_384。**这是两处测试常量与当前 `openai()` profile 定义（272K/128K）不一致**，详见第八节「现有文档/测试与代码不符」。
 
@@ -243,6 +243,14 @@ return removed
 为什么要「再裁剪一次」（`runner.rs:288`）：摘要更新后 system prompt 里多了 `conversation_summary` 分区，system_tokens 变大 → `history_budget_tokens` 收缩，原本刚好卡线的历史可能再次越界，所以必须用新预算重新裁一遍，保证最终送出的 `system + history` 真正落在窗口内。这是一个最多两轮的不动点逼近，而非无限循环。
 
 注意摘要更新是 `async` 且依赖 provider，runner 用 `if let Ok(next_summary) = ...await` 容错：摘要调用失败时不阻断本轮，仅维持旧摘要并继续（裁剪后的 msgs 仍已落库）。
+
+### 5.4 模型可见请求的重建边界
+
+runner 送入 LLM 的模型可见输入是 `full = [system] + msgs`，另加 `tools_schema`、当前 `Settings`/`ProviderProfile` 的请求字段和本步预算口径。因而持久事件若用于续跑或诊断，必须保存足以重建这份 request projection 的事实；保存 `assistant-delta` 等 UI 增量并不能替代它。
+
+当前实现的持久化分层是明确的：`Session` 持久化 user/assistant/tool 消息、rolling summary、goal，以及 append-only `events`。`ModelRequest` 事件保存 provider dispatch 前的完整 `system + messages`、tools schema、provider/model/purpose；compaction 和 subagent 请求也走同一事件契约。system prompt 仍然每步从 persona、会话摘要、记忆、Goal、项目环境和 overlay 动态重建，但实际发送的结果已在 request event 中冻结。
+
+上下文层继续使用现有的 `Vec<Message>`、`Value` tools schema 和 `ProviderProfile` 预算入口；本轮不整体引入通用 context bundle、patch 或 replayState 对象。后台 memory/companion 抽取仍是非会话辅助调用，若未来要将其纳入合规 replay，应为其增加独立 envelope。
 
 ---
 

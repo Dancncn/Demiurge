@@ -322,6 +322,10 @@ fn parse_openai_usage(v: &Value) -> Option<Usage> {
         input_tokens: v["prompt_tokens"].as_u64().map(|n| n as usize),
         output_tokens: v["completion_tokens"].as_u64().map(|n| n as usize),
         total_tokens: v["total_tokens"].as_u64().map(|n| n as usize),
+        cache_read_tokens: v["prompt_tokens_details"]["cached_tokens"]
+            .as_u64()
+            .map(|n| n as usize),
+        cache_creation_tokens: None,
     })
     .filter(|usage| usage.total_or_sum().is_some())
 }

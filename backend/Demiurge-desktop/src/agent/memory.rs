@@ -10,10 +10,11 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use serde::{Deserialize, Serialize};
-use serde_json::json;
 
 use super::conversation::Message;
+use crate::agent::session_engine::SessionTurnStore;
 use crate::llm;
+use crate::model_routing::{stream_with_failover, FailoverRequest};
 use crate::store::{self, Settings};
 
 const MAX_MEMORY_FILE_BYTES: u64 = 32 * 1024;
@@ -317,7 +318,10 @@ fn copy_memory_file(from: &Path, to: &Path) -> Result<(), String> {
         .map_err(|e| format!("Failed to copy memory file to {}: {e}", to.display()))
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn extract_and_update(
+    state: &crate::AppState,
+    session_id: &str,
     client: &reqwest::Client,
     settings: &Settings,
     sandbox_dir: &Path,
@@ -327,6 +331,10 @@ pub async fn extract_and_update(
     assistant_text: &str,
     cancel: &AtomicBool,
 ) -> Result<(), String> {
+    // Keep the existing client parameter for API compatibility. Auxiliary
+    // requests use the shared routing seam so provider failover and usage
+    // accounting cannot drift from the subagent path.
+    let _ = client;
     let profile = llm::ProviderProfile::for_kind(settings.provider);
     if !settings.auto_memory_enabled
         || (profile.requires_api_key && settings.api_key.trim().is_empty())
@@ -360,8 +368,35 @@ Conversation:
         Message::system("You are Demiurge's long-term memory extractor. Output JSON only."),
         Message::user(prompt),
     ];
-    let turn =
-        llm::stream_completion(client, settings, &messages, &json!([]), |_| {}, cancel).await?;
+    let empty_tools = serde_json::Value::Array(Vec::new());
+    let turn_result = stream_with_failover(
+        FailoverRequest {
+            state,
+            settings,
+            messages: &messages,
+            tools: &empty_tools,
+            primary_model: &settings.model,
+            fallback_models: &settings.model_routing.fallback_models,
+            cancel,
+            request_cancel: None,
+            session_id,
+            purpose: "memory_extraction",
+        },
+        |model| {
+            SessionTurnStore::new(state, session_id.to_string()).append_model_request(
+                &messages,
+                &empty_tools,
+                &llm::provider_name(settings.provider),
+                model,
+                "memory_extraction",
+            );
+        },
+        |_failed_model, _next_model| {},
+        |_| {},
+    )
+    .await
+    .map(|routed| routed.turn);
+    let turn = turn_result?;
     if cancel.load(Ordering::Relaxed) || turn.finish_reason == "interrupted" {
         return Ok(());
     }

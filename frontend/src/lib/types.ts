@@ -39,10 +39,25 @@ export type ProviderKind =
   | "local";
 export type PermissionMode = "plan" | "default" | "auto" | "bypass";
 export type ReasoningEffort = "auto" | "low" | "medium" | "high" | "xhigh" | "max";
+export type ModelTier = "haiku" | "sonnet" | "opus";
 export type Language = "zh" | "en";
 export type AppTheme = "system" | "light" | "dark";
 export type AppAppearance = "material_bloom" | "classic";
 export type WebSearchProvider = "auto" | "bing" | "duckduckgo" | "tavily" | "brave" | "exa";
+
+export interface ModelRoutingConfig {
+  enabled: boolean;
+  subagent_tier: ModelTier;
+  docs_agent_tier: ModelTier;
+  haiku_model: string;
+  sonnet_model: string;
+  opus_model: string;
+  fallback_models: string[];
+  auto_failover: boolean;
+  max_failover_attempts: number;
+  failure_threshold: number;
+  cooldown_seconds: number;
+}
 
 export interface ConnectionTestResult {
   ok: boolean;
@@ -77,6 +92,7 @@ export interface Settings {
   appearance: AppAppearance;
   launch_on_startup: boolean;
   reasoning_effort: ReasoningEffort;
+  model_routing: ModelRoutingConfig;
   auto_memory_enabled: boolean;
   embedding_enabled: boolean;
   embedding_provider: string;
@@ -907,6 +923,9 @@ export interface AgentDefinitionInfo {
   kind: AgentKind;
   path: string;
   prompt: string;
+  model?: string;
+  model_tier?: ModelTier;
+  scope?: "read_only" | "docs_write";
   allowed_tools: string[];
   invalid_tools: string[];
   budget?: AgentBudget;
@@ -956,12 +975,167 @@ export interface SkillPanelState {
   diagnostics: string[];
 }
 
+export type ExternalProvider = "codex" | "claude";
+
+export interface SkillCandidate {
+  id: string;
+  name: string;
+  description: string;
+  source: string;
+  path: string;
+  managed: boolean;
+  enabled: boolean;
+  imported_at?: number;
+}
+
+export interface ExternalSessionMeta {
+  id: string;
+  provider: ExternalProvider;
+  title: string;
+  summary?: string;
+  project_dir?: string;
+  created_at?: number;
+  last_active_at?: number;
+  source_path: string;
+  message_count: number;
+}
+
+export interface ExternalSessionMessage {
+  role: string;
+  content: string;
+  timestamp?: number;
+}
+
+export interface ExternalConfigSummary {
+  provider: ExternalProvider;
+  kind: string;
+  path: string;
+  available: boolean;
+  safe_keys: string[];
+}
+
+export interface ImportedConfig {
+  provider: ExternalProvider;
+  kind: string;
+  source_path: string;
+  destination_path: string;
+  safe_values: Record<string, string>;
+  imported_at: number;
+}
+
+export interface IntegrationSnapshot {
+  skills: SkillCandidate[];
+  sessions: ExternalSessionMeta[];
+  configs: ExternalConfigSummary[];
+  diagnostics: string[];
+}
+
+export interface MarketSkill {
+  key: string;
+  name: string;
+  directory: string;
+  repo_owner: string;
+  repo_name: string;
+  repo_branch: string;
+  installs: number;
+  readme_url?: string;
+}
+
+export interface MarketSearchResult {
+  skills: MarketSkill[];
+  total_count: number;
+  query: string;
+}
+
+export interface ImportedSession {
+  id: string;
+  title: string;
+  provider: string;
+  source_path: string;
+  message_count: number;
+}
+
+export interface UsageBucket {
+  key: string;
+  requests: number;
+  total_tokens: number;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: number;
+  cache_creation_tokens: number;
+  cost_usd: number;
+}
+
+export interface UsageRecord {
+  id: string;
+  session_id: string;
+  provider: string;
+  model: string;
+  purpose: string;
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+  cache_read_tokens: number;
+  cache_creation_tokens: number;
+  cost_usd?: number | null;
+  pricing_source?: string | null;
+  latency_ms: number;
+  status: string;
+  created_at: number;
+}
+
+export interface UsageSummary {
+  total_requests: number;
+  successful_requests: number;
+  failed_requests: number;
+  interrupted_requests: number;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: number;
+  cache_creation_tokens: number;
+  total_tokens: number;
+  cache_hit_rate: number;
+  average_latency_ms: number;
+  total_cost_usd: number;
+  priced_requests: number;
+  unpriced_requests: number;
+  providers: UsageBucket[];
+  models: UsageBucket[];
+  daily: UsageBucket[];
+  recent_records: UsageRecord[];
+  log_read_errors?: number;
+  malformed_lines?: number;
+  oversized_lines?: number;
+  write_failures?: number;
+}
+
+export interface ModelCatalogEntry {
+  id: string;
+  name: string;
+  context_length: number;
+  input_cost_per_million?: number;
+  output_cost_per_million?: number;
+  cache_read_cost_per_million?: number;
+  cache_write_cost_per_million?: number;
+  supported_parameters: string[];
+  source: string;
+  updated_at: number;
+}
+
+export interface ModelCatalog {
+  source: string;
+  fetched_at?: number;
+  models: ModelCatalogEntry[];
+}
+
 export interface SessionMeta {
   id: string;
   title: string;
   updated_at: number;
   workspace_path?: string;
   workspace_name?: string;
+  archived: boolean;
+  archived_at?: number;
 }
 export interface SessionList {
   active: string;

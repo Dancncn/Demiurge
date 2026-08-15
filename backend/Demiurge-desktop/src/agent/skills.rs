@@ -231,6 +231,10 @@ pub fn discover(sandbox: &Path, data_dir: &Path, packs_dir: &Path, pack_id: &str
         }
     }
 
+    catalog
+        .skills
+        .retain(|skill| crate::integrations::skill_enabled(data_dir, &skill.skill_dir));
+
     catalog.skills.sort_by(|a, b| {
         a.scope
             .label()

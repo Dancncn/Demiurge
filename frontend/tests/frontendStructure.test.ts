@@ -43,6 +43,32 @@ test("workspace requests and accessibility contracts remain wired", async () => 
   assert.match(dialog, /event\.key === "Escape"/);
 });
 
+test("resource center keeps theme, locale, chart, and dialog contracts", async () => {
+  const [resource, css, i18n, settings, sidebar] = await Promise.all([
+    source("src/features/agent/IntegrationCenter.tsx"),
+    source("src/style.css"),
+    source("src/lib/i18n.tsx"),
+    source("src/features/settings/SettingsDialog.tsx"),
+    source("src/app/Sidebar.tsx"),
+  ]);
+
+  assert.match(resource, /useI18n\(\)/);
+  assert.match(resource, /resource-panel/);
+  assert.match(resource, /role="img" aria-label=\{t\("resource\.chartDailyLabel"/);
+  assert.match(resource, /role="dialog"/);
+  assert.match(resource, /previewCloseRef\.current\?\.focus\(\)/);
+  assert.match(resource, /event\.key === "Escape"/);
+  assert.match(css, /\.resource-center\s*\{/);
+  assert.match(css, /--resource-surface:/);
+  assert.match(css, /\.resource-usage-layout/);
+  assert.match(i18n, /"resource\.title": "资源中心"/);
+  assert.match(i18n, /"resource\.title": "Resource center"/);
+  assert.match(settings, /document\.hidden/);
+  assert.match(settings, /event\.currentTarget\.contains\(next\)/);
+  assert.match(sidebar, /sidebar\.archivePending/);
+  assert.match(sidebar, /left\.id\.localeCompare\(right\.id\)/);
+});
+
 test("App commits assistant_done as the canonical turn body", async () => {
   const app = await source("src/app/App.tsx");
 

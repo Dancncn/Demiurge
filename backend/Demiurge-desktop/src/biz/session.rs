@@ -17,6 +17,8 @@ pub(crate) struct SessionSummaryBo {
     pub workspace_path: String,
     pub workspace_name: Option<String>,
     pub updated_at: u64,
+    pub archived: bool,
+    pub archived_at: Option<u64>,
 }
 
 #[derive(Clone, Debug)]
@@ -137,6 +139,18 @@ impl SessionBiz {
         state.persist_sessions();
         Ok(clean)
     }
+
+    pub fn set_archived(state: &AppState, id: String, archived: bool) -> Result<(), String> {
+        let mut sessions = state.sessions.lock().unwrap();
+        let session = sessions
+            .get_mut(&id)
+            .ok_or_else(|| "会话不存在".to_string())?;
+        session.archived = archived;
+        session.archived_at = archived.then(store::now_millis);
+        drop(sessions);
+        state.persist_sessions();
+        Ok(())
+    }
 }
 
 fn normalize_title(title: &str) -> Result<String, String> {
@@ -160,9 +174,15 @@ fn session_list(store: &store::SessionStore) -> SessionListBo {
                 .and_then(|name| name.to_str())
                 .map(str::to_string),
             updated_at: session.updated_at,
+            archived: session.archived,
+            archived_at: session.archived_at,
         })
         .collect();
-    sessions.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+    sessions.sort_by(|a, b| {
+        a.archived
+            .cmp(&b.archived)
+            .then_with(|| b.updated_at.cmp(&a.updated_at))
+    });
     SessionListBo {
         active: store.active.clone(),
         sessions,

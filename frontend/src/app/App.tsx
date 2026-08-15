@@ -31,7 +31,7 @@ import GoalBar, { type GoalAction } from "@/features/agent/GoalBar";
 import ConfirmDialog from "@/features/agent/ConfirmDialog";
 import SettingsDialog, { type SettingsTab } from "@/features/settings/SettingsDialog";
 import MediaStudio from "@/features/media/MediaStudio";
-import SkillsPanel from "@/features/agent/SkillsPanel";
+import IntegrationCenter from "@/features/agent/IntegrationCenter";
 import FortuneDialog from "@/features/companion/FortuneDialog";
 import VoiceCallPanel from "@/features/voice/VoiceCallPanel";
 import WorkflowsPanel from "@/features/workflow/WorkflowsPanel";
@@ -74,11 +74,24 @@ const PREVIEW_SETTINGS: Settings = {
   api_key: "",
   model: "deepseek-chat",
   reasoning_effort: "auto",
+  model_routing: {
+    enabled: false,
+    subagent_tier: "haiku",
+    docs_agent_tier: "sonnet",
+    haiku_model: "",
+    sonnet_model: "",
+    opus_model: "",
+    fallback_models: [],
+    auto_failover: true,
+    max_failover_attempts: 2,
+    failure_threshold: 2,
+    cooldown_seconds: 60,
+  },
   current_pack: "default",
   current_pet: "",
-  max_context_chars: 24000,
-  max_input_tokens: 32000,
-  reserved_output_tokens: 4000,
+  max_context_chars: 512000,
+  max_input_tokens: 128000,
+  reserved_output_tokens: 16000,
   context_budget_auto: true,
   language: "zh",
   theme: "system",
@@ -1116,6 +1129,17 @@ export default function App() {
     }
   }
 
+  async function handleArchiveSession(id: string, archived: boolean) {
+    if (appBusy || navigationPendingRef.current) return;
+    try {
+      await api.setSessionArchived(id, archived);
+      await refreshSessions();
+    } catch (e) {
+      console.error("Failed to update session archive state", e);
+      throw e;
+    }
+  }
+
   async function handleSaveSettings(s: Settings) {
     try {
       await api.saveSettings(s);
@@ -1440,7 +1464,7 @@ export default function App() {
                 {[
                   ["chat", t("nav.chat")],
                   ["media", t("nav.images")],
-                  ["skills", t("nav.skills")],
+                  ["skills", t("nav.resources")],
                   ["live2d", t("nav.live2d")],
                 ].map(([view, label]) => (
                   <button
@@ -1587,6 +1611,7 @@ export default function App() {
           onNewChat={handleNewChat}
           onSelectSession={handleSelectSession}
           onRenameSession={handleRenameSession}
+          onArchiveSession={handleArchiveSession}
           onDeleteSession={handleDeleteSession}
           onOpenSettings={() => openSettings("general")}
         />
@@ -1685,6 +1710,12 @@ export default function App() {
                               <span className="mt-0.5 block truncate text-xs text-[#8a8a8a]">
                                 {agent.kind} / {agent.description || agent.path}
                               </span>
+                              {(agent.model_tier || agent.scope) && (
+                                <span className="mt-1 block truncate text-xs text-[#6b7280]">
+                                  {agent.model_tier ? `tier: ${agent.model_tier}` : "tier: auto"}
+                                  {agent.scope ? ` · scope: ${agent.scope}` : " · scope: read_only"}
+                                </span>
+                              )}
                               {agent.allowed_tools.length ? (
                                 <span className="mt-1 block truncate text-xs text-[#9a9a9a]">
                                   tools: {agent.allowed_tools.join(", ")}
@@ -1894,7 +1925,7 @@ export default function App() {
           ) : activeView === "media" ? (
             <MediaStudio settings={settings} onOpenSettings={() => openSettings("media")} />
           ) : activeView === "skills" ? (
-            <SkillsPanel />
+            <IntegrationCenter onSessionImported={() => refreshSessions()} />
           ) : activeView === "live2d" ? (
             null
           ) : settings ? (

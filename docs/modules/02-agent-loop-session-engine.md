@@ -27,6 +27,12 @@
 
 两层的**调用边界**在 `backend/Demiurge-desktop/src/lib.rs` 的 Tauri command 中：`send`（`lib.rs:293`）和 `send_with_agents`（`lib.rs:458`）负责 `begin_turn` → `run_turn(_with_options)` → `finish_turn` 的外层包裹，而 runner 只负责中间那段。
 
+### 本轮 seam 口径
+
+- **主循环保持 imperative**：`run_turn_with_options` 仍由显式的 `for _step`、snapshot、prompt/budget 计算、LLM 调用、工具分支和消息追加组成。`TurnEventEmitter` 与 `workflow_journal` 是观察/记录通道，不把 runner 改造成 reducer、事件驱动状态机或通用 replay engine。
+- **模型可见请求必须可由持久事件重建**：`Session.events` 以 `seq` 追加记录消息追加、projection replacement 和完整 `ModelRequest`（messages、tools、provider、model、purpose）；runner 在 provider dispatch 前先提交 request event。当前 agent turn、compaction、subagent 和 `/dream` 已接入该边界；memory/companion 等后台抽取仍是独立辅助调用，尚未声称纳入会话 replay。
+- LLM seam 只承接现有 `stream_completion` / `StreamChunk`（`StreamDelta` 兼容别名）；`ProviderProfile` 继续是能力画像，未整体引入 profile/bundle/patch 抽象。
+
 ```
 前端 invoke("send" / "send_with_agents")
         │
@@ -278,6 +284,8 @@ fn emit_legacy_and_unified<T>(&self, legacy_event: &str, kind: &'static str, pay
 **为什么双发？** 这是兼容式演进：离散的 `assistant-*` / `tool-*` 保留给旧消费者；当前主时间线通过 `listenUnifiedAgentEvents` 只消费 `agent-event`。统一信封额外携带 `turn`（id/session_id/status，由 `current_turn_context` 从 `active_turn` 读取）和 `timestamp`，`App` 会在修改时间线或触发 workspace 刷新前要求 `turn.session_id` 等于当前会话。确认与 Goal 进度由其他子系统发出，不进入 `TurnEventEmitter`，其 payload 直接携带 session id。`emit` 失败用 `let _ =` 吞掉——事件广播是尽力而为，不阻塞主循环。
 
 > 与回合状态广播区分：`session-engine-updated`（`emit_update`，`session_engine.rs:335`-`337`）推送的是 `SessionEnginePanelState`（busy / cancel / active_turn / last_turn），由 `begin_turn`/`finish_turn`/`request_interrupt` 触发，属于"回合级"状态；而 `agent-event` 是"事件级"流。两者互补。
+
+这里的统一事件仍是运行时广播，不是持久事件日志：`agent-event` 不写入 `sessions.json`。持久请求事件由 `SessionTurnStore::append_model_request` 在 provider dispatch 前追加，保存完整 `system + messages`、tools schema 与 provider/model/purpose；因此普通 `send` 的模型请求不再依赖增量事件才能审计。带 `workflow_run_id` 的路径另有 append-only `workflow_journal`，两者分别承担会话 request projection 和 workflow 恢复事实。
 
 ### 3.6 预算与裁剪算法（`budget.rs` + `context.rs`）
 

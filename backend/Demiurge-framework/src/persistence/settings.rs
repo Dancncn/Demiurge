@@ -1,14 +1,29 @@
 use std::fs;
 use std::path::Path;
 
-use demiurge_common::settings::Settings;
+use demiurge_common::settings::{
+    Settings, DEFAULT_MAX_CONTEXT_CHARS, DEFAULT_MAX_INPUT_TOKENS, DEFAULT_RESERVED_OUTPUT_TOKENS,
+};
 
 pub fn load_settings(dir: &Path) -> Settings {
     let p = dir.join("settings.json");
-    fs::read_to_string(&p)
+    let mut settings = fs::read_to_string(&p)
         .ok()
         .and_then(|s| serde_json::from_str::<Settings>(&s).ok())
-        .unwrap_or_default()
+        .unwrap_or_default();
+    // Migrate only the exact former defaults. A user who explicitly chose a
+    // smaller budget must keep that choice; the new defaults are for fresh
+    // installs and old untouched settings files.
+    if settings.context_budget_auto
+        && settings.max_context_chars == 24_000
+        && settings.max_input_tokens == 32_000
+        && settings.reserved_output_tokens == 4_000
+    {
+        settings.max_context_chars = DEFAULT_MAX_CONTEXT_CHARS;
+        settings.max_input_tokens = DEFAULT_MAX_INPUT_TOKENS;
+        settings.reserved_output_tokens = DEFAULT_RESERVED_OUTPUT_TOKENS;
+    }
+    settings
 }
 
 pub fn redacted_settings(s: &Settings) -> Settings {

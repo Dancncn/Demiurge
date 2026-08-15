@@ -427,6 +427,8 @@ fn parse_anthropic_usage(v: &Value) -> Option<Usage> {
             (Some(input), Some(output)) => Some(input.saturating_add(output)),
             _ => None,
         },
+        cache_read_tokens: cache_read,
+        cache_creation_tokens: cache_creation,
     })
     .filter(|usage| usage.total_or_sum().is_some())
 }

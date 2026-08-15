@@ -244,6 +244,10 @@ if has_legacy_plaintext || has_legacy_web_key || has_legacy_webdav_password
 
 **goal state** 的写入点集中在 `agent/goal.rs`，每次状态变更都 `persist_sessions()`（`goal.rs:83`、`:92`、`:109` 等多处）。`set_goal`（`goal.rs:305`）把新 `GoalState` 挂到 active session；`clear_goal`（`goal.rs:329`）置空。
 
+**workflow journal** 是另一条持久事件轨：`workflow_journal::append` 把 `{ ts, run_id, event, payload }` 以 append-only JSONL 写入 `sandbox/.demiurge/workflow-runs/<sanitized_run_id>/journal.jsonl`。`agent_started` payload 已包含 workflow 子 Agent 的 prompt，`/workflow resume` 读取最近 40 行作为恢复 overlay；因此这条路径能重建其已记录的模型输入事实。`agent-event` 仍只是运行时广播，普通 `send` 回合的完整 `system + tools_schema` 请求不在这条 journal 中。
+
+> **模型请求持久化口径**：凡是持久事件用于续跑或诊断模型工作，事件必须足以重建模型可见的 request projection。`Session.events` 的 `ModelRequest` 已记录完整 messages、tools schema、provider、model 和 purpose；`agent turn`、`compaction`、`subagent`、`/dream` 在 provider dispatch 前写入。后台 memory/companion 抽取仍需独立 envelope，不能把 `assistant-delta` 单独说成请求回放。
+
 > **关于 token 预算的当前状态（如实标注）**：`GoalState.token_budget` 是**软约束/状态标记**，不是硬性阻断。`add_tokens`（`goal.rs:465`）在累计 token 超过 `token_budget` 时，仅把目标状态切到 `GoalStatus::BudgetLimited`（`goal.rs:486`），并不强制终止正在进行的请求。预算更多用于面板展示与状态机流转，而非运行时硬熔断。
 
 ### 3.7 连接测试：刻意不调用 save_settings
@@ -305,6 +309,7 @@ ConnectionTestResult { ok, target, detail, latency_ms }   ← 不落盘、不写
 - **agent::goal / agent::collapse / agent::runner**：通过 `Session.summary` / `Session.goal` 把状态搭车进 `sessions.json`，落盘动作统一收口到 `AppState::persist_sessions()`。
 - **permission 模块**：独立维护版本化 `project_permissions.json`、`user_permissions.json` 与 `permission_audit.jsonl`，与本篇共用 `data_dir` 和 `store::now_millis()`，但走自己的串行、原子规则更新函数。旧 `permissions.json` 只用于展示重新授权提示。
 - **WebDAV 备份（`lib.rs`）**：`webdav_backup_now`（`lib.rs:585`）打包 `redacted_settings` + 全量 sessions 上云，确保备份不含 secret。
+- **workflow journal**：`.demiurge/workflow-runs/<run_id>/journal.jsonl` 记录 workflow 的阶段、预算、工具/Agent 进度与恢复所需 prompt；它和 `sessions.json` 是两条不同的持久化轨，不把运行时 `agent-event` 广播自动变成历史事件。
 
 ---
 
@@ -325,7 +330,7 @@ ConnectionTestResult { ok, target, detail, latency_ms }   ← 不落盘、不写
 ## ⑥ 已知限制与扩展点
 
 - **向量 RAG 已实现**：lorebook/记忆检索走 BM25 + dense + RRF 混合召回，dense 向量由 `backend/Demiurge-desktop/src/embed/mod.rs` 的 `RemoteEmbeddingProvider`（OpenAI 兼容 `/v1/embeddings`）提供，详见 [modules/20](./20-lorebook-vector-rag.md)。`sessions.json` 仍全量保存会话，rolling summary 是对话层的「压缩」手段；向量索引独立维护，不与 `sessions.json` 混写。`store/mod.rs:2` 头注释的历史口径（"MVP 不做向量 RAG"）已被 modules/20 的实现覆盖，以 modules/20 为准。
-- **整文件覆盖写**：`save_sessions` / `save_settings` 都是 `fs::write` 全量覆盖（`store/mod.rs:487`、`:449`），非原子写、无 WAL。进程在写盘中途崩溃可能损坏文件；但 `load_*` 解析失败会回退默认/空，不会崩。
+- **设置与会话的写入保证不同**：当前 framework 的 `save_sessions` 通过 `atomic_write_text` 写 `sessions.json` 并保留 `.bak`，而 `save_settings` 仍是 `fs::write` 全量覆盖；设置文件没有同等的原子替换/备份保护。workflow journal 则是 append-only 辅助轨，写失败由调用点按现有语义忽略，不应当作主循环的驱动状态。
 - **goal token 预算为软约束**：`token_budget` 仅切换状态到 `BudgetLimited`（`goal.rs:486`），不硬性熔断进行中的请求。若需硬约束需在 runner 侧增加拦截。
 - **voice 相关字段为占位**：`voice_stt_backend` / `voice_tts_backend` 默认 `"none"`（`store/mod.rs:63`、`:67`），`voice_enabled` 默认 `false`（`:16`）；这些字段已能持久化，但其后端能力本篇范围内仅作为配置项存在，实际语音链路状态见对应模块文档，不应视为已完整接通。
 - **computer_use_enabled 默认关闭**（`store/mod.rs:17`）：同样是可持久化的开关位。

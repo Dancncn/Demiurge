@@ -111,6 +111,14 @@ Gemini 适配器尚未接入公共解码器，仍自行按 LF 拆 `data:` 行。
 
 `on_delta` 回调在每段可见正文/思考增量上触发；cancel 检查位于网络 chunk 边界。供应商解析归一化之后，主时间线消费带 `turn.session_id` 的统一信封并丢弃其他会话事件；仍未闭环的是 `assistant-done` 完整正文没有始终作为权威值覆盖累计增量。
 
+### 3.1a 最小 stream seam
+
+当前跨模块的 LLM 流式 seam 只有 `llm::stream_completion`：调用方传入 `Settings`、`Message[]`、tools `Value`、`on_delta` 回调和 cancel 标志；适配器通过 `StreamChunk::Content` / `StreamChunk::Reasoning`（旧名 `StreamDelta` 仍为兼容别名）回传可见增量，最终返回 `AssistantTurn`。适配器内部的 SSE 累积状态仍是各自协议实现的私有状态。
+
+本轮不把这个 seam 泛化成 `replayState`、stream reducer 或新的事件协议。模型请求的可重建性属于上层的持久 request projection：它要记录模型可见的 messages、tools schema 选择以及 profile/预算口径；`StreamDelta` 只负责实时观察，不承担请求回放数据。
+
+`ProviderProfile` 继续只做已有的能力门控、schema 方言和 token clamp；不把 profile、request bundle 或 patch 作为一整套抽象迁入 adapter 边界。新增 provider 仍沿用现有 `for_kind` → adapter 路由和 `AssistantTurn` 归一化。
+
 ### 3.2 中断（cancel）语义
 
 `cancel: &AtomicBool` 一旦置位，循环在下一个 chunk 边界把 `state.finish` 改写成 `"interrupted"` 并跳出。随后 `normalize_finish_reason` 会把它原样保留为 `"interrupted"`（见 §3.6 各 adapter 分支均显式列了 `"interrupted" => "interrupted"`）。注意：**已经累积的 `content` 和 `tool_calls` 仍会随 `AssistantTurn` 返回**，中断不丢弃已收到的部分输出。
@@ -328,5 +336,7 @@ let kind = ProviderTestKind::from_adapter(profile.adapter_kind()); // 复用 ada
 | **新模型识别滞后** | reasoning effort 模型匹配是硬编码字符串前缀/包含（mod.rs:468-513），新模型上线需改码或用 `*_ALWAYS_ENABLE_EFFORT` 环境变量临时强开。 |
 | **Gemini SSE 仍是独立解析器** | 未复用 `SseDecoder`，会丢无换行流尾，不能处理多行 data/命名错误，格式错误被静默跳过；应对齐公共事件层并增加契约测试。 |
 | **前端事件归属与完整正文** | legacy 增量不带 session/turn；`assistant-done` 不总是覆盖累计正文。供应商后端归一化不能替代前端 canonical done 与跨会话过滤。 |
+
+> **本轮边界**：`stream_completion` / `StreamDelta` 是当前唯一需要继续复用的流式接口；没有已落地的通用 `replayState`，也没有把 profile/bundle/patch 整体搬进 provider seam 的行为。
 
 **扩展新 provider 的标准路径**：① 在 `ProviderKind` 增枚举值（store/mod.rs:122）；② 若是 OpenAI 兼容厂商，仅在 `for_kind` 兼容分支挂上，并在 `provider_label`（connection_tests.rs:508）补显示名；③ 若是全新方言，新增 `ProviderAdapterKind`/`ToolSchemaDialect` 变体、对应 `build_*_body` 与流式解析、`normalize_finish_reason` 分支，并在 `stream_completion` 的 match 加路由。能力画像作为单一入口，使②类扩展几乎零成本。

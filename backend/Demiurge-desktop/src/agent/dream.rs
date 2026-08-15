@@ -11,6 +11,7 @@ use serde_json::json;
 use tauri::AppHandle;
 
 use super::{conversation::Message, session_engine};
+use crate::model_routing::{stream_with_failover, FailoverRequest};
 use crate::permission::{self, PermissionDecision, PermissionRequest};
 use crate::store::{self, Settings};
 use crate::{llm, tools};
@@ -89,16 +90,44 @@ pub async fn run_manual_dream(
         Message::system("你是 Demiurge 的长期记忆整理器。你只输出整理后的 Markdown 记忆文件。"),
         Message::user(prompt),
     ];
-
-    let turn = llm::stream_completion(
-        &state.http,
-        &settings,
+    let turn_store = session_engine::SessionTurnStore::new(state, sid.clone());
+    let empty_tools = json!([]);
+    turn_store.append_model_request(
         &messages,
-        &json!([]),
+        &empty_tools,
+        &llm::provider_name(settings.provider),
+        &settings.model,
+        "memory_dream",
+    );
+
+    let turn_result = stream_with_failover(
+        FailoverRequest {
+            state,
+            settings: &settings,
+            messages: &messages,
+            tools: &empty_tools,
+            primary_model: &settings.model,
+            fallback_models: &settings.model_routing.fallback_models,
+            cancel: &state.cancel,
+            request_cancel: None,
+            session_id: &sid,
+            purpose: "memory_dream",
+        },
+        |model| {
+            turn_store.append_model_request(
+                &messages,
+                &empty_tools,
+                &llm::provider_name(settings.provider),
+                model,
+                "memory_dream",
+            );
+        },
+        |_failed_model, _next_model| {},
         |_| {},
-        &state.cancel,
     )
-    .await?;
+    .await
+    .map(|routed| routed.turn);
+    let turn = turn_result?;
 
     if state.cancel.load(Ordering::Relaxed) || turn.finish_reason == "interrupted" {
         events.assistant_interrupted();
@@ -177,13 +206,11 @@ pub async fn run_manual_dream(
 }
 
 fn push_message(state: &crate::AppState, sid: &str, msg: Message) {
-    let mut storeg = state.sessions.lock().unwrap();
-    if let Some(s) = storeg.get_mut(sid) {
-        s.messages.push(msg);
-        if s.title == "新对话" {
-            s.title = store::derive_title(&s.messages);
-        }
-        s.updated_at = store::now_millis();
+    let turn_store = session_engine::SessionTurnStore::new(state, sid.to_string());
+    if msg.role == "user" {
+        turn_store.append_user_message(msg.content.unwrap_or_default());
+    } else {
+        turn_store.append_message(msg);
     }
 }
 

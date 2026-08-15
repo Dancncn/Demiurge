@@ -358,6 +358,8 @@ fn parse_gemini_usage(v: &Value) -> Option<Usage> {
         input_tokens: v["promptTokenCount"].as_u64().map(|n| n as usize),
         output_tokens: v["candidatesTokenCount"].as_u64().map(|n| n as usize),
         total_tokens: v["totalTokenCount"].as_u64().map(|n| n as usize),
+        cache_read_tokens: v["cachedContentTokenCount"].as_u64().map(|n| n as usize),
+        cache_creation_tokens: None,
     })
     .filter(|usage| usage.total_or_sum().is_some())
 }

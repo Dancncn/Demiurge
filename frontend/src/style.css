@@ -2237,6 +2237,225 @@ html[data-appearance] .workspace-tab-control {
   background: var(--md-surface-lowest);
 }
 
+/* Resource center uses compact utility markup, but must still follow the
+   active appearance palette and the width of its settings pane. */
+.resource-center,
+.resource-center-content {
+  container-type: inline-size;
+}
+
+.resource-center {
+  --resource-surface: var(--md-surface, #ffffff);
+  --resource-surface-low: var(--md-surface-low, #f8f7fa);
+  --resource-surface-high: var(--md-surface-container, #f1eef3);
+  --resource-border: var(--md-outline-variant, #ded7e1);
+  --resource-text: var(--md-on-surface, #202124);
+  --resource-muted: var(--md-on-surface-variant, #667085);
+  --resource-faint: color-mix(in srgb, var(--resource-muted) 72%, transparent);
+  --resource-primary: var(--md-primary, #a83d88);
+  --resource-primary-container: var(--md-primary-container, #f9dce8);
+  --resource-on-primary: var(--md-on-primary, #ffffff);
+  --resource-danger: var(--md-error, #b42318);
+  --resource-success: var(--md-tertiary, #137333);
+  min-width: 0;
+  background: var(--resource-surface-low);
+  color: var(--resource-text);
+}
+
+.resource-center-content {
+  max-width: 1120px;
+}
+
+.resource-header {
+  background: var(--resource-surface);
+  border-color: var(--resource-border);
+}
+
+.resource-brand {
+  color: var(--resource-primary);
+  background: var(--resource-primary-container);
+}
+
+.resource-panel,
+.resource-dialog {
+  border: 1px solid var(--resource-border);
+  background: var(--resource-surface);
+  box-shadow: 0 1px 3px color-mix(in srgb, var(--md-shadow, #202124) 8%, transparent);
+}
+
+.resource-subpanel {
+  border: 1px solid var(--resource-border);
+  background: var(--resource-surface-low);
+}
+
+.resource-chip,
+.resource-tabs,
+.resource-track {
+  border: 1px solid var(--resource-border);
+  background: var(--resource-surface-high);
+  color: var(--resource-muted);
+}
+
+.resource-control,
+.resource-input {
+  border: 1px solid var(--resource-border);
+  background: var(--resource-surface);
+  color: var(--resource-text);
+}
+
+.resource-control:hover,
+.resource-input:focus {
+  border-color: color-mix(in srgb, var(--resource-primary) 48%, var(--resource-border));
+  background: var(--resource-surface-low);
+}
+
+.resource-primary {
+  border: 1px solid color-mix(in srgb, var(--resource-primary) 72%, var(--resource-border));
+  background: var(--resource-primary);
+  color: var(--resource-on-primary);
+}
+
+.resource-primary:hover {
+  background: color-mix(in srgb, var(--resource-primary) 88%, var(--resource-text));
+}
+
+.resource-danger {
+  border: 1px solid color-mix(in srgb, var(--resource-danger) 30%, var(--resource-border));
+  color: var(--resource-danger);
+  background: color-mix(in srgb, var(--resource-danger) 7%, var(--resource-surface));
+}
+
+.resource-error {
+  border: 1px solid color-mix(in srgb, var(--resource-danger) 30%, var(--resource-border));
+  color: var(--resource-danger);
+  background: color-mix(in srgb, var(--resource-danger) 7%, var(--resource-surface));
+}
+
+.resource-strong { color: var(--resource-text); }
+.resource-muted { color: var(--resource-muted); }
+.resource-faint { color: var(--resource-faint); }
+.resource-empty { color: var(--resource-faint); }
+.resource-success { color: var(--resource-success); }
+.resource-danger-text { color: var(--resource-danger); }
+.resource-warning { color: var(--md-secondary, #946200); }
+
+.resource-tab {
+  color: var(--resource-muted);
+}
+
+.resource-tab.is-active {
+  color: var(--resource-text);
+  background: var(--resource-surface);
+  box-shadow: 0 1px 3px color-mix(in srgb, var(--md-shadow, #202124) 10%, transparent);
+}
+
+.resource-divider,
+.resource-table-body,
+.resource-chart-axis {
+  border-color: var(--resource-border);
+}
+
+.resource-table-head {
+  color: var(--resource-muted);
+  background: var(--resource-surface-low);
+}
+
+.resource-table-row:hover {
+  background: color-mix(in srgb, var(--resource-primary-container) 22%, var(--resource-surface));
+}
+
+.resource-chart-input { background: var(--resource-primary); }
+.resource-chart-output { background: var(--md-tertiary, #137333); }
+.resource-chart-cache-read { background: var(--md-secondary, #946200); }
+.resource-chart-cache-write { background: var(--resource-muted); }
+
+.resource-dialog-backdrop {
+  background: color-mix(in srgb, var(--md-scrim, #000000) 24%, transparent);
+}
+
+.resource-dialog:focus-visible,
+.resource-control:focus-visible,
+.resource-primary:focus-visible,
+.resource-danger:focus-visible,
+.resource-tab:focus-visible,
+.resource-input:focus-visible {
+  outline: 2px solid var(--resource-primary);
+  outline-offset: 2px;
+}
+
+.resource-usage-layout {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.resource-distribution-grid {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.resource-usage-metrics {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+@container (min-width: 540px) {
+  .resource-usage-metrics {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .resource-distribution-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@container (min-width: 900px) {
+  .resource-usage-metrics {
+    grid-template-columns: repeat(8, minmax(0, 1fr));
+  }
+
+  .resource-usage-layout {
+    grid-template-columns: minmax(0, 1.35fr) minmax(260px, 0.65fr);
+  }
+}
+
+html[data-appearance] .resource-center [class*="bg-white"],
+html[data-appearance] .resource-center [class*="bg-[#fbfcfd]"],
+html[data-appearance] .resource-center [class*="bg-[#f9fafb]"],
+html[data-appearance] .resource-center [class*="bg-[#f8f9fb]"] {
+  background-color: var(--md-surface-lowest, #ffffff) !important;
+}
+
+html[data-appearance] .resource-center [class*="bg-[#eef1f5]"],
+html[data-appearance] .resource-center [class*="bg-[#dfe4ea]"] {
+  background-color: var(--md-surface-container, #f1f3f5) !important;
+}
+
+html[data-appearance] .resource-center [class*="bg-[#6d5dfc]"],
+html[data-appearance] .resource-center [class*="bg-[#10a37f]"] {
+  background-color: var(--md-primary, #a83d88) !important;
+}
+
+html[data-appearance] .resource-center [class*="text-[#202124]"],
+html[data-appearance] .resource-center [class*="text-[#111827]"] {
+  color: var(--md-on-surface, #202124) !important;
+}
+
+html[data-appearance] .resource-center [class*="text-[#667085]"],
+html[data-appearance] .resource-center [class*="text-[#8a9099]"],
+html[data-appearance] .resource-center [class*="text-[#98a2b3]"],
+html[data-appearance] .resource-center [class*="text-[#475467]"] {
+  color: var(--md-on-surface-variant, #667085) !important;
+}
+
+html[data-appearance] .resource-center [class*="text-white"] {
+  color: var(--md-on-primary, #ffffff) !important;
+}
+
+html[data-appearance] .resource-center [class*="border-[#e6e9ee]"],
+html[data-appearance] .resource-center [class*="border-[#eceff3]"],
+html[data-appearance] .resource-center [class*="border-[#eef0f3]"],
+html[data-appearance] .resource-center [class*="border-[#f0f2f5]"],
+html[data-appearance] .resource-center [class*="border-[#dfe3e8]"] {
+  border-color: var(--md-outline-variant, #ded7e1) !important;
+}
+
 @container (min-width: 540px) {
   html[data-appearance] .dashboard-metric:nth-child(2n) {
     border-right: 1px solid var(--md-outline-variant);

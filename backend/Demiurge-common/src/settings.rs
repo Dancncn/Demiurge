@@ -1,8 +1,11 @@
 use serde::{Deserialize, Serialize};
 
-pub const DEFAULT_MAX_CONTEXT_CHARS: usize = 24_000;
-pub const DEFAULT_MAX_INPUT_TOKENS: usize = 32_000;
-pub const DEFAULT_RESERVED_OUTPUT_TOKENS: usize = 4_000;
+/// Prompt assembly soft cap, in characters. This is deliberately below a
+/// model's advertised context window: it keeps system/skill/instruction
+/// expansion bounded while history gets its own token budget.
+pub const DEFAULT_MAX_CONTEXT_CHARS: usize = 512_000;
+pub const DEFAULT_MAX_INPUT_TOKENS: usize = 128_000;
+pub const DEFAULT_RESERVED_OUTPUT_TOKENS: usize = 16_000;
 pub const DEFAULT_AUTO_MEMORY_ENABLED: bool = true;
 pub const DEFAULT_VOICE_ENABLED: bool = false;
 pub const DEFAULT_COMPUTER_USE_ENABLED: bool = false;
@@ -185,6 +188,10 @@ fn default_reasoning_effort() -> ReasoningEffort {
     ReasoningEffort::Auto
 }
 
+fn default_model_routing() -> ModelRoutingConfig {
+    ModelRoutingConfig::default()
+}
+
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum PermissionMode {
@@ -242,6 +249,105 @@ pub enum ReasoningEffort {
     High,
     Xhigh,
     Max,
+}
+
+/// Capability tier used by the model router. The names describe the role a
+/// model plays, not a provider-specific model id.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelTier {
+    Haiku,
+    Sonnet,
+    Opus,
+}
+
+impl ModelTier {
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "haiku" | "fast" | "small" => Some(Self::Haiku),
+            "sonnet" | "balanced" | "medium" => Some(Self::Sonnet),
+            "opus" | "strong" | "large" => Some(Self::Opus),
+            _ => None,
+        }
+    }
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Haiku => "haiku",
+            Self::Sonnet => "sonnet",
+            Self::Opus => "opus",
+        }
+    }
+}
+
+/// Routing is deliberately model-only and provider-local. A single provider
+/// credential cannot safely imply credentials for another provider.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct ModelRoutingConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_subagent_tier")]
+    pub subagent_tier: ModelTier,
+    #[serde(default = "default_docs_agent_tier")]
+    pub docs_agent_tier: ModelTier,
+    #[serde(default)]
+    pub haiku_model: String,
+    #[serde(default)]
+    pub sonnet_model: String,
+    #[serde(default)]
+    pub opus_model: String,
+    #[serde(default)]
+    pub fallback_models: Vec<String>,
+    #[serde(default = "default_auto_failover")]
+    pub auto_failover: bool,
+    #[serde(default = "default_max_failover_attempts")]
+    pub max_failover_attempts: usize,
+    #[serde(default = "default_failure_threshold")]
+    pub failure_threshold: usize,
+    #[serde(default = "default_cooldown_seconds")]
+    pub cooldown_seconds: u64,
+}
+
+fn default_subagent_tier() -> ModelTier {
+    ModelTier::Haiku
+}
+
+fn default_docs_agent_tier() -> ModelTier {
+    ModelTier::Sonnet
+}
+
+fn default_auto_failover() -> bool {
+    true
+}
+
+fn default_max_failover_attempts() -> usize {
+    2
+}
+
+fn default_failure_threshold() -> usize {
+    2
+}
+
+fn default_cooldown_seconds() -> u64 {
+    60
+}
+
+impl Default for ModelRoutingConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            subagent_tier: default_subagent_tier(),
+            docs_agent_tier: default_docs_agent_tier(),
+            haiku_model: String::new(),
+            sonnet_model: String::new(),
+            opus_model: String::new(),
+            fallback_models: Vec::new(),
+            auto_failover: default_auto_failover(),
+            max_failover_attempts: default_max_failover_attempts(),
+            failure_threshold: default_failure_threshold(),
+            cooldown_seconds: default_cooldown_seconds(),
+        }
+    }
 }
 
 impl ReasoningEffort {
@@ -330,6 +436,8 @@ pub struct Settings {
     pub launch_on_startup: bool,
     #[serde(default = "default_reasoning_effort")]
     pub reasoning_effort: ReasoningEffort,
+    #[serde(default = "default_model_routing")]
+    pub model_routing: ModelRoutingConfig,
     #[serde(default = "default_auto_memory_enabled")]
     pub auto_memory_enabled: bool,
     /// 是否启用 Lorebook 向量召回（embedding 混合 RRF）。
@@ -466,6 +574,7 @@ impl Default for Settings {
             appearance: default_appearance(),
             launch_on_startup: false,
             reasoning_effort: default_reasoning_effort(),
+            model_routing: default_model_routing(),
             auto_memory_enabled: DEFAULT_AUTO_MEMORY_ENABLED,
             embedding_enabled: false,
             embedding_provider: default_embedding_provider(),
@@ -525,7 +634,7 @@ impl Default for Settings {
 
 #[cfg(test)]
 mod tests {
-    use super::{PermissionMode, ProviderKind, ReasoningEffort, Settings};
+    use super::{ModelTier, PermissionMode, ProviderKind, ReasoningEffort, Settings};
 
     #[test]
     fn legacy_settings_keep_compatible_defaults() {
@@ -552,6 +661,17 @@ mod tests {
         assert_eq!(settings.voice_speed, 1.0);
         assert!(settings.voice_tts_fallback);
         assert!(settings.mcp_servers.is_empty());
+        assert_eq!(settings.model_routing.subagent_tier, ModelTier::Haiku);
+        assert_eq!(settings.model_routing.docs_agent_tier, ModelTier::Sonnet);
+        assert!(settings.model_routing.auto_failover);
+    }
+
+    #[test]
+    fn model_tier_accepts_role_aliases() {
+        assert_eq!(ModelTier::parse("fast"), Some(ModelTier::Haiku));
+        assert_eq!(ModelTier::parse("balanced"), Some(ModelTier::Sonnet));
+        assert_eq!(ModelTier::parse("strong"), Some(ModelTier::Opus));
+        assert_eq!(ModelTier::parse("unknown"), None);
     }
 
     #[test]

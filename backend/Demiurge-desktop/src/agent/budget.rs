@@ -195,6 +195,8 @@ mod tests {
             input_tokens: Some(4),
             output_tokens: Some(6),
             total_tokens: None,
+            cache_read_tokens: None,
+            cache_creation_tokens: None,
         };
         assert!(budget.record_usage_or_estimate(Some(exact), 99));
         assert_eq!(budget.used_exact, 10);

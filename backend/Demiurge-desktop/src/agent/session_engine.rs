@@ -147,7 +147,7 @@ impl<'a> SessionTurnStore<'a> {
 
     pub fn append_user_message(&self, text: String) {
         self.mutate_and_persist(|session| {
-            session.messages.push(Message::user(text));
+            session.append_message(Message::user(text));
             if session.title == "新对话" {
                 session.title = store::derive_title(&session.messages);
             }
@@ -156,7 +156,49 @@ impl<'a> SessionTurnStore<'a> {
 
     pub fn append_message(&self, message: Message) {
         self.mutate_and_persist(|session| {
-            session.messages.push(message);
+            session.append_message(message);
+        });
+    }
+
+    /// Append a complete provider request to the session audit log. `tools`
+    /// is kept as the exact JSON schema used by the provider so this method
+    /// can be called directly from the runner without coupling core to
+    /// serde_json.
+    pub fn append_model_request(
+        &self,
+        messages: &[Message],
+        tools: &Value,
+        provider: &str,
+        model: &str,
+        purpose: &str,
+    ) {
+        let tools_json = serde_json::to_string(tools).unwrap_or_else(|_| tools.to_string());
+        let full_audit = std::env::var("DEMIURGE_MODEL_AUDIT_MODE")
+            .map(|value| {
+                matches!(
+                    value.trim().to_ascii_lowercase().as_str(),
+                    "full" | "inline" | "1" | "true"
+                )
+            })
+            .unwrap_or(false);
+        self.mutate_and_persist(|session| {
+            if full_audit {
+                session.append_model_request(
+                    messages.to_vec(),
+                    tools_json,
+                    provider.to_string(),
+                    model.to_string(),
+                    purpose.to_string(),
+                );
+            } else {
+                session.append_model_request_compact(
+                    messages.to_vec(),
+                    tools_json,
+                    provider.to_string(),
+                    model.to_string(),
+                    purpose.to_string(),
+                );
+            }
         });
     }
 
@@ -175,9 +217,7 @@ impl<'a> SessionTurnStore<'a> {
             if session.messages != expected_messages || &session.summary != expected_summary {
                 return Ok(false);
             }
-            session.messages = messages;
-            session.summary = summary;
-            session.updated_at = store::now_millis();
+            session.replace_projection(messages, summary);
         }
         self.state.persist_sessions();
         Ok(true)
@@ -188,7 +228,6 @@ impl<'a> SessionTurnStore<'a> {
             let mut store = self.state.sessions.lock().unwrap();
             if let Some(session) = store.get_mut(&self.session_id) {
                 mutate(session);
-                session.updated_at = store::now_millis();
                 true
             } else {
                 false
@@ -494,6 +533,8 @@ mod tests {
         assert_eq!(session.messages.len(), 1);
         assert_eq!(session.messages[0].role, "user");
         assert_eq!(session.title, "please inspect the repo");
+        assert_eq!(session.events.len(), 1);
+        assert_eq!(session.events[0].seq, 1);
         // persist_sessions 现在走后台线程落盘，轮询等待写入完成。
         let mut persisted = false;
         for _ in 0..300 {
@@ -504,6 +545,59 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
         assert!(persisted, "sessions.json 应由后台写盘线程持久化");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn session_turn_store_records_complete_model_request_without_changing_projection() {
+        let dir = std::env::temp_dir().join(format!(
+            "demiurge_session_model_request_{}",
+            store::new_session_id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let state = crate::AppState::new(reqwest::Client::new());
+        *state.data_dir.lock().unwrap() = dir.clone();
+
+        let session = store::Session::new();
+        let session_id = session.id.clone();
+        {
+            let mut sessions = state.sessions.lock().unwrap();
+            sessions.active = session_id.clone();
+            sessions.sessions.push(session);
+        }
+
+        let request_messages = vec![Message::system("system"), Message::user("hello")];
+        let tools = serde_json::json!([{"type": "function", "function": {"name": "grep"}}]);
+        let turn_store = SessionTurnStore::new(&state, session_id.clone());
+        turn_store.append_model_request(
+            &request_messages,
+            &tools,
+            "openai",
+            "test-model",
+            "agent_turn",
+        );
+
+        let sessions = state.sessions.lock().unwrap();
+        let session = sessions.get(&session_id).unwrap();
+        assert!(session.messages.is_empty());
+        assert!(session.summary.is_none());
+        assert_eq!(session.events.len(), 1);
+        assert!(matches!(
+            &session.events[0].kind,
+            store::SessionEventKind::ModelRequest {
+                messages,
+                tools: stored_tools,
+                provider,
+                model,
+                purpose,
+            } if messages == &request_messages
+                && stored_tools == &serde_json::to_string(&tools).unwrap()
+                && provider == "openai"
+                && model == "test-model"
+                && purpose == "agent_turn"
+        ));
+        drop(sessions);
 
         let _ = std::fs::remove_dir_all(&dir);
     }

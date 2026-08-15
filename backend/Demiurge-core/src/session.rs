@@ -1,8 +1,27 @@
+use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use demiurge_common::conversation::Message;
+use demiurge_common::conversation::{HistoryMessage, Message};
 use serde::{Deserialize, Serialize};
+
+fn serialize_history_message<S>(message: &Message, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    HistoryMessage::from(message).serialize(serializer)
+}
+
+fn serialize_history_messages<S>(messages: &[Message], serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    messages
+        .iter()
+        .map(HistoryMessage::from)
+        .collect::<Vec<_>>()
+        .serialize(serializer)
+}
 
 pub fn now_millis() -> u64 {
     SystemTime::now()
@@ -18,6 +37,76 @@ pub fn new_session_id() -> String {
     format!("s_{}_{}", now_millis(), SEQ.fetch_add(1, Ordering::Relaxed))
 }
 
+/// Projection replacement origin. A legacy seed is the one-time bridge from
+/// the pre-event sessions.json representation to the event source.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ProjectionSource {
+    Compaction,
+    LegacySeed,
+}
+
+/// The durable event kinds used to rebuild a session's message/summary
+/// projection. Model requests are audit records and do not change the
+/// projection.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum SessionEventKind {
+    AppendMessage {
+        #[serde(serialize_with = "serialize_history_message")]
+        message: Message,
+    },
+    ProjectionReplacement {
+        #[serde(serialize_with = "serialize_history_messages")]
+        messages: Vec<Message>,
+        summary: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        source: Option<ProjectionSource>,
+    },
+    ModelRequest {
+        #[serde(serialize_with = "serialize_history_messages")]
+        messages: Vec<Message>,
+        /// Canonical JSON text for the provider's complete tools schema.
+        tools: String,
+        provider: String,
+        model: String,
+        purpose: String,
+    },
+    /// Compact audit event for a request whose context extends the previous
+    /// reconstructible request. Older readers can ignore this event just as
+    /// they already ignore `ModelRequest`; newer readers can rebuild it from
+    /// `base_seq` plus the appended messages.
+    ModelRequestDelta {
+        base_seq: u64,
+        #[serde(serialize_with = "serialize_history_messages")]
+        appended_messages: Vec<Message>,
+        /// Canonical JSON text for the provider's complete tools schema.
+        tools: String,
+        provider: String,
+        model: String,
+        purpose: String,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ModelRequestAudit {
+    pub seq: u64,
+    pub messages: Vec<Message>,
+    pub tools: String,
+    pub provider: String,
+    pub model: String,
+    pub purpose: String,
+}
+
+/// One append-only session event. `seq` is monotonic within a Session.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct SessionEvent {
+    pub seq: u64,
+    pub timestamp: u64,
+    #[serde(flatten)]
+    pub kind: SessionEventKind,
+}
+
 /// 一段会话。
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Session {
@@ -31,7 +120,18 @@ pub struct Session {
     pub summary: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub goal: Option<crate::goal::GoalState>,
+    /// Archived sessions remain fully recoverable in the same append-only
+    /// session store; the flag only controls navigation visibility/grouping.
+    #[serde(default)]
+    pub archived: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub archived_at: Option<u64>,
     pub messages: Vec<Message>,
+    /// Append-only source for the message/summary projection and model
+    /// request audit trail. Older sessions omit this field and are seeded on
+    /// load by the persistence adapter.
+    #[serde(default)]
+    pub events: Vec<SessionEvent>,
     pub updated_at: u64,
 }
 
@@ -43,9 +143,273 @@ impl Session {
             workspace_path: String::new(),
             summary: None,
             goal: None,
+            archived: false,
+            archived_at: None,
             messages: Vec::new(),
+            events: Vec::new(),
             updated_at: now_millis(),
         }
+    }
+
+    /// Append a message event and apply it to the current projection.
+    pub fn append_message(&mut self, message: Message) {
+        self.ensure_legacy_projection_if_needed();
+        self.append_event(SessionEventKind::AppendMessage {
+            message: message.clone(),
+        });
+        self.messages.push(message);
+    }
+
+    /// Append a full projection replacement, normally produced by compaction.
+    pub fn replace_projection(&mut self, messages: Vec<Message>, summary: Option<String>) {
+        self.append_event(SessionEventKind::ProjectionReplacement {
+            messages: messages.clone(),
+            summary: summary.clone(),
+            source: Some(ProjectionSource::Compaction),
+        });
+        self.messages = messages;
+        self.summary = summary;
+    }
+
+    /// Append a provider request for audit/replay inspection. This event does
+    /// not add system messages or otherwise alter the persisted projection.
+    pub fn append_model_request(
+        &mut self,
+        messages: Vec<Message>,
+        tools: String,
+        provider: String,
+        model: String,
+        purpose: String,
+    ) {
+        self.ensure_legacy_projection_if_needed();
+        self.append_event(SessionEventKind::ModelRequest {
+            messages,
+            tools,
+            provider,
+            model,
+            purpose,
+        });
+    }
+
+    /// Append a request while avoiding repeated storage of an unchanged
+    /// context prefix. This is lossless: `reconstruct_model_requests()` can
+    /// rebuild the exact provider context from the append-only events.
+    pub fn append_model_request_compact(
+        &mut self,
+        messages: Vec<Message>,
+        tools: String,
+        provider: String,
+        model: String,
+        purpose: String,
+    ) {
+        self.ensure_legacy_projection_if_needed();
+        let previous = self.latest_model_request();
+        let next_kind = previous
+            .as_ref()
+            .filter(|previous| {
+                !previous.1.is_empty()
+                    && messages.starts_with(&previous.1)
+                    && previous.1.len() < messages.len()
+            })
+            .map(|previous| SessionEventKind::ModelRequestDelta {
+                base_seq: previous.0,
+                appended_messages: messages[previous.1.len()..].to_vec(),
+                tools: tools.clone(),
+                provider: provider.clone(),
+                model: model.clone(),
+                purpose: purpose.clone(),
+            })
+            .unwrap_or(SessionEventKind::ModelRequest {
+                messages,
+                tools,
+                provider,
+                model,
+                purpose,
+            });
+        self.append_event(next_kind);
+    }
+
+    fn latest_model_request(&self) -> Option<(u64, Vec<Message>)> {
+        let events = self
+            .events
+            .iter()
+            .map(|event| (event.seq, event))
+            .collect::<BTreeMap<_, _>>();
+        let mut sequence = events.iter().rev().find_map(|(seq, event)| {
+            matches!(
+                &event.kind,
+                SessionEventKind::ModelRequest { .. } | SessionEventKind::ModelRequestDelta { .. }
+            )
+            .then_some(*seq)
+        })?;
+        let latest_sequence = sequence;
+        let mut suffixes = Vec::new();
+        loop {
+            let event = events.get(&sequence)?;
+            match &event.kind {
+                SessionEventKind::ModelRequest { messages, .. } => {
+                    let mut messages = messages.clone();
+                    for suffix in suffixes.into_iter().rev() {
+                        messages.extend(suffix);
+                    }
+                    return Some((latest_sequence, messages));
+                }
+                SessionEventKind::ModelRequestDelta {
+                    base_seq,
+                    appended_messages,
+                    ..
+                } => {
+                    suffixes.push(appended_messages.clone());
+                    sequence = *base_seq;
+                }
+                SessionEventKind::AppendMessage { .. }
+                | SessionEventKind::ProjectionReplacement { .. } => return None,
+            }
+        }
+    }
+
+    /// Reconstruct every model-visible request from both legacy full events
+    /// and compact delta events. A broken base reference is reported instead
+    /// of silently producing a misleading audit result.
+    pub fn reconstruct_model_requests(&self) -> Result<Vec<ModelRequestAudit>, String> {
+        let mut events = self.events.iter().collect::<Vec<_>>();
+        events.sort_by_key(|event| event.seq);
+        let mut requests = Vec::new();
+        for event in events {
+            match &event.kind {
+                SessionEventKind::ModelRequest {
+                    messages,
+                    tools,
+                    provider,
+                    model,
+                    purpose,
+                } => requests.push(ModelRequestAudit {
+                    seq: event.seq,
+                    messages: messages.clone(),
+                    tools: tools.clone(),
+                    provider: provider.clone(),
+                    model: model.clone(),
+                    purpose: purpose.clone(),
+                }),
+                SessionEventKind::ModelRequestDelta {
+                    base_seq,
+                    appended_messages,
+                    tools,
+                    provider,
+                    model,
+                    purpose,
+                } => {
+                    let base = requests
+                        .iter()
+                        .find(|request| request.seq == *base_seq)
+                        .ok_or_else(|| {
+                            format!(
+                                "model request delta {} references missing base event {}",
+                                event.seq, base_seq
+                            )
+                        })?;
+                    let mut messages = base.messages.clone();
+                    messages.extend(appended_messages.clone());
+                    requests.push(ModelRequestAudit {
+                        seq: event.seq,
+                        messages,
+                        tools: tools.clone(),
+                        provider: provider.clone(),
+                        model: model.clone(),
+                        purpose: purpose.clone(),
+                    });
+                }
+                SessionEventKind::AppendMessage { .. }
+                | SessionEventKind::ProjectionReplacement { .. } => {}
+            }
+        }
+        Ok(requests)
+    }
+
+    /// Seed an old message/summary projection exactly once when no event log
+    /// exists. The seed keeps legacy sessions source-reconstructible without
+    /// appending another seed on subsequent loads.
+    pub fn seed_legacy_events(&mut self) -> bool {
+        if !self.events.is_empty() || (self.messages.is_empty() && self.summary.is_none()) {
+            return false;
+        }
+
+        let timestamp = if self.updated_at == 0 {
+            now_millis()
+        } else {
+            self.updated_at
+        };
+        self.events.push(SessionEvent {
+            seq: 1,
+            timestamp,
+            kind: SessionEventKind::ProjectionReplacement {
+                messages: self.messages.clone(),
+                summary: self.summary.clone(),
+                source: Some(ProjectionSource::LegacySeed),
+            },
+        });
+        true
+    }
+
+    /// Rebuild `messages` and `summary` from the event source. An empty event
+    /// list is left untouched so a caller can decide whether to seed legacy
+    /// data first.
+    pub fn rebuild_projection(&mut self) {
+        if self.events.is_empty() {
+            return;
+        }
+
+        let mut events = self.events.iter().collect::<Vec<_>>();
+        events.sort_by_key(|event| event.seq);
+
+        let mut messages = Vec::new();
+        let mut summary = None;
+        for event in events {
+            match &event.kind {
+                SessionEventKind::AppendMessage { message } => messages.push(message.clone()),
+                SessionEventKind::ProjectionReplacement {
+                    messages: replacement,
+                    summary: replacement_summary,
+                    ..
+                } => {
+                    messages = replacement.clone();
+                    summary = replacement_summary.clone();
+                }
+                SessionEventKind::ModelRequest { .. }
+                | SessionEventKind::ModelRequestDelta { .. } => {}
+            }
+        }
+        self.messages = messages;
+        self.summary = summary;
+    }
+
+    fn ensure_legacy_projection_if_needed(&mut self) {
+        if self.events.is_empty() && (!self.messages.is_empty() || self.summary.is_some()) {
+            self.seed_legacy_events();
+        }
+    }
+
+    fn append_event(&mut self, kind: SessionEventKind) {
+        let timestamp = now_millis();
+        let seq = self
+            .events
+            .iter()
+            .map(|event| event.seq)
+            .max()
+            .unwrap_or(0)
+            .saturating_add(1);
+        self.events.push(SessionEvent {
+            seq,
+            timestamp,
+            kind,
+        });
+        self.updated_at = timestamp;
+    }
+}
+
+impl Default for Session {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -245,7 +609,7 @@ pub fn compute_stats(store: &SessionStore, offset: i64, model: String) -> StatsP
 mod tests {
     use demiurge_common::conversation::Message;
 
-    use super::{derive_title, Session, SessionStore};
+    use super::{derive_title, ProjectionSource, Session, SessionEventKind, SessionStore};
 
     #[test]
     fn legacy_session_without_workspace_path_remains_compatible() {
@@ -264,6 +628,121 @@ mod tests {
             .unwrap()
             .get("workspace_path")
             .is_none());
+        assert!(session.events.is_empty());
+    }
+
+    #[test]
+    fn session_events_have_monotonic_sequences_and_rebuild_projection() {
+        let mut session = Session::new();
+        session.append_message(Message::user("hello"));
+        session.append_model_request(
+            vec![Message::system("system"), Message::user("hello")],
+            "[{\"type\":\"function\"}]".to_string(),
+            "openai".to_string(),
+            "test-model".to_string(),
+            "agent_turn".to_string(),
+        );
+        session.replace_projection(
+            vec![Message::user("recent")],
+            Some("rolling summary".to_string()),
+        );
+
+        assert_eq!(
+            session
+                .events
+                .iter()
+                .map(|event| event.seq)
+                .collect::<Vec<_>>(),
+            vec![1, 2, 3]
+        );
+        assert!(matches!(
+            &session.events[0].kind,
+            SessionEventKind::AppendMessage { .. }
+        ));
+        assert!(matches!(
+            &session.events[1].kind,
+            SessionEventKind::ModelRequest {
+                tools,
+                provider,
+                model,
+                purpose,
+                ..
+            } if tools == "[{\"type\":\"function\"}]"
+                && provider == "openai"
+                && model == "test-model"
+                && purpose == "agent_turn"
+        ));
+
+        let mut rebuilt = session.clone();
+        rebuilt.messages.clear();
+        rebuilt.summary = None;
+        rebuilt.rebuild_projection();
+        assert_eq!(rebuilt.messages, vec![Message::user("recent")]);
+        assert_eq!(rebuilt.summary.as_deref(), Some("rolling summary"));
+    }
+
+    #[test]
+    fn compact_model_request_events_rebuild_exact_context() {
+        let mut session = Session::new();
+        let first = vec![Message::system("system"), Message::user("hello")];
+        let second = vec![
+            Message::system("system"),
+            Message::user("hello"),
+            Message::assistant_text("reply"),
+        ];
+        session.append_model_request_compact(
+            first.clone(),
+            "[]".into(),
+            "openai".into(),
+            "test".into(),
+            "turn".into(),
+        );
+        session.append_model_request_compact(
+            second.clone(),
+            "[]".into(),
+            "openai".into(),
+            "test".into(),
+            "turn".into(),
+        );
+
+        assert!(matches!(
+            session.events[1].kind,
+            SessionEventKind::ModelRequestDelta { .. }
+        ));
+        let requests = session.reconstruct_model_requests().unwrap();
+        assert_eq!(requests[0].messages, first);
+        assert_eq!(requests[1].messages, second);
+    }
+
+    #[test]
+    fn legacy_seed_is_one_projection_event_and_is_idempotent() {
+        let mut session = serde_json::from_str::<Session>(
+            r#"{
+                "id": "legacy-session",
+                "title": "旧会话",
+                "summary": "old summary",
+                "messages": [{"role":"user","content":"old message"}],
+                "updated_at": 123
+            }"#,
+        )
+        .unwrap();
+
+        assert!(session.seed_legacy_events());
+        assert!(!session.seed_legacy_events());
+        assert_eq!(session.events.len(), 1);
+        assert!(matches!(
+            &session.events[0].kind,
+            SessionEventKind::ProjectionReplacement {
+                source: Some(ProjectionSource::LegacySeed),
+                ..
+            }
+        ));
+
+        session.messages.clear();
+        session.summary = None;
+        session.rebuild_projection();
+        assert_eq!(session.messages[0].content.as_deref(), Some("old message"));
+        assert_eq!(session.summary.as_deref(), Some("old summary"));
     }
 
     #[test]

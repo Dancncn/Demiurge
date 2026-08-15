@@ -115,7 +115,24 @@ pub async fn compact_session(
         });
     }
 
+    let turn_store = session_engine::SessionTurnStore::new(state, sid.clone());
+    if let Some((summary_messages, summary_tools)) = summary::build_summary_request(
+        &settings,
+        existing_summary.as_deref(),
+        &removed,
+        &state.cancel,
+    ) {
+        turn_store.append_model_request(
+            &summary_messages,
+            &summary_tools,
+            &llm::provider_name(settings.provider),
+            &settings.model,
+            "compaction",
+        );
+    }
     let next_summary = summary::update_session_summary(
+        state,
+        &sid,
         &state.http,
         &settings,
         existing_summary.as_deref(),
@@ -129,7 +146,6 @@ pub async fn compact_session(
         );
     }
 
-    let turn_store = session_engine::SessionTurnStore::new(state, sid.clone());
     if !turn_store.commit_compaction(
         &original_messages,
         &existing_summary,
