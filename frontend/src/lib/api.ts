@@ -47,6 +47,15 @@ import type {
   Settings,
   ResolvedPet,
   SkillPanelState,
+  IntegrationSnapshot,
+  SkillCandidate,
+  ExternalSessionMessage,
+  ImportedSession,
+  ImportedConfig,
+  MarketSearchResult,
+  MarketSkill,
+  UsageSummary,
+  ModelCatalog,
   StatsPanel,
   ShellPolicyState,
   SpeechSynthesisRequest,
@@ -191,6 +200,26 @@ export const companionUndoMemoryQueueItem = (id: string) =>
 export const skillPanelState = (query?: string) =>
   invoke<SkillPanelState>("skill_panel_state", { query: query ?? null });
 export const openSkillsDir = () => invoke<void>("open_skills_dir");
+export const integrationScan = () => invoke<IntegrationSnapshot>("integration_scan");
+export const integrationImportSkill = (sourcePath: string, source?: string) =>
+  invoke<SkillCandidate>("integration_import_skill", { sourcePath, source: source ?? null });
+export const integrationSetSkillEnabled = (id: string, enabled: boolean) =>
+  invoke<void>("integration_set_skill_enabled", { id, enabled });
+export const integrationRemoveSkill = (id: string) => invoke<void>("integration_remove_skill", { id });
+export const integrationSessionMessages = (provider: string, sourcePath: string) =>
+  invoke<ExternalSessionMessage[]>("integration_session_messages", { provider, sourcePath });
+export const integrationImportSession = (provider: string, sourcePath: string) =>
+  invoke<ImportedSession>("integration_import_session", { provider, sourcePath });
+export const integrationImportConfig = (provider: string, kind: string) =>
+  invoke<ImportedConfig>("integration_import_config", { provider, kind });
+export const integrationMarketSearch = (query: string, limit = 20) =>
+  invoke<MarketSearchResult>("integration_market_search", { query, limit });
+export const integrationMarketInstall = (skill: MarketSkill) =>
+  invoke<SkillCandidate>("integration_market_install", { skill });
+export const usageSummary = (startAt?: number, endAt?: number) =>
+  invoke<UsageSummary>("usage_summary", { startAt: startAt ?? null, endAt: endAt ?? null });
+export const modelCatalog = () => invoke<ModelCatalog>("model_catalog");
+export const refreshModelCatalog = () => invoke<ModelCatalog>("model_catalog_refresh");
 export const memoryPanelState = () => invoke<MemoryPanelState>("memory_panel_state");
 export const memoryAddEntry = (scope: string, kind: string, text: string) =>
   invoke<MemoryPanelState>("memory_add_entry", { scope, kind, text });
@@ -230,6 +259,8 @@ export const newSession = () => invoke<NavigationSnapshot>("new_session");
 export const selectSession = (id: string) => invoke<NavigationSnapshot>("select_session", { id });
 export const deleteSession = (id: string) => invoke<NavigationSnapshot>("delete_session", { id });
 export const renameSession = (id: string, title: string) => invoke<string>("rename_session", { id, title });
+export const setSessionArchived = (id: string, archived: boolean) =>
+  invoke<void>("set_session_archived", { id, archived });
 
 // Voice APIs. STT uses the configured recording backend; one-shot TTS can
 // route through the DashScope media adapter when voice_tts_backend=dashscope.
