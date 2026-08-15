@@ -8,14 +8,13 @@ use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
-use serde_json::json;
 
 use super::conversation::Message;
-use crate::agent::budget;
+use crate::agent::session_engine::SessionTurnStore;
 use crate::llm;
+use crate::model_routing::{stream_with_failover, FailoverRequest};
 use crate::store::{self, Settings};
 
 const MAX_MEMORY_FILE_BYTES: u64 = 32 * 1024;
@@ -332,6 +331,10 @@ pub async fn extract_and_update(
     assistant_text: &str,
     cancel: &AtomicBool,
 ) -> Result<(), String> {
+    // Keep the existing client parameter for API compatibility. Auxiliary
+    // requests use the shared routing seam so provider failover and usage
+    // accounting cannot drift from the subagent path.
+    let _ = client;
     let profile = llm::ProviderProfile::for_kind(settings.provider);
     if !settings.auto_memory_enabled
         || (profile.requires_api_key && settings.api_key.trim().is_empty())
@@ -365,30 +368,34 @@ Conversation:
         Message::system("You are Demiurge's long-term memory extractor. Output JSON only."),
         Message::user(prompt),
     ];
-    let request_started = Instant::now();
-    let turn_result =
-        llm::stream_completion(client, settings, &messages, &json!([]), |_| {}, cancel).await;
-    let _ = crate::usage::record(
-        state,
-        crate::usage::UsageRecordInput {
+    let empty_tools = serde_json::Value::Array(Vec::new());
+    let turn_result = stream_with_failover(
+        FailoverRequest {
+            state,
+            settings,
+            messages: &messages,
+            tools: &empty_tools,
+            primary_model: &settings.model,
+            fallback_models: &settings.model_routing.fallback_models,
+            cancel,
+            request_cancel: None,
             session_id,
-            provider: &llm::provider_name(settings.provider),
-            model: &settings.model,
             purpose: "memory_extraction",
-            usage: turn_result.as_ref().ok().and_then(|turn| turn.usage),
-            fallback_total_tokens: budget::estimate_messages_tokens(&messages).saturating_add(
-                turn_result
-                    .as_ref()
-                    .map_or(0, |turn| budget::estimate_text_tokens(&turn.content)),
-            ) as u64,
-            latency_ms: request_started.elapsed().as_millis() as u64,
-            status: if turn_result.is_ok() {
-                "success"
-            } else {
-                "failed"
-            },
         },
-    );
+        |model| {
+            SessionTurnStore::new(state, session_id.to_string()).append_model_request(
+                &messages,
+                &empty_tools,
+                &llm::provider_name(settings.provider),
+                model,
+                "memory_extraction",
+            );
+        },
+        |_failed_model, _next_model| {},
+        |_| {},
+    )
+    .await
+    .map(|routed| routed.turn);
     let turn = turn_result?;
     if cancel.load(Ordering::Relaxed) || turn.finish_reason == "interrupted" {
         return Ok(());

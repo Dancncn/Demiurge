@@ -67,11 +67,19 @@ pub enum SubagentScope {
     #[default]
     ReadOnly,
     DocsWrite,
+    /// The caller did not provide a scope. This is kept separate from an
+    /// explicit `read_only` request so a template cannot silently grant
+    /// write access.
+    #[doc(hidden)]
+    Unspecified,
 }
 
 impl SubagentScope {
     pub fn parse(value: Option<&str>) -> Self {
-        match value.unwrap_or("").trim().to_ascii_lowercase().as_str() {
+        let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
+            return Self::Unspecified;
+        };
+        match value.to_ascii_lowercase().as_str() {
             "docs_write" | "document_edit" | "doc_editor" | "writer" => Self::DocsWrite,
             _ => Self::ReadOnly,
         }
@@ -81,6 +89,7 @@ impl SubagentScope {
         match self {
             Self::ReadOnly => READ_ONLY_TOOLS.contains(&name),
             Self::DocsWrite => DOCS_WRITE_TOOLS.contains(&name),
+            Self::Unspecified => false,
         }
     }
 
@@ -90,6 +99,41 @@ impl SubagentScope {
             Self::DocsWrite => {
                 "文档写入：可修改 docs/ 和 Markdown 文档，不可修改源码、运行 shell 或派生子 Agent。"
             }
+            Self::Unspecified => "只读：阅读代码、文档和网页，不修改工作区。",
+        }
+    }
+}
+
+fn effective_scope(
+    requested: SubagentScope,
+    _template_scope: Option<SubagentScope>,
+) -> SubagentScope {
+    match requested {
+        // A template is descriptive only. It must never grant a capability
+        // the caller did not explicitly request.
+        SubagentScope::Unspecified | SubagentScope::ReadOnly => SubagentScope::ReadOnly,
+        SubagentScope::DocsWrite => SubagentScope::DocsWrite,
+    }
+}
+
+fn context_scope_instructions(scope: SubagentScope) -> &'static str {
+    match scope {
+        SubagentScope::ReadOnly | SubagentScope::Unspecified => {
+            "你可以使用只读工具收集证据，但不能修改文件、运行 shell、截图或再次派生子 Agent。"
+        }
+        SubagentScope::DocsWrite => {
+            "你可以使用作用域允许的文档工具修改 docs/ 和 Markdown 文档；不能修改源码、运行 shell、截图或再次派生子 Agent。"
+        }
+    }
+}
+
+fn output_scope_rule(scope: SubagentScope) -> &'static str {
+    match scope {
+        SubagentScope::DocsWrite => {
+            "- 只有实际完成文档写入后，才能声称修改了文档；没有写入就必须明确说明。"
+        }
+        SubagentScope::ReadOnly | SubagentScope::Unspecified => {
+            "- 你只能报告观察、证据和建议，不能声称修改了工作区。"
         }
     }
 }
@@ -418,14 +462,7 @@ pub async fn run(state: &crate::AppState, req: SubagentRequest) -> Result<String
         .as_deref()
         .and_then(|name| custom::load_agent(state, name).ok())
         .or_else(|| custom::load_agent(state, agent_type).ok());
-    let scope = if req.scope == SubagentScope::ReadOnly {
-        template
-            .as_ref()
-            .and_then(|agent| agent.scope)
-            .unwrap_or(req.scope)
-    } else {
-        req.scope
-    };
+    let scope = effective_scope(req.scope, template.as_ref().and_then(|agent| agent.scope));
     let model_tier = req
         .model_tier
         .or_else(|| template.as_ref().and_then(|agent| agent.model_tier))
@@ -433,6 +470,9 @@ pub async fn run(state: &crate::AppState, req: SubagentRequest) -> Result<String
             Some(match scope {
                 SubagentScope::DocsWrite => settings.model_routing.docs_agent_tier,
                 SubagentScope::ReadOnly => {
+                    crate::model_routing::default_agent_tier(agent_type, &settings.model_routing)
+                }
+                SubagentScope::Unspecified => {
                     crate::model_routing::default_agent_tier(agent_type, &settings.model_routing)
                 }
             })
@@ -456,7 +496,7 @@ pub async fn run(state: &crate::AppState, req: SubagentRequest) -> Result<String
         .as_ref()
         .map(|agent| {
             format!(
-                "## 自定义 Agent 模板\nname: {}\nkind: {:?}\nmodel: {}\nmodel_tier: {}\nscope: {}\nallowed_tools: {}\n\n### prompt\n{}\n\n### handoff_format\n{}\n",
+                "## 自定义 Agent 模板\nname: {}\nkind: {:?}\nmodel: {}\nmodel_tier: {}\ntemplate_scope: {}\neffective_scope: {}\nallowed_tools: {}\n\n### prompt\n{}\n\n### handoff_format\n{}\n",
                 agent.name,
                 agent.kind,
                 agent.model.as_deref().unwrap_or("inherit"),
@@ -464,7 +504,11 @@ pub async fn run(state: &crate::AppState, req: SubagentRequest) -> Result<String
                     .model_tier
                     .map(|tier| tier.as_str())
                     .unwrap_or("auto"),
-                agent.scope.map(|value| value.description()).unwrap_or("read_only"),
+                agent
+                    .scope
+                    .map(|value| value.description())
+                    .unwrap_or("未指定（由请求作用域决定）"),
+                scope.description(),
                 if agent.allowed_tools.is_empty() {
                     "只读默认工具".to_string()
                 } else {
@@ -486,12 +530,14 @@ pub async fn run(state: &crate::AppState, req: SubagentRequest) -> Result<String
          ## 子 Agent 运行约束\n\
          - 你是 Demiurge 的隔离子 Agent，最终输出会返回给主 Agent。\n\
          - 当前作用域：{scope_description}\n\
-         - 不能运行 shell、截图或再次派生子 Agent；工具执行器会再次校验作用域。\n\n\
+         - {scope_instructions}\n\n\
          ## 输出要求\n\
          {output_contract}\n\
-         - 只有在文档写入作用域实际完成写入后，才能声称修改了文档。",
+         {output_scope_rule}",
         req.prompt.trim(),
-        scope_description = scope.description()
+        scope_description = scope.description(),
+        scope_instructions = context_scope_instructions(scope),
+        output_scope_rule = output_scope_rule(scope)
     );
 
     let profile = llm::ProviderProfile::for_kind(settings.provider);
@@ -502,6 +548,7 @@ pub async fn run(state: &crate::AppState, req: SubagentRequest) -> Result<String
     let allowed_scope_tools: &[&str] = match scope {
         SubagentScope::ReadOnly => READ_ONLY_TOOLS,
         SubagentScope::DocsWrite => DOCS_WRITE_TOOLS,
+        SubagentScope::Unspecified => READ_ONLY_TOOLS,
     };
     let template_tool_names = template
         .as_ref()
@@ -556,10 +603,14 @@ pub async fn run(state: &crate::AppState, req: SubagentRequest) -> Result<String
                 &req.prompt,
             );
             system.push_str("\n\n---\n子 Agent 运行约束：\n");
+            system.push_str("你是 Demiurge 的隔离子 Agent。你帮助主 Agent 独立探索、审查、验证或反驳一个明确子任务。\n");
+            system.push_str(&format!(
+                "当前作用域：{}\n{}\n",
+                scope.description(),
+                context_scope_instructions(scope)
+            ));
             system.push_str(
-                "你是 Demiurge 的只读子 Agent。你帮助主 Agent 独立探索、审查、验证或反驳一个明确子任务。\n\
-                 你可以使用只读工具收集证据，但不能修改文件、运行 shell、截图或再次派生子 Agent。\n\
-                 你的最终输出会返回给主 Agent，而不是直接给用户；请输出结构清晰、可引用的发现。\n",
+                "你的最终输出会返回给主 Agent，而不是直接给用户；请输出结构清晰、可引用的发现。\n",
             );
             let parent_context = parent_context_block(session.as_ref(), req.context_mode);
             let user = user.replace(
@@ -918,6 +969,42 @@ mod tests {
             SubagentContextMode::Fork
         );
         assert_eq!(SubagentContextMode::parse(None), SubagentContextMode::Brief);
+    }
+
+    #[test]
+    fn distinguishes_unspecified_scope_from_explicit_read_only() {
+        assert_eq!(SubagentScope::parse(None), SubagentScope::Unspecified);
+        assert_eq!(
+            SubagentScope::parse(Some("read_only")),
+            SubagentScope::ReadOnly
+        );
+        assert_eq!(
+            effective_scope(SubagentScope::Unspecified, Some(SubagentScope::DocsWrite)),
+            SubagentScope::ReadOnly
+        );
+        assert_eq!(
+            effective_scope(SubagentScope::ReadOnly, Some(SubagentScope::DocsWrite)),
+            SubagentScope::ReadOnly
+        );
+        assert_eq!(
+            effective_scope(SubagentScope::DocsWrite, Some(SubagentScope::ReadOnly)),
+            SubagentScope::DocsWrite
+        );
+    }
+
+    #[test]
+    fn scope_instructions_match_the_effective_permission_contract() {
+        let read_only = context_scope_instructions(SubagentScope::ReadOnly);
+        assert!(read_only.contains("只读工具"));
+        assert!(read_only.contains("不能修改文件"));
+
+        let docs_write = context_scope_instructions(SubagentScope::DocsWrite);
+        assert!(docs_write.contains("文档工具"));
+        assert!(docs_write.contains("不能修改源码"));
+        assert!(output_scope_rule(SubagentScope::DocsWrite).contains("实际完成文档写入"));
+        assert!(output_scope_rule(SubagentScope::ReadOnly).contains("不能声称修改"));
+        assert!(!SubagentScope::ReadOnly.allows_tool("write_file"));
+        assert!(SubagentScope::DocsWrite.allows_tool("write_file"));
     }
 
     #[test]

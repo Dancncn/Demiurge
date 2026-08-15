@@ -110,6 +110,7 @@ pub fn route_candidates(
     fallback_models: &[String],
     max_additional: usize,
 ) -> Vec<String> {
+    let max_additional = max_additional.min(MAX_FAILOVER_ATTEMPTS);
     let mut candidates = Vec::with_capacity(max_additional.saturating_add(1));
     for model in std::iter::once(primary).chain(fallback_models.iter().map(String::as_str)) {
         let model = model.trim();
@@ -306,11 +307,7 @@ where
                         .map_or(0, |turn| budget::estimate_text_tokens(&turn.content)),
                 ) as u64,
                 latency_ms: request_started.elapsed().as_millis() as u64,
-                status: match result.as_ref() {
-                    Ok(turn) if turn.finish_reason == "interrupted" => "interrupted",
-                    Ok(_) => "success",
-                    Err(_) => "failed",
-                },
+                status: usage_status(&result),
             },
         );
         match result {
@@ -363,6 +360,14 @@ fn interrupted_turn() -> llm::AssistantTurn {
     }
 }
 
+fn usage_status(result: &Result<llm::AssistantTurn, String>) -> &'static str {
+    match result {
+        Ok(turn) if turn.finish_reason == "interrupted" => "interrupted",
+        Ok(_) => "success",
+        Err(_) => "failed",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -375,6 +380,27 @@ mod tests {
             route_candidates("primary", &models, 1),
             vec!["primary", "fallback"]
         );
+    }
+
+    #[test]
+    fn candidate_limit_is_bounded_even_for_untrusted_configuration() {
+        let models = (0..20)
+            .map(|idx| format!("fallback-{idx}"))
+            .collect::<Vec<_>>();
+        assert_eq!(route_candidates("primary", &models, usize::MAX).len(), 6);
+    }
+
+    #[test]
+    fn interrupted_turn_is_not_counted_as_success() {
+        assert_eq!(usage_status(&Ok(interrupted_turn())), "interrupted");
+        assert_eq!(
+            usage_status(&Ok(llm::AssistantTurn {
+                finish_reason: "stop".to_string(),
+                ..interrupted_turn()
+            })),
+            "success"
+        );
+        assert_eq!(usage_status(&Err("provider failed".to_string())), "failed");
     }
 
     #[test]

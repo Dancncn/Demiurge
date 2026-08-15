@@ -173,14 +173,32 @@ impl<'a> SessionTurnStore<'a> {
         purpose: &str,
     ) {
         let tools_json = serde_json::to_string(tools).unwrap_or_else(|_| tools.to_string());
+        let full_audit = std::env::var("DEMIURGE_MODEL_AUDIT_MODE")
+            .map(|value| {
+                matches!(
+                    value.trim().to_ascii_lowercase().as_str(),
+                    "full" | "inline" | "1" | "true"
+                )
+            })
+            .unwrap_or(false);
         self.mutate_and_persist(|session| {
-            session.append_model_request(
-                messages.to_vec(),
-                tools_json,
-                provider.to_string(),
-                model.to_string(),
-                purpose.to_string(),
-            );
+            if full_audit {
+                session.append_model_request(
+                    messages.to_vec(),
+                    tools_json,
+                    provider.to_string(),
+                    model.to_string(),
+                    purpose.to_string(),
+                );
+            } else {
+                session.append_model_request_compact(
+                    messages.to_vec(),
+                    tools_json,
+                    provider.to_string(),
+                    model.to_string(),
+                    purpose.to_string(),
+                );
+            }
         });
     }
 

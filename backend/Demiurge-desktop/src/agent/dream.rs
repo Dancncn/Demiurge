@@ -6,12 +6,12 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
-use std::time::Instant;
 
 use serde_json::json;
 use tauri::AppHandle;
 
-use super::{budget, conversation::Message, session_engine};
+use super::{conversation::Message, session_engine};
+use crate::model_routing::{stream_with_failover, FailoverRequest};
 use crate::permission::{self, PermissionDecision, PermissionRequest};
 use crate::store::{self, Settings};
 use crate::{llm, tools};
@@ -100,38 +100,33 @@ pub async fn run_manual_dream(
         "memory_dream",
     );
 
-    let request_started = Instant::now();
-    let turn_result = llm::stream_completion(
-        &state.http,
-        &settings,
-        &messages,
-        &json!([]),
-        |_| {},
-        &state.cancel,
-    )
-    .await;
-    let fallback_total = budget::estimate_messages_tokens(&messages).saturating_add(
-        turn_result
-            .as_ref()
-            .map_or(0, |turn| budget::estimate_text_tokens(&turn.content)),
-    ) as u64;
-    let _ = crate::usage::record(
-        state,
-        crate::usage::UsageRecordInput {
+    let turn_result = stream_with_failover(
+        FailoverRequest {
+            state,
+            settings: &settings,
+            messages: &messages,
+            tools: &empty_tools,
+            primary_model: &settings.model,
+            fallback_models: &settings.model_routing.fallback_models,
+            cancel: &state.cancel,
+            request_cancel: None,
             session_id: &sid,
-            provider: &llm::provider_name(settings.provider),
-            model: &settings.model,
             purpose: "memory_dream",
-            usage: turn_result.as_ref().ok().and_then(|turn| turn.usage),
-            fallback_total_tokens: fallback_total,
-            latency_ms: request_started.elapsed().as_millis() as u64,
-            status: if turn_result.is_ok() {
-                "success"
-            } else {
-                "failed"
-            },
         },
-    );
+        |model| {
+            turn_store.append_model_request(
+                &messages,
+                &empty_tools,
+                &llm::provider_name(settings.provider),
+                model,
+                "memory_dream",
+            );
+        },
+        |_failed_model, _next_model| {},
+        |_| {},
+    )
+    .await
+    .map(|routed| routed.turn);
     let turn = turn_result?;
 
     if state.cancel.load(Ordering::Relaxed) || turn.finish_reason == "interrupted" {

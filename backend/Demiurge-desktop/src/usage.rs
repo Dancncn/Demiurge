@@ -6,7 +6,7 @@
 use std::cmp::Reverse;
 use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, ErrorKind, Write};
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -19,6 +19,7 @@ use crate::AppState;
 
 const MAX_USAGE_LINE_BYTES: usize = 256 * 1024;
 static NEXT_USAGE_ID: AtomicU64 = AtomicU64::new(1);
+static USAGE_WRITE_FAILURES: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct UsageRecord {
@@ -87,6 +88,12 @@ pub struct UsageSummary {
     pub models: Vec<UsageBucket>,
     pub daily: Vec<UsageBucket>,
     pub recent_records: Vec<UsageRecord>,
+    /// Diagnostics are process-safe counters, not model usage records. They
+    /// make a broken JSONL store visible without changing the record format.
+    pub log_read_errors: u64,
+    pub malformed_lines: u64,
+    pub oversized_lines: u64,
+    pub write_failures: u64,
 }
 
 pub fn record(state: &AppState, input: UsageRecordInput<'_>) -> Result<(), String> {
@@ -151,16 +158,19 @@ pub fn record(state: &AppState, input: UsageRecordInput<'_>) -> Result<(), Strin
         status: input.status.to_string(),
         created_at: now_millis(),
     };
-    let line = serde_json::to_string(&record).map_err(|e| format!("序列化用量日志失败：{e}"))?;
+    let line = serde_json::to_string(&record)
+        .map_err(|e| usage_write_error(format!("序列化用量日志失败：{e}")))?;
     let _guard = state.usage_log_lock.lock().unwrap();
-    fs::create_dir_all(&dir).map_err(|e| format!("创建用量日志目录失败：{e}"))?;
+    fs::create_dir_all(&dir)
+        .map_err(|e| usage_write_error(format!("创建用量日志目录失败：{e}")))?;
     let mut file = OpenOptions::new()
         .create(true)
         .append(true)
         .open(dir.join("usage.jsonl"))
-        .map_err(|e| format!("打开用量日志失败：{e}"))?;
-    writeln!(file, "{line}").map_err(|e| format!("追加用量日志失败：{e}"))?;
-    file.flush().map_err(|e| format!("刷新用量日志失败：{e}"))
+        .map_err(|e| usage_write_error(format!("打开用量日志失败：{e}")))?;
+    writeln!(file, "{line}").map_err(|e| usage_write_error(format!("追加用量日志失败：{e}")))?;
+    file.flush()
+        .map_err(|e| usage_write_error(format!("刷新用量日志失败：{e}")))
 }
 
 pub fn summary(state: &AppState, start_at: Option<u64>, end_at: Option<u64>) -> UsageSummary {
@@ -170,7 +180,7 @@ pub fn summary(state: &AppState, start_at: Option<u64>, end_at: Option<u64>) -> 
 }
 
 fn summary_from_path(path: &Path, start_at: Option<u64>, end_at: Option<u64>) -> UsageSummary {
-    let records = read_records(path);
+    let (records, diagnostics) = read_records(path);
     let filtered_records = records
         .into_iter()
         .filter(|record| {
@@ -200,6 +210,10 @@ fn summary_from_path(path: &Path, start_at: Option<u64>, end_at: Option<u64>) ->
         models: Vec::new(),
         daily: Vec::new(),
         recent_records,
+        log_read_errors: diagnostics.read_errors,
+        malformed_lines: diagnostics.malformed_lines,
+        oversized_lines: diagnostics.oversized_lines,
+        write_failures: USAGE_WRITE_FAILURES.load(Ordering::Relaxed),
     };
     let mut provider_buckets = BTreeMap::<String, UsageBucket>::new();
     let mut model_buckets = BTreeMap::<String, UsageBucket>::new();
@@ -270,16 +284,56 @@ fn add_bucket(buckets: &mut BTreeMap<String, UsageBucket>, key: String, record: 
     bucket.cost_usd += record.cost_usd.unwrap_or(0.0);
 }
 
-fn read_records(path: &Path) -> Vec<UsageRecord> {
-    let Ok(file) = File::open(path) else {
-        return Vec::new();
+#[derive(Default)]
+struct UsageLogDiagnostics {
+    read_errors: u64,
+    malformed_lines: u64,
+    oversized_lines: u64,
+}
+
+fn usage_write_error(message: String) -> String {
+    USAGE_WRITE_FAILURES.fetch_add(1, Ordering::Relaxed);
+    message
+}
+
+fn read_records(path: &Path) -> (Vec<UsageRecord>, UsageLogDiagnostics) {
+    let file = match File::open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == ErrorKind::NotFound => {
+            return (Vec::new(), UsageLogDiagnostics::default());
+        }
+        Err(_) => {
+            return (
+                Vec::new(),
+                UsageLogDiagnostics {
+                    read_errors: 1,
+                    ..UsageLogDiagnostics::default()
+                },
+            );
+        }
     };
-    BufReader::new(file)
-        .lines()
-        .map_while(Result::ok)
-        .filter(|line| line.len() <= MAX_USAGE_LINE_BYTES)
-        .filter_map(|line| serde_json::from_str::<UsageRecord>(&line).ok())
-        .collect()
+    let mut records = Vec::new();
+    let mut diagnostics = UsageLogDiagnostics::default();
+    for line in BufReader::new(file).lines() {
+        let line = match line {
+            Ok(line) => line,
+            Err(_) => {
+                diagnostics.read_errors = diagnostics.read_errors.saturating_add(1);
+                continue;
+            }
+        };
+        if line.len() > MAX_USAGE_LINE_BYTES {
+            diagnostics.oversized_lines = diagnostics.oversized_lines.saturating_add(1);
+            continue;
+        }
+        match serde_json::from_str::<UsageRecord>(&line) {
+            Ok(record) => records.push(record),
+            Err(_) => {
+                diagnostics.malformed_lines = diagnostics.malformed_lines.saturating_add(1);
+            }
+        }
+    }
+    (records, diagnostics)
 }
 
 fn day_key(timestamp: u64) -> String {
@@ -356,6 +410,26 @@ mod tests {
         assert!((summary.cache_hit_rate - 0.4).abs() < f64::EPSILON);
         assert_eq!(summary.recent_records[0].id, "b");
         assert_eq!(summary.providers[0].requests, 2);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn usage_summary_reports_corrupt_and_oversized_lines() {
+        let root =
+            std::env::temp_dir().join(format!("demiurge_usage_diagnostics_{}", now_millis()));
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("usage.jsonl");
+        fs::write(
+            &path,
+            format!("not-json\n{}\n", "x".repeat(MAX_USAGE_LINE_BYTES + 1)),
+        )
+        .unwrap();
+
+        let summary = summary_from_path(&path, None, None);
+        assert_eq!(summary.total_requests, 0);
+        assert_eq!(summary.malformed_lines, 1);
+        assert_eq!(summary.oversized_lines, 1);
+        assert_eq!(summary.log_read_errors, 0);
         let _ = fs::remove_dir_all(root);
     }
 }

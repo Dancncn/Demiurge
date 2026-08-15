@@ -1,15 +1,15 @@
+use serde::{Deserialize, Serialize};
+use serde_json::json;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
-use std::time::Instant;
-
-use serde::{Deserialize, Serialize};
-use serde_json::json;
 
 use crate::agent::conversation::Message;
+use crate::agent::session_engine::SessionTurnStore;
 use crate::llm;
+use crate::model_routing::{stream_with_failover, FailoverRequest};
 use crate::store::{now_millis, Settings};
 use crate::AppState;
 
@@ -459,6 +459,10 @@ pub async fn extract_memory_to_queue(
     assistant_text: &str,
     cancel: &AtomicBool,
 ) -> Result<CompanionMemoryQueueState, String> {
+    // Keep the public parameter for callers that already own a configured
+    // client. The routing seam uses AppState's shared client so every actual
+    // attempt follows the same bounded failover policy.
+    let _ = client;
     let profile = llm::ProviderProfile::for_kind(settings.provider);
     if !settings.companion_enabled
         || !settings.companion_memory_extraction_enabled
@@ -497,31 +501,40 @@ Conversation:
         ),
         Message::user(prompt),
     ];
-    let request_started = Instant::now();
-    let turn_result =
-        llm::stream_completion(client, settings, &messages, &json!([]), |_| {}, cancel).await;
-    let _ = crate::usage::record(
-        state,
-        crate::usage::UsageRecordInput {
+    let tools = json!([]);
+    let provider = llm::provider_name(settings.provider);
+    let turn_store = SessionTurnStore::new(state, source_session.to_string());
+    let turn = stream_with_failover(
+        FailoverRequest {
+            state,
+            settings,
+            messages: &messages,
+            tools: &tools,
+            primary_model: &settings.model,
+            fallback_models: &settings.model_routing.fallback_models,
+            cancel,
+            request_cancel: None,
             session_id: source_session,
-            provider: &llm::provider_name(settings.provider),
-            model: &settings.model,
             purpose: "companion_memory",
-            usage: turn_result.as_ref().ok().and_then(|turn| turn.usage),
-            fallback_total_tokens: crate::agent::budget::estimate_messages_tokens(&messages)
-                .saturating_add(turn_result.as_ref().map_or(0, |turn| {
-                    crate::agent::budget::estimate_text_tokens(&turn.content)
-                })) as u64,
-            latency_ms: request_started.elapsed().as_millis() as u64,
-            status: if turn_result.is_ok() {
-                "success"
-            } else {
-                "failed"
-            },
         },
-    );
-    let turn = turn_result?;
-    if cancel.load(Ordering::Relaxed) || turn.finish_reason == "interrupted" {
+        |model| {
+            // SessionTurnStore is intentionally a no-op when an imported or
+            // deleted source session is absent, preserving this helper's
+            // previous behavior without risking a panic.
+            turn_store.append_model_request(
+                &messages,
+                &tools,
+                &provider,
+                model,
+                "companion_memory",
+            );
+        },
+        |_failed_model, _next_model| {},
+        |_| {},
+    )
+    .await?
+    .turn;
+    if companion_turn_is_interrupted(cancel, &turn) {
         return Ok(memory_queue_state(data_dir));
     }
 
@@ -540,6 +553,10 @@ Conversation:
         )?;
     }
     Ok(memory_queue_state(data_dir))
+}
+
+fn companion_turn_is_interrupted(cancel: &AtomicBool, turn: &llm::AssistantTurn) -> bool {
+    cancel.load(Ordering::Relaxed) || turn.finish_reason == "interrupted"
 }
 
 fn memory_queue_path(data_dir: &Path) -> PathBuf {
@@ -1635,6 +1652,28 @@ mod tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
+    #[test]
+    fn interrupted_companion_turn_is_not_accepted_for_memory_extraction() {
+        let cancel = AtomicBool::new(false);
+        let interrupted = llm::AssistantTurn {
+            finish_reason: "interrupted".to_string(),
+            content: "should not be parsed".to_string(),
+            tool_calls: Vec::new(),
+            usage: None,
+        };
+        assert!(companion_turn_is_interrupted(&cancel, &interrupted));
+
+        let completed = llm::AssistantTurn {
+            finish_reason: "stop".to_string(),
+            content: String::new(),
+            tool_calls: Vec::new(),
+            usage: None,
+        };
+        assert!(!companion_turn_is_interrupted(&cancel, &completed));
+
+        cancel.store(true, Ordering::Relaxed);
+        assert!(companion_turn_is_interrupted(&cancel, &completed));
+    }
     #[test]
     fn parses_llm_companion_memory_candidates_for_review() {
         let raw = r#"{"memories":[

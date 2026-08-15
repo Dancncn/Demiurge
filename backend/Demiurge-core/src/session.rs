@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -71,6 +72,30 @@ pub enum SessionEventKind {
         model: String,
         purpose: String,
     },
+    /// Compact audit event for a request whose context extends the previous
+    /// reconstructible request. Older readers can ignore this event just as
+    /// they already ignore `ModelRequest`; newer readers can rebuild it from
+    /// `base_seq` plus the appended messages.
+    ModelRequestDelta {
+        base_seq: u64,
+        #[serde(serialize_with = "serialize_history_messages")]
+        appended_messages: Vec<Message>,
+        /// Canonical JSON text for the provider's complete tools schema.
+        tools: String,
+        provider: String,
+        model: String,
+        purpose: String,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ModelRequestAudit {
+    pub seq: u64,
+    pub messages: Vec<Message>,
+    pub tools: String,
+    pub provider: String,
+    pub model: String,
+    pub purpose: String,
 }
 
 /// One append-only session event. `seq` is monotonic within a Session.
@@ -166,6 +191,141 @@ impl Session {
         });
     }
 
+    /// Append a request while avoiding repeated storage of an unchanged
+    /// context prefix. This is lossless: `reconstruct_model_requests()` can
+    /// rebuild the exact provider context from the append-only events.
+    pub fn append_model_request_compact(
+        &mut self,
+        messages: Vec<Message>,
+        tools: String,
+        provider: String,
+        model: String,
+        purpose: String,
+    ) {
+        self.ensure_legacy_projection_if_needed();
+        let previous = self.latest_model_request();
+        let next_kind = previous
+            .as_ref()
+            .filter(|previous| {
+                !previous.1.is_empty()
+                    && messages.starts_with(&previous.1)
+                    && previous.1.len() < messages.len()
+            })
+            .map(|previous| SessionEventKind::ModelRequestDelta {
+                base_seq: previous.0,
+                appended_messages: messages[previous.1.len()..].to_vec(),
+                tools: tools.clone(),
+                provider: provider.clone(),
+                model: model.clone(),
+                purpose: purpose.clone(),
+            })
+            .unwrap_or(SessionEventKind::ModelRequest {
+                messages,
+                tools,
+                provider,
+                model,
+                purpose,
+            });
+        self.append_event(next_kind);
+    }
+
+    fn latest_model_request(&self) -> Option<(u64, Vec<Message>)> {
+        let events = self
+            .events
+            .iter()
+            .map(|event| (event.seq, event))
+            .collect::<BTreeMap<_, _>>();
+        let mut sequence = events.iter().rev().find_map(|(seq, event)| {
+            matches!(
+                &event.kind,
+                SessionEventKind::ModelRequest { .. } | SessionEventKind::ModelRequestDelta { .. }
+            )
+            .then_some(*seq)
+        })?;
+        let latest_sequence = sequence;
+        let mut suffixes = Vec::new();
+        loop {
+            let event = events.get(&sequence)?;
+            match &event.kind {
+                SessionEventKind::ModelRequest { messages, .. } => {
+                    let mut messages = messages.clone();
+                    for suffix in suffixes.into_iter().rev() {
+                        messages.extend(suffix);
+                    }
+                    return Some((latest_sequence, messages));
+                }
+                SessionEventKind::ModelRequestDelta {
+                    base_seq,
+                    appended_messages,
+                    ..
+                } => {
+                    suffixes.push(appended_messages.clone());
+                    sequence = *base_seq;
+                }
+                SessionEventKind::AppendMessage { .. }
+                | SessionEventKind::ProjectionReplacement { .. } => return None,
+            }
+        }
+    }
+
+    /// Reconstruct every model-visible request from both legacy full events
+    /// and compact delta events. A broken base reference is reported instead
+    /// of silently producing a misleading audit result.
+    pub fn reconstruct_model_requests(&self) -> Result<Vec<ModelRequestAudit>, String> {
+        let mut events = self.events.iter().collect::<Vec<_>>();
+        events.sort_by_key(|event| event.seq);
+        let mut requests = Vec::new();
+        for event in events {
+            match &event.kind {
+                SessionEventKind::ModelRequest {
+                    messages,
+                    tools,
+                    provider,
+                    model,
+                    purpose,
+                } => requests.push(ModelRequestAudit {
+                    seq: event.seq,
+                    messages: messages.clone(),
+                    tools: tools.clone(),
+                    provider: provider.clone(),
+                    model: model.clone(),
+                    purpose: purpose.clone(),
+                }),
+                SessionEventKind::ModelRequestDelta {
+                    base_seq,
+                    appended_messages,
+                    tools,
+                    provider,
+                    model,
+                    purpose,
+                } => {
+                    let base = requests
+                        .iter()
+                        .find(|request| request.seq == *base_seq)
+                        .ok_or_else(|| {
+                            format!(
+                                "model request delta {} references missing base event {}",
+                                event.seq, base_seq
+                            )
+                        })?;
+                    let mut messages = base.messages.clone();
+                    messages.extend(appended_messages.clone());
+                    requests.push(ModelRequestAudit {
+                        seq: event.seq,
+                        messages,
+                        tools: tools.clone(),
+                        provider: provider.clone(),
+                        model: model.clone(),
+                        purpose: purpose.clone(),
+                    });
+                }
+                SessionEventKind::AppendMessage { .. }
+                | SessionEventKind::ProjectionReplacement { .. } => {}
+            }
+        }
+        Ok(requests)
+    }
+
     /// Seed an old message/summary projection exactly once when no event log
     /// exists. The seed keeps legacy sessions source-reconstructible without
     /// appending another seed on subsequent loads.
@@ -215,7 +375,8 @@ impl Session {
                     messages = replacement.clone();
                     summary = replacement_summary.clone();
                 }
-                SessionEventKind::ModelRequest { .. } => {}
+                SessionEventKind::ModelRequest { .. }
+                | SessionEventKind::ModelRequestDelta { .. } => {}
             }
         }
         self.messages = messages;
@@ -518,6 +679,39 @@ mod tests {
         rebuilt.rebuild_projection();
         assert_eq!(rebuilt.messages, vec![Message::user("recent")]);
         assert_eq!(rebuilt.summary.as_deref(), Some("rolling summary"));
+    }
+
+    #[test]
+    fn compact_model_request_events_rebuild_exact_context() {
+        let mut session = Session::new();
+        let first = vec![Message::system("system"), Message::user("hello")];
+        let second = vec![
+            Message::system("system"),
+            Message::user("hello"),
+            Message::assistant_text("reply"),
+        ];
+        session.append_model_request_compact(
+            first.clone(),
+            "[]".into(),
+            "openai".into(),
+            "test".into(),
+            "turn".into(),
+        );
+        session.append_model_request_compact(
+            second.clone(),
+            "[]".into(),
+            "openai".into(),
+            "test".into(),
+            "turn".into(),
+        );
+
+        assert!(matches!(
+            session.events[1].kind,
+            SessionEventKind::ModelRequestDelta { .. }
+        ));
+        let requests = session.reconstruct_model_requests().unwrap();
+        assert_eq!(requests[0].messages, first);
+        assert_eq!(requests[1].messages, second);
     }
 
     #[test]

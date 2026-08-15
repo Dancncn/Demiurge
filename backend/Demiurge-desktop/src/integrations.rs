@@ -18,6 +18,7 @@ use serde_json::Value;
 const MAX_SKILL_FILE_BYTES: u64 = 64 * 1024;
 const MAX_IMPORT_BYTES: u64 = 50 * 1024 * 1024;
 const MAX_IMPORT_FILES: usize = 512;
+const MAX_IMPORT_DEPTH: usize = 16;
 const MAX_SESSION_FILE_BYTES: u64 = 32 * 1024 * 1024;
 const MAX_SESSION_MESSAGES: usize = 5_000;
 const MAX_SESSION_FILES: usize = 4_096;
@@ -972,7 +973,14 @@ fn copy_tree(source: &Path, target: &Path) -> Result<(), String> {
         target: &Path,
         total: &mut u64,
         files: &mut usize,
+        depth: usize,
     ) -> Result<(), String> {
+        if depth > MAX_IMPORT_DEPTH {
+            return Err("Skill 目录层级超过安全上限".to_string());
+        }
+        if fs::symlink_metadata(target).is_ok() && !is_real_directory(target) {
+            return Err("Skill 导入目标不是普通目录，拒绝跟随链接".to_string());
+        }
         fs::create_dir_all(target).map_err(|e| format!("创建导入目录失败：{e}"))?;
         for entry in fs::read_dir(source).map_err(|e| format!("读取 Skill 目录失败：{e}"))? {
             let entry = entry.map_err(|e| format!("读取 Skill 条目失败：{e}"))?;
@@ -988,7 +996,7 @@ fn copy_tree(source: &Path, target: &Path) -> Result<(), String> {
                 return Err("Skill 文件路径不安全".to_string());
             }
             if file_type.is_dir() {
-                walk(&from, &to, total, files)?;
+                walk(&from, &to, total, files, depth + 1)?;
                 continue;
             }
             if !file_type.is_file() {
@@ -1004,7 +1012,7 @@ fn copy_tree(source: &Path, target: &Path) -> Result<(), String> {
         }
         Ok(())
     }
-    walk(source, target, &mut total, &mut files)
+    walk(source, target, &mut total, &mut files, 0)
 }
 
 fn head_tail_lines(path: &Path) -> Result<(Vec<String>, Vec<String>), String> {
@@ -1193,21 +1201,108 @@ fn timestamp(value: &Value) -> Option<u64> {
 }
 
 fn chrono_like_timestamp(value: &str) -> Option<u64> {
-    let (date, time) = value.split_once('T')?;
-    let mut parts = date.split('-').filter_map(|v| v.parse::<u64>().ok());
-    let year = parts.next()?;
-    let month = parts.next()?;
-    let day = parts.next()?;
-    let time = time
-        .trim_end_matches('Z')
-        .split([':', '.'])
-        .filter_map(|v| v.parse::<u64>().ok())
-        .collect::<Vec<_>>();
-    if time.len() < 3 {
+    let (date, raw_time) = value.split_once('T')?;
+    let mut date_parts = date.split('-');
+    let year = date_parts.next()?.parse::<i64>().ok()?;
+    let month = date_parts.next()?.parse::<u32>().ok()?;
+    let day = date_parts.next()?.parse::<u32>().ok()?;
+    if date_parts.next().is_some() || !(1..=9999).contains(&year) || month == 0 || month > 12 {
         return None;
     }
-    let days = year.saturating_sub(1970) * 365 + month.saturating_sub(1) * 30 + day;
-    Some((days * 86_400 + time[0] * 3_600 + time[1] * 60 + time[2]) * 1000)
+    let month_days = [
+        31,
+        if is_leap_year(year) { 29 } else { 28 },
+        31,
+        30,
+        31,
+        30,
+        31,
+        31,
+        30,
+        31,
+        30,
+        31,
+    ];
+    if day == 0 || day > month_days[(month - 1) as usize] {
+        return None;
+    }
+
+    let (clock, offset_seconds) = if let Some(clock) = raw_time.strip_suffix('Z') {
+        (clock, 0i64)
+    } else if raw_time.len() >= 6
+        && matches!(
+            raw_time.as_bytes().get(raw_time.len() - 6),
+            Some(b'+' | b'-')
+        )
+    {
+        let offset_start = raw_time.len() - 6;
+        let (clock, offset) = raw_time.split_at(offset_start);
+        let sign = match offset.as_bytes().first().copied() {
+            Some(b'+') => 1i64,
+            Some(b'-') => -1i64,
+            _ => return None,
+        };
+        if offset.as_bytes().get(3) != Some(&b':') {
+            return None;
+        }
+        let hours = offset[1..3].parse::<i64>().ok()?;
+        let minutes = offset[4..6].parse::<i64>().ok()?;
+        if hours > 23 || minutes > 59 {
+            return None;
+        }
+        (clock, sign * (hours * 3_600 + minutes * 60))
+    } else {
+        (raw_time, 0i64)
+    };
+
+    let (clock, fraction) = if let Some((clock, fraction)) = clock.split_once('.') {
+        if fraction.is_empty() || !fraction.chars().all(|ch| ch.is_ascii_digit()) {
+            return None;
+        }
+        let millis = fraction
+            .chars()
+            .take(3)
+            .collect::<String>()
+            .parse::<u64>()
+            .ok()?;
+        let millis = match fraction.len() {
+            1 => millis * 100,
+            2 => millis * 10,
+            _ => millis,
+        };
+        (clock, millis)
+    } else {
+        (clock, 0u64)
+    };
+    let mut clock_parts = clock.split(':');
+    let hour = clock_parts.next()?.parse::<i64>().ok()?;
+    let minute = clock_parts.next()?.parse::<i64>().ok()?;
+    let second = clock_parts.next()?.parse::<i64>().ok()?;
+    if clock_parts.next().is_some() || hour > 23 || minute > 59 || second > 59 {
+        return None;
+    }
+
+    let days = days_from_civil(year, month, day)?;
+    let seconds = days
+        .checked_mul(86_400)?
+        .checked_add(hour * 3_600 + minute * 60 + second)?
+        .checked_sub(offset_seconds)?;
+    u64::try_from(seconds.checked_mul(1_000)?.checked_add(fraction as i64)?).ok()
+}
+
+fn is_leap_year(year: i64) -> bool {
+    year % 4 == 0 && (year % 100 != 0 || year % 400 == 0)
+}
+
+/// Gregorian calendar date to days since 1970-01-01.
+fn days_from_civil(year: i64, month: u32, day: u32) -> Option<i64> {
+    let year = year - i64::from(month <= 2);
+    let era = if year >= 0 { year } else { year - 399 } / 400;
+    let year_of_era = year - era * 400;
+    let month = i64::from(month);
+    let day_of_year = (153 * (month + if month > 2 { -3 } else { 9 }) + 2) / 5 + i64::from(day) - 1;
+    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+    Some(era * 146_097 + day_of_era - 719_468)
 }
 
 fn truncate(value: &str, limit: usize) -> String {
@@ -1270,5 +1365,15 @@ mod tests {
         assert_eq!(values.get("model").map(String::as_str), Some("claude-3"));
         assert!(!values.contains_key("apiKey"));
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn iso_timestamps_use_real_calendar_and_timezone_math() {
+        let utc = parse_timestamp(&serde_json::json!("2024-02-29T00:00:00Z")).unwrap();
+        let offset = parse_timestamp(&serde_json::json!("2024-02-29T08:00:00+08:00")).unwrap();
+        assert_eq!(utc, offset);
+        assert_eq!(chrono_like_timestamp("1970-01-01T00:00:00.123Z"), Some(123));
+        assert!(chrono_like_timestamp("2023-02-29T00:00:00Z").is_none());
+        assert!(chrono_like_timestamp("2024-01-01T25:00:00Z").is_none());
     }
 }

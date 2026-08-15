@@ -1,12 +1,12 @@
 //! Phase 2：会话滚动摘要。把被上下文裁剪移除的旧消息压缩为短期会话状态。
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Instant;
 
 use serde_json::json;
 
 use super::conversation::Message;
-use crate::agent::budget;
+use crate::agent::session_engine::SessionTurnStore;
 use crate::llm;
+use crate::model_routing::{stream_with_failover, FailoverRequest};
 use crate::store::Settings;
 use crate::AppState;
 
@@ -22,35 +22,47 @@ pub async fn update_session_summary(
     removed_messages: &[Message],
     cancel: &AtomicBool,
 ) -> Result<Option<String>, String> {
+    // Keep the parameter for API compatibility with callers that own the
+    // configured HTTP client. The routing seam uses the shared AppState
+    // client so every auxiliary attempt follows the same bounded failover
+    // policy as subagents.
+    let _ = client;
     let Some((messages, tools)) =
         build_summary_request(settings, existing_summary, removed_messages, cancel)
     else {
         return Ok(existing_summary.map(str::to_string));
     };
-    let request_started = Instant::now();
-    let turn_result =
-        llm::stream_completion(client, settings, &messages, &tools, |_| {}, cancel).await;
-    let _ = crate::usage::record(
-        state,
-        crate::usage::UsageRecordInput {
+    let turn_result = stream_with_failover(
+        FailoverRequest {
+            state,
+            settings,
+            messages: &messages,
+            tools: &tools,
+            primary_model: &settings.model,
+            fallback_models: &settings.model_routing.fallback_models,
+            cancel,
+            request_cancel: None,
             session_id,
-            provider: &llm::provider_name(settings.provider),
-            model: &settings.model,
             purpose: "compaction",
-            usage: turn_result.as_ref().ok().and_then(|turn| turn.usage),
-            fallback_total_tokens: budget::estimate_messages_tokens(&messages).saturating_add(
-                turn_result
-                    .as_ref()
-                    .map_or(0, |turn| budget::estimate_text_tokens(&turn.content)),
-            ) as u64,
-            latency_ms: request_started.elapsed().as_millis() as u64,
-            status: if turn_result.is_ok() {
-                "success"
-            } else {
-                "failed"
-            },
         },
-    );
+        |model| {
+            // Record every actual provider request, including fallback
+            // attempts. The compaction caller may already have recorded the
+            // primary envelope; duplicate append-only envelopes are safer
+            // than leaving a fallback context unobservable.
+            SessionTurnStore::new(state, session_id.to_string()).append_model_request(
+                &messages,
+                &tools,
+                &llm::provider_name(settings.provider),
+                model,
+                "compaction",
+            );
+        },
+        |_failed_model, _next_model| {},
+        |_| {},
+    )
+    .await
+    .map(|routed| routed.turn);
     let turn = turn_result?;
 
     if cancel.load(Ordering::Relaxed) || turn.finish_reason == "interrupted" {
