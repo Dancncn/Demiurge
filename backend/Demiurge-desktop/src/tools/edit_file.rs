@@ -624,6 +624,8 @@ mod tests {
                 HashMap::<String, HashMap<String, PermissionRule>>::new(),
             ),
             permission_store_lock: Mutex::new(()),
+            usage_log_lock: Mutex::new(()),
+            model_route_health: Mutex::new(HashMap::new()),
             plan_state: Mutex::new(crate::PlanState::default()),
             edit_undo_stack: Mutex::new(Vec::new()),
             workflow_runs: Mutex::new(Vec::new()),

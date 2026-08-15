@@ -4,6 +4,9 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use super::subagent::SubagentScope;
+use crate::store::ModelTier;
+
 const AGENTS_DIR: &str = ".demiurge/agents";
 const AGENT_STATS_FILE: &str = ".demiurge/agent_stats.json";
 const MAX_TEXT_CHARS: usize = 16_000;
@@ -42,6 +45,12 @@ pub struct AgentFile {
     #[serde(default)]
     pub prompt: String,
     #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub model_tier: Option<ModelTier>,
+    #[serde(default)]
+    pub scope: Option<SubagentScope>,
+    #[serde(default)]
     pub allowed_tools: Vec<String>,
     #[serde(default)]
     pub budget: Option<AgentBudget>,
@@ -58,6 +67,9 @@ pub struct AgentDefinitionInfo {
     pub kind: AgentKind,
     pub path: String,
     pub prompt: String,
+    pub model: Option<String>,
+    pub model_tier: Option<ModelTier>,
+    pub scope: Option<SubagentScope>,
     pub allowed_tools: Vec<String>,
     pub invalid_tools: Vec<String>,
     pub budget: Option<AgentBudget>,
@@ -146,6 +158,8 @@ pub fn template_json() -> String {
         "name": "researcher",
         "description": "Explore the codebase and return concise evidence.",
         "kind": "template",
+        "model_tier": "haiku",
+        "scope": "read_only",
         "prompt": "You are a focused read-only researcher. Inspect relevant files, cite concrete paths, and hand off findings with risks and verification notes.",
         "allowed_tools": ["read_file", "grep", "glob", "git_status", "web_fetch", "web_search"],
         "budget": {
@@ -386,6 +400,9 @@ fn definition_from_path(
         kind: parsed.kind,
         path: path.to_string_lossy().to_string(),
         prompt: cap_chars(parsed.prompt, MAX_TEXT_CHARS),
+        model: parsed.model.filter(|model| !model.trim().is_empty()),
+        model_tier: parsed.model_tier,
+        scope: parsed.scope,
         allowed_tools,
         invalid_tools,
         budget: parsed.budget,

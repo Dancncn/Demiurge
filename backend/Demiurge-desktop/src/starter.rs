@@ -15,12 +15,14 @@ use crate::controller::agent::*;
 use crate::controller::agent_config::*;
 use crate::controller::companion::*;
 use crate::controller::goal::*;
+use crate::controller::integrations::*;
 use crate::controller::mcp::*;
 use crate::controller::media::*;
 use crate::controller::memory::*;
+use crate::controller::models::*;
 use crate::controller::pack::*;
-use crate::controller::pet::*;
 use crate::controller::permission::*;
+use crate::controller::pet::*;
 use crate::controller::remote::*;
 use crate::controller::session::*;
 use crate::controller::settings::*;
@@ -116,6 +118,19 @@ pub(crate) fn run() {
             select_session,
             delete_session,
             rename_session,
+            set_session_archived,
+            integration_scan,
+            integration_import_skill,
+            integration_set_skill_enabled,
+            integration_remove_skill,
+            integration_session_messages,
+            integration_import_session,
+            integration_import_config,
+            integration_market_search,
+            integration_market_install,
+            usage_summary,
+            model_catalog,
+            model_catalog_refresh,
             open_sandbox,
             workspace_state,
             select_workspace,

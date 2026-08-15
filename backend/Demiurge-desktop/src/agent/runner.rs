@@ -298,7 +298,23 @@ pub async fn run_turn_with_options(
                 compaction_ready = false;
                 break;
             }
+            if let Some((summary_messages, summary_tools)) = summary::build_summary_request(
+                &settings,
+                session_summary.as_deref(),
+                &removed_messages,
+                &state.cancel,
+            ) {
+                session_store.append_model_request(
+                    &summary_messages,
+                    &summary_tools,
+                    &llm::provider_name(settings.provider),
+                    &settings.model,
+                    "compaction",
+                );
+            }
             match summary::update_session_summary(
+                state,
+                &sid,
                 &state.http,
                 &settings,
                 session_summary.as_deref(),
@@ -376,26 +392,50 @@ pub async fn run_turn_with_options(
         events.assistant_start();
 
         let delta_events = events.clone();
-        let turn = match llm::stream_completion(
-            &state.http,
-            &settings,
-            &full,
-            &tools_schema,
-            |delta| match delta {
-                llm::StreamDelta::Content(text) => delta_events.assistant_delta(text),
-                llm::StreamDelta::Reasoning(text) => delta_events.assistant_reasoning(text),
+        let retry_events = events.clone();
+        let routed = match crate::model_routing::stream_with_failover(
+            crate::model_routing::FailoverRequest {
+                state,
+                settings: &settings,
+                messages: &full,
+                tools: &tools_schema,
+                primary_model: &settings.model,
+                fallback_models: &settings.model_routing.fallback_models,
+                cancel: &state.cancel,
+                request_cancel: None,
+                session_id: &sid,
+                purpose: "agent_turn",
             },
-            &state.cancel,
+            |model| {
+                // Every model-visible retry has its own durable envelope.
+                session_store.append_model_request(
+                    &full,
+                    &tools_schema,
+                    &llm::provider_name(settings.provider),
+                    model,
+                    "agent_turn",
+                );
+            },
+            |_failed_model, _next_model| {
+                // Reset the active UI projection before a fallback stream so
+                // partial tokens from the failed provider are not duplicated.
+                retry_events.assistant_start();
+            },
+            |delta| match delta {
+                llm::StreamChunk::Content(text) => delta_events.assistant_delta(text),
+                llm::StreamChunk::Reasoning(text) => delta_events.assistant_reasoning(text),
+            },
         )
         .await
         {
-            Ok(turn) => turn,
+            Ok(routed) => routed,
             Err(err) => {
                 custom::record_runtime_error(state, &selected_agents.definitions, &err);
                 events.assistant_error(assistant_error_payload(&err));
                 return Err(err);
             }
         };
+        let crate::model_routing::RoutedTurn { turn, .. } = routed;
 
         let estimated_usage = budget::estimate_messages_tokens(&full)
             .saturating_add(budget::estimate_text_tokens(&turn.content));
@@ -467,6 +507,8 @@ pub async fn run_turn_with_options(
             let sandbox_dir = state.sandbox_dir.lock().unwrap().clone();
             let packs_dir = state.packs_dir.lock().unwrap().clone();
             if let Err(error) = memory::extract_and_update(
+                state,
+                &sid,
                 &state.http,
                 &settings,
                 &sandbox_dir,
@@ -484,6 +526,7 @@ pub async fn run_turn_with_options(
             let _ = companion::extract_memory_to_queue(
                 &state.http,
                 &settings,
+                state,
                 &data_dir,
                 &sid,
                 &original_user_text,

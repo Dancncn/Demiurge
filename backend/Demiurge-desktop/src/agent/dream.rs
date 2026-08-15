@@ -6,11 +6,12 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
+use std::time::Instant;
 
 use serde_json::json;
 use tauri::AppHandle;
 
-use super::{conversation::Message, session_engine};
+use super::{budget, conversation::Message, session_engine};
 use crate::permission::{self, PermissionDecision, PermissionRequest};
 use crate::store::{self, Settings};
 use crate::{llm, tools};
@@ -89,8 +90,18 @@ pub async fn run_manual_dream(
         Message::system("你是 Demiurge 的长期记忆整理器。你只输出整理后的 Markdown 记忆文件。"),
         Message::user(prompt),
     ];
+    let turn_store = session_engine::SessionTurnStore::new(state, sid.clone());
+    let empty_tools = json!([]);
+    turn_store.append_model_request(
+        &messages,
+        &empty_tools,
+        &llm::provider_name(settings.provider),
+        &settings.model,
+        "memory_dream",
+    );
 
-    let turn = llm::stream_completion(
+    let request_started = Instant::now();
+    let turn_result = llm::stream_completion(
         &state.http,
         &settings,
         &messages,
@@ -98,7 +109,30 @@ pub async fn run_manual_dream(
         |_| {},
         &state.cancel,
     )
-    .await?;
+    .await;
+    let fallback_total = budget::estimate_messages_tokens(&messages).saturating_add(
+        turn_result
+            .as_ref()
+            .map_or(0, |turn| budget::estimate_text_tokens(&turn.content)),
+    ) as u64;
+    let _ = crate::usage::record(
+        state,
+        crate::usage::UsageRecordInput {
+            session_id: &sid,
+            provider: &llm::provider_name(settings.provider),
+            model: &settings.model,
+            purpose: "memory_dream",
+            usage: turn_result.as_ref().ok().and_then(|turn| turn.usage),
+            fallback_total_tokens: fallback_total,
+            latency_ms: request_started.elapsed().as_millis() as u64,
+            status: if turn_result.is_ok() {
+                "success"
+            } else {
+                "failed"
+            },
+        },
+    );
+    let turn = turn_result?;
 
     if state.cancel.load(Ordering::Relaxed) || turn.finish_reason == "interrupted" {
         events.assistant_interrupted();
@@ -177,13 +211,11 @@ pub async fn run_manual_dream(
 }
 
 fn push_message(state: &crate::AppState, sid: &str, msg: Message) {
-    let mut storeg = state.sessions.lock().unwrap();
-    if let Some(s) = storeg.get_mut(sid) {
-        s.messages.push(msg);
-        if s.title == "新对话" {
-            s.title = store::derive_title(&s.messages);
-        }
-        s.updated_at = store::now_millis();
+    let turn_store = session_engine::SessionTurnStore::new(state, sid.to_string());
+    if msg.role == "user" {
+        turn_store.append_user_message(msg.content.unwrap_or_default());
+    } else {
+        turn_store.append_message(msg);
     }
 }
 

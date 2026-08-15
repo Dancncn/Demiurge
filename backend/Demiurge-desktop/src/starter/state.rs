@@ -26,6 +26,11 @@ pub struct AppState {
     pub session_permission_rules: Mutex<HashMap<String, HashMap<String, PermissionRule>>>,
     /// 串行权限规则与审计文件的读取、更新和原子替换，防止丢更新或读到半写文件。
     pub permission_store_lock: Mutex<()>,
+    /// 使用量 JSONL 的追加锁；统计从该日志重放，不参与主循环决策。
+    pub usage_log_lock: Mutex<()>,
+    /// Provider-local model circuit breakers. Routing state is process-local;
+    /// the durable audit log remains the source of truth for requests.
+    pub model_route_health: Mutex<HashMap<String, crate::model_routing::RouteHealth>>,
     /// 当前计划模式的计划文件状态。
     pub plan_state: Mutex<PlanState>,
     /// 本进程内最近 edit_file 修改记录，用于 undo_edit 安全撤销
@@ -71,6 +76,8 @@ impl AppState {
             pending_confirms: Mutex::new(HashMap::new()),
             session_permission_rules: Mutex::new(HashMap::new()),
             permission_store_lock: Mutex::new(()),
+            usage_log_lock: Mutex::new(()),
+            model_route_health: Mutex::new(HashMap::new()),
             plan_state: Mutex::new(PlanState::default()),
             edit_undo_stack: Mutex::new(Vec::new()),
             workflow_runs: Mutex::new(Vec::new()),

@@ -203,6 +203,14 @@ spawn 子进程：stdin=null, stdout/stderr=piped
 
 > 设计意图：sandboxed 是「能则用，不能则拒」——绝不在不支持的平台静默降级为无隔离执行，避免给出虚假的安全感。
 
+### 2.8 sandbox 能力的 full / partial 口径
+
+这里的 **full / partial** 是策略能力描述，不是新增的隔离枚举：
+
+- macOS `sandbox-exec` 与 Linux/WSL `bubblewrap` 通过功能探测后，`sandboxed` 叠加 OS 级文件系统/网络边界（在已声明的沙盒、临时目录、只读根和断网规则内），属于 full OS sandbox 路径；仅在 PATH 中找到 wrapper 不足以报告 full；
+- `strict` 以及 native Windows 上现有的进程组、cwd containment、环境白名单和高危命令拒绝，属于 partial policy/process containment，不应被描述成完整 OS sandbox；
+- native Windows 或 wrapper 不在 PATH 时，选择 `sandboxed` 会在 spawn 前 fail-closed。系统不会把它静默降级到 partial 模式；`ShellContainmentView` 对这种平台暴露的正是“仅进程树/策略”的事实。
+
 ---
 
 ## 3. 联网工具：web_search / web_fetch / http_get + web_common
@@ -381,6 +389,8 @@ adapter = Adapter::parse(source 或 settings.web_search_provider 或 WEB_SEARCH_
 | 确认门 | `PermissionPolicy::ask` + `confirmation_preview`（`mod.rs:1110`）| shell/clipboard/open_path/execute_tool 等执行前展示 preview |
 
 确认门的数据流：`runner` 在执行前调 `permission_summary_for_state`（`mod.rs:1103`）生成一行摘要，并对部分工具调 `confirmation_preview`（`mod.rs:1110`）生成详细预览。shell 的 preview 由 `shell::preview`（`shell.rs:345`）生成，包含命令、cwd、超时、风险分类、隔离模式与平台 containment 描述——确保用户在确认前看到的策略与实际执行一致。
+
+`apply_patch` 是现有文件工具中的一个结构化 patch 路径：由 `edit_file::patch_preview` 生成预览、经确认后由 `patch_run` 预检并应用到沙盒内已有文件。它保留工具级权限和 undo 语义；本轮不把 patch 扩展成通用 LLM request bundle、持久事件协议或新的 sandbox seam。
 
 ---
 

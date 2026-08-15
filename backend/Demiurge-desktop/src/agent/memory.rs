@@ -8,11 +8,13 @@ use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use super::conversation::Message;
+use crate::agent::budget;
 use crate::llm;
 use crate::store::{self, Settings};
 
@@ -317,7 +319,10 @@ fn copy_memory_file(from: &Path, to: &Path) -> Result<(), String> {
         .map_err(|e| format!("Failed to copy memory file to {}: {e}", to.display()))
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn extract_and_update(
+    state: &crate::AppState,
+    session_id: &str,
     client: &reqwest::Client,
     settings: &Settings,
     sandbox_dir: &Path,
@@ -360,8 +365,31 @@ Conversation:
         Message::system("You are Demiurge's long-term memory extractor. Output JSON only."),
         Message::user(prompt),
     ];
-    let turn =
-        llm::stream_completion(client, settings, &messages, &json!([]), |_| {}, cancel).await?;
+    let request_started = Instant::now();
+    let turn_result =
+        llm::stream_completion(client, settings, &messages, &json!([]), |_| {}, cancel).await;
+    let _ = crate::usage::record(
+        state,
+        crate::usage::UsageRecordInput {
+            session_id,
+            provider: &llm::provider_name(settings.provider),
+            model: &settings.model,
+            purpose: "memory_extraction",
+            usage: turn_result.as_ref().ok().and_then(|turn| turn.usage),
+            fallback_total_tokens: budget::estimate_messages_tokens(&messages).saturating_add(
+                turn_result
+                    .as_ref()
+                    .map_or(0, |turn| budget::estimate_text_tokens(&turn.content)),
+            ) as u64,
+            latency_ms: request_started.elapsed().as_millis() as u64,
+            status: if turn_result.is_ok() {
+                "success"
+            } else {
+                "failed"
+            },
+        },
+    );
+    let turn = turn_result?;
     if cancel.load(Ordering::Relaxed) || turn.finish_reason == "interrupted" {
         return Ok(());
     }

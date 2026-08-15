@@ -1,6 +1,5 @@
 //! agent IPC Adapter.
 
-use crate::agent::conversation::Message;
 use crate::permission::PermissionResponse;
 use crate::*;
 use std::sync::atomic::Ordering;
@@ -142,15 +141,9 @@ fn persist_direct_reply(
     user_text: String,
     assistant_text: String,
 ) {
-    {
-        let mut sessions = state.sessions.lock().unwrap();
-        if let Some(session) = sessions.get_mut(session_id) {
-            session.messages.push(Message::user(user_text));
-            session
-                .messages
-                .push(Message::assistant_text(assistant_text));
-            session.updated_at = store::now_millis();
-        }
-    }
-    state.persist_sessions();
+    let turn_store = agent::session_engine::SessionTurnStore::new(state, session_id.to_string());
+    turn_store.append_user_message(user_text);
+    turn_store.append_message(crate::agent::conversation::Message::assistant_text(
+        assistant_text,
+    ));
 }

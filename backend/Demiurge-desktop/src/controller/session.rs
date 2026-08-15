@@ -18,6 +18,8 @@ pub(crate) struct SessionSummaryResDto {
     #[serde(skip_serializing_if = "Option::is_none")]
     workspace_name: Option<String>,
     updated_at: u64,
+    archived: bool,
+    archived_at: Option<u64>,
 }
 
 impl From<SessionSummaryBo> for SessionSummaryResDto {
@@ -28,6 +30,8 @@ impl From<SessionSummaryBo> for SessionSummaryResDto {
             workspace_path: value.workspace_path,
             workspace_name: value.workspace_name,
             updated_at: value.updated_at,
+            archived: value.archived,
+            archived_at: value.archived_at,
         }
     }
 }
@@ -121,6 +125,15 @@ pub(crate) fn rename_session(
     SessionBiz::rename(state.inner(), id, title)
 }
 
+#[tauri::command]
+pub(crate) fn set_session_archived(
+    state: State<'_, AppState>,
+    id: String,
+    archived: bool,
+) -> Result<(), String> {
+    SessionBiz::set_archived(state.inner(), id, archived)
+}
+
 #[cfg(test)]
 mod tests {
     use crate::biz::session::{SessionListBo, SessionSummaryBo};
@@ -137,6 +150,8 @@ mod tests {
                 workspace_path: String::new(),
                 workspace_name: None,
                 updated_at: 42,
+                archived: false,
+                archived_at: None,
             }],
         });
 

@@ -3,6 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
+use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -447,9 +448,11 @@ pub fn pending_memory_queue_item(data_dir: &Path, id: &str) -> Option<CompanionM
         .find(|item| item.id == id && item.status == "pending")
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn extract_memory_to_queue(
     client: &reqwest::Client,
     settings: &Settings,
+    state: &AppState,
     data_dir: &Path,
     source_session: &str,
     user_text: &str,
@@ -494,8 +497,30 @@ Conversation:
         ),
         Message::user(prompt),
     ];
-    let turn =
-        llm::stream_completion(client, settings, &messages, &json!([]), |_| {}, cancel).await?;
+    let request_started = Instant::now();
+    let turn_result =
+        llm::stream_completion(client, settings, &messages, &json!([]), |_| {}, cancel).await;
+    let _ = crate::usage::record(
+        state,
+        crate::usage::UsageRecordInput {
+            session_id: source_session,
+            provider: &llm::provider_name(settings.provider),
+            model: &settings.model,
+            purpose: "companion_memory",
+            usage: turn_result.as_ref().ok().and_then(|turn| turn.usage),
+            fallback_total_tokens: crate::agent::budget::estimate_messages_tokens(&messages)
+                .saturating_add(turn_result.as_ref().map_or(0, |turn| {
+                    crate::agent::budget::estimate_text_tokens(&turn.content)
+                })) as u64,
+            latency_ms: request_started.elapsed().as_millis() as u64,
+            status: if turn_result.is_ok() {
+                "success"
+            } else {
+                "failed"
+            },
+        },
+    );
+    let turn = turn_result?;
     if cancel.load(Ordering::Relaxed) || turn.finish_reason == "interrupted" {
         return Ok(memory_queue_state(data_dir));
     }

@@ -1,12 +1,10 @@
 //! 子 Agent：给主 Agent 提供只读、多视角的探索/审查 worker。
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
 };
-use std::time::Duration;
-
-use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
 
 use super::conversation::Message;
 use super::custom;
@@ -29,17 +27,71 @@ const READ_ONLY_TOOLS: &[&str] = &[
     "context_inspect",
 ];
 
+const DOCS_WRITE_TOOLS: &[&str] = &[
+    "read_file",
+    "list_dir",
+    "glob",
+    "grep",
+    "git_status",
+    "system_info",
+    "http_get",
+    "web_fetch",
+    "web_search",
+    "package_scripts",
+    "context_inspect",
+    "write_file",
+    "edit_file",
+    "multi_edit",
+    "apply_patch",
+];
+
 #[derive(Clone, Debug)]
 pub struct SubagentRequest {
     pub prompt: String,
     pub label: Option<String>,
     pub agent_type: Option<String>,
     pub agent_name: Option<String>,
+    pub model: Option<String>,
+    pub model_tier: Option<crate::store::ModelTier>,
+    pub scope: SubagentScope,
     pub context_mode: SubagentContextMode,
     pub max_total_tokens: Option<usize>,
     pub output_format: SubagentOutputFormat,
     pub reviewer_count: usize,
     pub cancel: Option<Arc<AtomicBool>>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SubagentScope {
+    #[default]
+    ReadOnly,
+    DocsWrite,
+}
+
+impl SubagentScope {
+    pub fn parse(value: Option<&str>) -> Self {
+        match value.unwrap_or("").trim().to_ascii_lowercase().as_str() {
+            "docs_write" | "document_edit" | "doc_editor" | "writer" => Self::DocsWrite,
+            _ => Self::ReadOnly,
+        }
+    }
+
+    pub fn allows_tool(self, name: &str) -> bool {
+        match self {
+            Self::ReadOnly => READ_ONLY_TOOLS.contains(&name),
+            Self::DocsWrite => DOCS_WRITE_TOOLS.contains(&name),
+        }
+    }
+
+    pub const fn description(self) -> &'static str {
+        match self {
+            Self::ReadOnly => "只读：阅读代码、文档和网页，不修改工作区。",
+            Self::DocsWrite => {
+                "文档写入：可修改 docs/ 和 Markdown 文档，不可修改源码、运行 shell 或派生子 Agent。"
+            }
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -348,6 +400,7 @@ pub async fn run(state: &crate::AppState, req: SubagentRequest) -> Result<String
 
     let settings = state.settings.lock().unwrap().clone();
     let sid = session_engine::execution_session_id(state);
+    let turn_store = session_engine::SessionTurnStore::new(state, sid.clone());
     let packs_dir = state.packs_dir.lock().unwrap().clone();
     let persona_text = match pack::load_pack(&packs_dir, &settings.current_pack) {
         Ok(p) => p.persona_text,
@@ -365,6 +418,32 @@ pub async fn run(state: &crate::AppState, req: SubagentRequest) -> Result<String
         .as_deref()
         .and_then(|name| custom::load_agent(state, name).ok())
         .or_else(|| custom::load_agent(state, agent_type).ok());
+    let scope = if req.scope == SubagentScope::ReadOnly {
+        template
+            .as_ref()
+            .and_then(|agent| agent.scope)
+            .unwrap_or(req.scope)
+    } else {
+        req.scope
+    };
+    let model_tier = req
+        .model_tier
+        .or_else(|| template.as_ref().and_then(|agent| agent.model_tier))
+        .or_else(|| {
+            Some(match scope {
+                SubagentScope::DocsWrite => settings.model_routing.docs_agent_tier,
+                SubagentScope::ReadOnly => {
+                    crate::model_routing::default_agent_tier(agent_type, &settings.model_routing)
+                }
+            })
+        });
+    let explicit_model = req
+        .model
+        .as_deref()
+        .or_else(|| template.as_ref().and_then(|agent| agent.model.as_deref()));
+    let mut call_settings = settings.clone();
+    call_settings.model =
+        crate::model_routing::resolve_model_for_tier(&settings, model_tier, explicit_model);
     let mut token_budget = req
         .max_total_tokens
         .or_else(|| {
@@ -377,9 +456,15 @@ pub async fn run(state: &crate::AppState, req: SubagentRequest) -> Result<String
         .as_ref()
         .map(|agent| {
             format!(
-                "## 自定义 Agent 模板\nname: {}\nkind: {:?}\nallowed_tools: {}\n\n### prompt\n{}\n\n### handoff_format\n{}\n",
+                "## 自定义 Agent 模板\nname: {}\nkind: {:?}\nmodel: {}\nmodel_tier: {}\nscope: {}\nallowed_tools: {}\n\n### prompt\n{}\n\n### handoff_format\n{}\n",
                 agent.name,
                 agent.kind,
+                agent.model.as_deref().unwrap_or("inherit"),
+                agent
+                    .model_tier
+                    .map(|tier| tier.as_str())
+                    .unwrap_or("auto"),
+                agent.scope.map(|value| value.description()).unwrap_or("read_only"),
                 if agent.allowed_tools.is_empty() {
                     "只读默认工具".to_string()
                 } else {
@@ -399,13 +484,14 @@ pub async fn run(state: &crate::AppState, req: SubagentRequest) -> Result<String
          {template_block}\n\
          {}\n\n\
          ## 子 Agent 运行约束\n\
-         - 你是 Demiurge 的只读子 Agent，最终输出会返回给主 Agent。\n\
-         - 你可以使用只读工具收集证据，但不能修改文件、运行 shell、截图或再次派生子 Agent。\n\
-         - 如果工具 schema 中出现非只读工具，不要调用；即使调用也会被拒绝。\n\n\
+         - 你是 Demiurge 的隔离子 Agent，最终输出会返回给主 Agent。\n\
+         - 当前作用域：{scope_description}\n\
+         - 不能运行 shell、截图或再次派生子 Agent；工具执行器会再次校验作用域。\n\n\
          ## 输出要求\n\
          {output_contract}\n\
-         - 不要声称已经修改文件。",
-        req.prompt.trim()
+         - 只有在文档写入作用域实际完成写入后，才能声称修改了文档。",
+        req.prompt.trim(),
+        scope_description = scope.description()
     );
 
     let profile = llm::ProviderProfile::for_kind(settings.provider);
@@ -413,19 +499,23 @@ pub async fn run(state: &crate::AppState, req: SubagentRequest) -> Result<String
         .as_ref()
         .map(|agent| agent.handoff_format.as_str())
         .unwrap_or("");
+    let allowed_scope_tools: &[&str] = match scope {
+        SubagentScope::ReadOnly => READ_ONLY_TOOLS,
+        SubagentScope::DocsWrite => DOCS_WRITE_TOOLS,
+    };
     let template_tool_names = template
         .as_ref()
         .map(|agent| {
             agent
                 .allowed_tools
                 .iter()
-                .filter(|tool| READ_ONLY_TOOLS.contains(&tool.as_str()))
+                .filter(|tool| allowed_scope_tools.contains(&tool.as_str()))
                 .map(String::as_str)
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
-    let readonly_tool_names: &[&str] = if template_tool_names.is_empty() {
-        READ_ONLY_TOOLS
+    let scoped_tool_names: &[&str] = if template_tool_names.is_empty() {
+        allowed_scope_tools
     } else {
         &template_tool_names
     };
@@ -449,7 +539,7 @@ pub async fn run(state: &crate::AppState, req: SubagentRequest) -> Result<String
             (
                 subagent_tool_schema(
                     profile,
-                    readonly_tool_names,
+                    scoped_tool_names,
                     req.output_format,
                     handoff_format,
                 ),
@@ -479,7 +569,7 @@ pub async fn run(state: &crate::AppState, req: SubagentRequest) -> Result<String
             (
                 subagent_tool_schema(
                     profile,
-                    readonly_tool_names,
+                    scoped_tool_names,
                     req.output_format,
                     handoff_format,
                 ),
@@ -500,16 +590,37 @@ pub async fn run(state: &crate::AppState, req: SubagentRequest) -> Result<String
             return Ok("[子 Agent 已达到 token 硬预算，停止继续调用模型]".to_string());
         }
 
-        let turn = stream_completion_with_cancel(
-            &state.http,
-            &settings,
-            &msgs,
-            &tool_schema,
+        // Subagent requests are auxiliary model calls, but their exact
+        // context still belongs in the parent session audit stream.
+        let routed_result = crate::model_routing::stream_with_failover(
+            crate::model_routing::FailoverRequest {
+                state,
+                settings: &call_settings,
+                messages: &msgs,
+                tools: &tool_schema,
+                primary_model: &call_settings.model,
+                fallback_models: &call_settings.model_routing.fallback_models,
+                cancel: &state.cancel,
+                request_cancel,
+                session_id: &sid,
+                purpose: "subagent",
+            },
+            |model| {
+                // Auxiliary calls are audited, but their context is not
+                // appended to the parent's conversational history.
+                turn_store.append_model_request(
+                    &msgs,
+                    &tool_schema,
+                    &llm::provider_name(call_settings.provider),
+                    model,
+                    "subagent",
+                );
+            },
+            |_failed_model, _next_model| {},
             |_| {},
-            &state.cancel,
-            request_cancel,
         )
-        .await?;
+        .await;
+        let turn = routed_result?.turn;
 
         if let Some(budget_state) = &mut token_budget {
             let estimated = budget::estimate_messages_tokens(&msgs)
@@ -556,8 +667,8 @@ pub async fn run(state: &crate::AppState, req: SubagentRequest) -> Result<String
                 let content = canonicalize_evidence_value(args, handoff_format)?;
                 return Ok(with_budget_footer(content, token_budget.as_ref()));
             }
-            let result = if READ_ONLY_TOOLS.contains(&name.as_str()) {
-                match tools::execute_subagent_readonly(state, &name, args).await {
+            let result = if scope.allows_tool(&name) {
+                match tools::execute_subagent_scoped(state, &name, args, scope).await {
                     Ok(s) => s,
                     Err(e) => format!("错误：{e}"),
                 }
@@ -575,52 +686,6 @@ pub async fn run(state: &crate::AppState, req: SubagentRequest) -> Result<String
     }
 
     Ok("子 Agent 达到内部工具轮次上限，未形成最终回答。".to_string())
-}
-
-async fn stream_completion_with_cancel(
-    client: &reqwest::Client,
-    settings: &store::Settings,
-    messages: &[Message],
-    tools: &Value,
-    on_delta: impl FnMut(llm::StreamDelta<'_>),
-    global_cancel: &AtomicBool,
-    request_cancel: Option<&AtomicBool>,
-) -> Result<llm::AssistantTurn, String> {
-    let Some(request_cancel) = request_cancel else {
-        return llm::stream_completion(client, settings, messages, tools, on_delta, global_cancel)
-            .await;
-    };
-
-    let combined_cancel = AtomicBool::new(
-        global_cancel.load(Ordering::Relaxed) || request_cancel.load(Ordering::Relaxed),
-    );
-    tokio::select! {
-        result = llm::stream_completion(client, settings, messages, tools, on_delta, &combined_cancel) => result,
-        _ = relay_cancel(global_cancel, request_cancel, &combined_cancel) => Ok(interrupted_turn()),
-    }
-}
-
-async fn relay_cancel(
-    global_cancel: &AtomicBool,
-    request_cancel: &AtomicBool,
-    combined_cancel: &AtomicBool,
-) {
-    loop {
-        if global_cancel.load(Ordering::Relaxed) || request_cancel.load(Ordering::Relaxed) {
-            combined_cancel.store(true, Ordering::Relaxed);
-            return;
-        }
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
-}
-
-fn interrupted_turn() -> llm::AssistantTurn {
-    llm::AssistantTurn {
-        content: String::new(),
-        tool_calls: Vec::new(),
-        finish_reason: "interrupted".to_string(),
-        usage: None,
-    }
 }
 
 async fn run_reviewer_panel(
