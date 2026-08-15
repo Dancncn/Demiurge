@@ -1103,6 +1103,10 @@ export interface UsageSummary {
   models: UsageBucket[];
   daily: UsageBucket[];
   recent_records: UsageRecord[];
+  log_read_errors?: number;
+  malformed_lines?: number;
+  oversized_lines?: number;
+  write_failures?: number;
 }
 
 export interface ModelCatalogEntry {

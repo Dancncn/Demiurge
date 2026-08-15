@@ -45,7 +45,8 @@ export function Sidebar({
   onDeleteSession,
   onOpenSettings,
 }: Props) {
-  const { t } = useI18n();
+  const { lang, t } = useI18n();
+  const locale = lang === "zh" ? "zh-CN" : "en-US";
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draftTitle, setDraftTitle] = useState("");
   const [renameError, setRenameError] = useState<string | null>(null);
@@ -66,14 +67,17 @@ export function Sidebar({
         return left.archived ? 1 : -1;
       }
       if (sessionSort === "project") {
-        const leftProject = left.workspace_name || left.workspace_path || "未分组";
-        const rightProject = right.workspace_name || right.workspace_path || "未分组";
-        const projectOrder = leftProject.localeCompare(rightProject, "zh-CN");
+        const leftProject = left.workspace_name || left.workspace_path || t("sidebar.ungrouped");
+        const rightProject = right.workspace_name || right.workspace_path || t("sidebar.ungrouped");
+        const projectOrder = leftProject.localeCompare(rightProject, locale);
         if (projectOrder !== 0) return projectOrder;
       }
-      return right.updated_at - left.updated_at;
+      const updatedOrder = right.updated_at - left.updated_at;
+      if (updatedOrder !== 0) return updatedOrder;
+      const titleOrder = left.title.localeCompare(right.title, locale);
+      return titleOrder !== 0 ? titleOrder : left.id.localeCompare(right.id);
     });
-  }, [activeId, sessions, sessionScope, sessionSort]);
+  }, [activeId, locale, sessions, sessionScope, sessionSort, t]);
 
   useEffect(() => {
     if (!sessions.some((s) => s.id === editingId)) {
@@ -223,7 +227,7 @@ export function Sidebar({
           <div className="px-2 pb-1.5 text-[11px] font-semibold uppercase tracking-wide text-[#8a9099]">{t("sidebar.chats")}</div>
           {open && (
             <div className="mb-3 grid gap-2 px-1">
-              <div className="flex items-center justify-between gap-2 text-[11px] text-[#8a9099]">
+              <div className="flex items-center justify-between gap-2 text-[11px] text-[#8a9099]" role="group" aria-label={t("sidebar.sort")}>
                 <span>{t("sidebar.sort")}</span>
                 <div className="flex rounded-md bg-[#dfe4ea] p-0.5">
                   {(["time", "project"] as const).map((mode) => (
@@ -239,7 +243,7 @@ export function Sidebar({
                   ))}
                 </div>
               </div>
-              <div className="flex rounded-md bg-[#dfe4ea] p-0.5">
+              <div className="flex rounded-md bg-[#dfe4ea] p-0.5" role="group" aria-label={t("sidebar.scopeAll")}>
                 {(["active", "all", "archived"] as const).map((scope) => (
                   <button
                     key={scope}
@@ -341,11 +345,12 @@ export function Sidebar({
                       onClick={() => void toggleArchive(s)}
                       disabled={navigationLocked || archivePendingId === s.id}
                       aria-busy={archivePendingId === s.id}
-                      className="mr-0.5 grid h-7 w-7 shrink-0 place-items-center rounded-md text-[10px] text-[#69707a] opacity-0 transition hover:bg-[#cfd5dd] hover:text-[#111827] focus:opacity-100 group-focus-within:opacity-100 group-hover:opacity-100 disabled:opacity-0"
-                      aria-label={s.archived ? t("sidebar.restore") : t("sidebar.archive")}
-                      title={s.archived ? t("sidebar.restore") : t("sidebar.archive")}
+                      className={`mr-0.5 grid h-7 w-7 shrink-0 place-items-center rounded-md text-[10px] text-[#69707a] transition hover:bg-[#cfd5dd] hover:text-[#111827] focus:opacity-100 group-focus-within:opacity-100 group-hover:opacity-100 disabled:cursor-wait disabled:opacity-60 ${archivePendingId === s.id ? "opacity-100" : "opacity-0"}`}
+                      aria-label={archivePendingId === s.id ? t("sidebar.archivePending") : s.archived ? t("sidebar.restore") : t("sidebar.archive")}
+                      title={archivePendingId === s.id ? t("sidebar.archivePending") : s.archived ? t("sidebar.restore") : t("sidebar.archive")}
+                      aria-live="polite"
                     >
-                      {s.archived ? "↩" : "↓"}
+                      {archivePendingId === s.id ? "…" : s.archived ? "↩" : "↓"}
                     </button>
                   )}
                   <button

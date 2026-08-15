@@ -192,8 +192,27 @@ function SecretInput({
 }) {
   const { t } = useI18n();
   const [visible, setVisible] = useState(false);
+  useEffect(() => {
+    if (!visible) return;
+    const hide = () => setVisible(false);
+    const handleVisibilityChange = () => {
+      if (document.hidden) hide();
+    };
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    window.addEventListener("pagehide", hide);
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      window.removeEventListener("pagehide", hide);
+    };
+  }, [visible]);
   return (
-    <div className="relative min-w-0">
+    <div
+      className="relative min-w-0"
+      onBlur={(event) => {
+        const next = event.relatedTarget as Node | null;
+        if (!next || !event.currentTarget.contains(next)) setVisible(false);
+      }}
+    >
       <input
         className={`${inputCls} pr-16 font-mono text-[12px]`}
         type={visible ? "text" : "password"}
