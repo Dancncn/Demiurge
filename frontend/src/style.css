@@ -2237,6 +2237,75 @@ html[data-appearance] .workspace-tab-control {
   background: var(--md-surface-lowest);
 }
 
+/* Resource center uses compact utility markup, but must still follow the
+   active appearance palette and the width of its settings pane. */
+.resource-center,
+.resource-center-content {
+  container-type: inline-size;
+}
+
+.resource-center {
+  background: var(--md-surface, #ffffff) !important;
+  color: var(--md-on-surface, #202124) !important;
+}
+
+.resource-usage-metrics {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+@container (min-width: 540px) {
+  .resource-usage-metrics {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+@container (min-width: 900px) {
+  .resource-usage-metrics {
+    grid-template-columns: repeat(8, minmax(0, 1fr));
+  }
+}
+
+html[data-appearance] .resource-center [class*="bg-white"],
+html[data-appearance] .resource-center [class*="bg-[#fbfcfd]"],
+html[data-appearance] .resource-center [class*="bg-[#f9fafb]"],
+html[data-appearance] .resource-center [class*="bg-[#f8f9fb]"] {
+  background-color: var(--md-surface-lowest, #ffffff) !important;
+}
+
+html[data-appearance] .resource-center [class*="bg-[#eef1f5]"],
+html[data-appearance] .resource-center [class*="bg-[#dfe4ea]"] {
+  background-color: var(--md-surface-container, #f1f3f5) !important;
+}
+
+html[data-appearance] .resource-center [class*="bg-[#6d5dfc]"],
+html[data-appearance] .resource-center [class*="bg-[#10a37f]"] {
+  background-color: var(--md-primary, #a83d88) !important;
+}
+
+html[data-appearance] .resource-center [class*="text-[#202124]"],
+html[data-appearance] .resource-center [class*="text-[#111827]"] {
+  color: var(--md-on-surface, #202124) !important;
+}
+
+html[data-appearance] .resource-center [class*="text-[#667085]"],
+html[data-appearance] .resource-center [class*="text-[#8a9099]"],
+html[data-appearance] .resource-center [class*="text-[#98a2b3]"],
+html[data-appearance] .resource-center [class*="text-[#475467]"] {
+  color: var(--md-on-surface-variant, #667085) !important;
+}
+
+html[data-appearance] .resource-center [class*="text-white"] {
+  color: var(--md-on-primary, #ffffff) !important;
+}
+
+html[data-appearance] .resource-center [class*="border-[#e6e9ee]"],
+html[data-appearance] .resource-center [class*="border-[#eceff3]"],
+html[data-appearance] .resource-center [class*="border-[#eef0f3]"],
+html[data-appearance] .resource-center [class*="border-[#f0f2f5]"],
+html[data-appearance] .resource-center [class*="border-[#dfe3e8]"] {
+  border-color: var(--md-outline-variant, #ded7e1) !important;
+}
+
 @container (min-width: 540px) {
   html[data-appearance] .dashboard-metric:nth-child(2n) {
     border-right: 1px solid var(--md-outline-variant);

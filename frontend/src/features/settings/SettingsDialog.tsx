@@ -20,8 +20,10 @@ import type {
   PermissionPanelState,
   PermissionRuleView,
   PermissionScope,
+  ModelCatalog,
   AppAppearance,
   AppTheme,
+  ModelTier,
   ProviderKind,
   ReasoningEffort,
   Settings,
@@ -57,6 +59,7 @@ import { PROVIDER_OPTIONS, PROVIDER_ICON_SET, modelContextWindow, autoContextBud
 import { useI18n, type TFunction } from "@/lib/i18n";
 import { isAutoPromptEnabled, setAutoPromptEnabled } from "@/lib/fortune";
 import { pickFolder, type FolderPickOutcome } from "@/lib/folderPicker";
+import IntegrationCenter from "@/features/agent/IntegrationCenter";
 
 interface Props {
   open: boolean;
@@ -75,6 +78,7 @@ interface Props {
 export type SettingsTab =
   | "general"
   | "provider"
+  | "routing"
   | "persona"
   | "media"
   | "companion"
@@ -83,7 +87,8 @@ export type SettingsTab =
   | "context"
   | "tools"
   | "voice"
-  | "advanced";
+  | "advanced"
+  | "integrations";
 
 
 const webSearchProviders: { value: WebSearchProvider; label: string; helpKey: string }[] = [
@@ -174,6 +179,41 @@ function formatBytes(n: number) {
     idx += 1;
   }
   return `${value.toFixed(idx === 0 ? 0 : 1)} ${units[idx]}`;
+}
+
+function SecretInput({
+  value,
+  placeholder,
+  onChange,
+}: {
+  value: string;
+  placeholder?: string;
+  onChange: (value: string) => void;
+}) {
+  const { t } = useI18n();
+  const [visible, setVisible] = useState(false);
+  return (
+    <div className="relative min-w-0">
+      <input
+        className={`${inputCls} pr-16 font-mono text-[12px]`}
+        type={visible ? "text" : "password"}
+        value={value}
+        placeholder={placeholder}
+        autoComplete="off"
+        spellCheck={false}
+        onChange={(event) => onChange(event.target.value)}
+      />
+      <button
+        type="button"
+        className="absolute right-1 top-1/2 -translate-y-1/2 rounded px-2 py-1 text-[11px] text-[#59616d] hover:bg-[#eef1f5] hover:text-[#111827]"
+        onClick={() => setVisible((current) => !current)}
+        aria-pressed={visible}
+        aria-label={visible ? t("settings.secret.hide") : t("settings.secret.show")}
+      >
+        {visible ? t("settings.secret.hideShort") : t("settings.secret.showShort")}
+      </button>
+    </div>
+  );
 }
 
 function formatTokenWindow(n: number) {
@@ -654,6 +694,8 @@ export default function SettingsDialog({
   const [providerQuery, setProviderQuery] = useState("");
   const [providerTestBusy, setProviderTestBusy] = useState(false);
   const [providerTestStatus, setProviderTestStatus] = useState("");
+  const [modelCatalog, setModelCatalog] = useState<ModelCatalog | null>(null);
+  const [modelCatalogBusy, setModelCatalogBusy] = useState(false);
   const [embedProbeBusy, setEmbedProbeBusy] = useState(false);
   const [embedProbeStatus, setEmbedProbeStatus] = useState("");
   const [webSearchTestBusy, setWebSearchTestBusy] = useState(false);
@@ -845,6 +887,11 @@ export default function SettingsDialog({
 
   useEffect(() => {
     if (!open) return;
+    void api.modelCatalog().then(setModelCatalog).catch(() => undefined);
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
     let disposed = false;
     let unlisten: (() => void) | undefined;
     void api.listenOcrDownloadProgress((event) => {
@@ -879,13 +926,21 @@ export default function SettingsDialog({
     () => PROVIDER_OPTIONS.find((p) => p.value === form.provider) ?? PROVIDER_OPTIONS[0],
     [form.provider],
   );
-  const modelWindow = modelContextWindow(form.provider, form.model);
+  const liveModel = form.provider === "openrouter"
+    ? modelCatalog?.models.find((model) => model.id.toLowerCase() === form.model.trim().toLowerCase())
+    : undefined;
+  const modelWindow = liveModel?.context_length || modelContextWindow(form.provider, form.model);
   const modelOptions = useMemo(() => {
     const current = form.model.trim();
-    const models = selectedProvider.models;
+    const models = form.provider === "openrouter" && modelCatalog?.models.length
+      ? modelCatalog.models.slice(0, 160).map((model) => model.id)
+      : selectedProvider.models;
     const options = current && !models.includes(current) ? [current, ...models] : models;
     return options.map((model) => {
-      const window = modelContextWindow(form.provider, model);
+      const liveWindow = form.provider === "openrouter"
+        ? modelCatalog?.models.find((entry) => entry.id.toLowerCase() === model.toLowerCase())?.context_length
+        : undefined;
+      const window = liveWindow || modelContextWindow(form.provider, model);
       const currentCustom = current === model && !models.includes(model);
       return {
         value: model,
@@ -897,7 +952,18 @@ export default function SettingsDialog({
             : undefined,
       };
     });
-  }, [form.model, form.provider, selectedProvider.models, t]);
+  }, [form.model, form.provider, modelCatalog?.models, selectedProvider.models, t]);
+
+  async function refreshOpenRouterModels() {
+    setModelCatalogBusy(true);
+    try {
+      setModelCatalog(await api.refreshModelCatalog());
+    } catch (error) {
+      setProviderTestStatus(String(error));
+    } finally {
+      setModelCatalogBusy(false);
+    }
+  }
   const effortSupported = modelSupportsReasoningEffort(form.provider, form.model);
   const selectedWebSearchProvider = useMemo(
     () => webSearchProviders.find((p) => p.value === form.web_search_provider) ?? webSearchProviders[0],
@@ -968,6 +1034,12 @@ export default function SettingsDialog({
     ) {
       setVoiceTestStatus("");
     }
+  };
+  const updateRouting = (patch: Partial<Settings["model_routing"]>) => {
+    setForm((current) => ({
+      ...current,
+      model_routing: { ...current.model_routing, ...patch },
+    }));
   };
   const runMemoryAction = async (action: () => Promise<MemoryPanelState>) => {
     setMemoryBusy(true);
@@ -1722,6 +1794,12 @@ export default function SettingsDialog({
     },
     { id: "provider", label: t("settings.nav.providers"), detail: selectedProvider.label, icon: <CloudSunIcon size={18} /> },
     {
+      id: "routing",
+      label: t("settings.nav.routing"),
+      detail: form.model_routing.enabled ? t("settings.nav.detail.enabled") : t("settings.nav.detail.disabled"),
+      icon: <GitBranchIcon size={18} />,
+    },
+    {
       id: "persona",
       label: t("settings.nav.persona"),
       detail: packs.find((pack) => pack.id === form.current_pack)?.name ?? form.current_pack,
@@ -1772,6 +1850,12 @@ export default function SettingsDialog({
       detail: t("settings.nav.detail.storage"),
       icon: <GitBranchIcon size={18} />,
     },
+    {
+      id: "integrations",
+      label: t("settings.nav.integrations"),
+      detail: t("settings.nav.detail.integrations"),
+      icon: <SparklesIcon size={18} />,
+    },
   ];
 
   function save() {
@@ -1789,6 +1873,18 @@ export default function SettingsDialog({
       appearance: normalizeAppearance(form.appearance),
       launch_on_startup: form.launch_on_startup,
       reasoning_effort: normalizeReasoningEffort(form.reasoning_effort),
+      model_routing: {
+        ...form.model_routing,
+        haiku_model: form.model_routing.haiku_model.trim(),
+        sonnet_model: form.model_routing.sonnet_model.trim(),
+        opus_model: form.model_routing.opus_model.trim(),
+        fallback_models: Array.from(
+          new Set(form.model_routing.fallback_models.map((model) => model.trim()).filter(Boolean)),
+        ),
+        max_failover_attempts: Math.min(Math.max(Number(form.model_routing.max_failover_attempts) || 0, 0), 5),
+        failure_threshold: Math.min(Math.max(Number(form.model_routing.failure_threshold) || 1, 1), 10),
+        cooldown_seconds: Math.min(Math.max(Number(form.model_routing.cooldown_seconds) || 1, 1), 3600),
+      },
       companion_memory_extraction_scope: form.companion_memory_extraction_scope.trim() || "recent_turn",
       companion_tone: form.companion_tone.trim() || "gentle",
       companion_mood: form.companion_mood.trim() || "neutral",
@@ -2064,12 +2160,10 @@ export default function SettingsDialog({
                             />
                           </Field>
                           <Field label={t("settings.provider.apiKey")} help={t("settings.provider.apiKeyHelp")}>
-                            <input
-                              className={inputCls}
-                              type="password"
+                            <SecretInput
                               value={form.api_key}
                               placeholder="sk-..."
-                              onChange={(e) => set("api_key", e.target.value)}
+                              onChange={(value) => set("api_key", value)}
                             />
                           </Field>
                           <Field label={t("settings.provider.model")} help={t("settings.provider.modelHelp")}>
@@ -2110,6 +2204,23 @@ export default function SettingsDialog({
                                 </span>
                               )}
                             </div>
+                            {form.provider === "openrouter" && (
+                              <div className="mt-2 flex flex-wrap items-center gap-2">
+                                <button
+                                  type="button"
+                                  className={secondaryButtonCls}
+                                  disabled={modelCatalogBusy}
+                                  onClick={() => void refreshOpenRouterModels()}
+                                >
+                                  {modelCatalogBusy ? "刷新中…" : "刷新 OpenRouter 模型目录"}
+                                </button>
+                                {modelCatalog?.fetched_at && (
+                                  <span className="text-[11px] text-[#8a9099]">
+                                    已缓存 {new Date(modelCatalog.fetched_at).toLocaleString()}
+                                  </span>
+                                )}
+                              </div>
+                            )}
                           </Field>
                           <Field
                             label={t("settings.provider.effort")}
@@ -2381,6 +2492,145 @@ export default function SettingsDialog({
                           )}
                         </div>
                       </div>
+                    </div>
+                  </Section>
+                </>
+              )}
+
+              {activeTab === "routing" && (
+                <>
+                  <Section
+                    title="模型调度与故障转移"
+                    description="主 Agent 保持当前模型；子 Agent 使用隔离上下文和指定档位。路由只在当前提供商的模型 ID 之间工作。"
+                  >
+                    <ToggleRow
+                      checked={form.model_routing.enabled}
+                      title="启用模型档位调度"
+                      description="researcher 默认使用 Haiku，documenter 使用 Sonnet，planner 使用 Opus；具体模型可在下方绑定。"
+                      onChange={(enabled) => updateRouting({ enabled })}
+                    />
+                    <div className="mt-4 grid gap-4 md:grid-cols-2">
+                      <Field label="普通子 Agent 档位" help="阅读代码、检索和验证任务的默认档位。">
+                        <Select
+                          value={form.model_routing.subagent_tier}
+                          onChange={(value) => updateRouting({ subagent_tier: value as ModelTier })}
+                          options={[
+                            { value: "haiku", label: "Haiku · 快速 / 低成本" },
+                            { value: "sonnet", label: "Sonnet · 均衡" },
+                            { value: "opus", label: "Opus · 强推理" },
+                          ]}
+                        />
+                      </Field>
+                      <Field label="文档 Agent 档位" help="docs_write 作用域默认使用 Sonnet，适合按规范编辑文档。">
+                        <Select
+                          value={form.model_routing.docs_agent_tier}
+                          onChange={(value) => updateRouting({ docs_agent_tier: value as ModelTier })}
+                          options={[
+                            { value: "haiku", label: "Haiku · 快速 / 低成本" },
+                            { value: "sonnet", label: "Sonnet · 均衡" },
+                            { value: "opus", label: "Opus · 强推理" },
+                          ]}
+                        />
+                      </Field>
+                    </div>
+                  </Section>
+
+                  <Section
+                    title="档位模型绑定"
+                    description="留空时沿用当前模型；Anthropic 会使用对应的官方档位模型。OpenRouter 或其他提供商建议显式填入模型 ID。"
+                  >
+                    <div className="grid gap-4 md:grid-cols-3">
+                      <Field label="Haiku 模型 ID">
+                        <input
+                          className={inputCls}
+                          value={form.model_routing.haiku_model}
+                          placeholder="例如 provider/fast-model"
+                          onChange={(event) => updateRouting({ haiku_model: event.target.value })}
+                        />
+                      </Field>
+                      <Field label="Sonnet 模型 ID">
+                        <input
+                          className={inputCls}
+                          value={form.model_routing.sonnet_model}
+                          placeholder="例如 provider/balanced-model"
+                          onChange={(event) => updateRouting({ sonnet_model: event.target.value })}
+                        />
+                      </Field>
+                      <Field label="Opus 模型 ID">
+                        <input
+                          className={inputCls}
+                          value={form.model_routing.opus_model}
+                          placeholder="例如 provider/strong-model"
+                          onChange={(event) => updateRouting({ opus_model: event.target.value })}
+                        />
+                      </Field>
+                    </div>
+                  </Section>
+
+                  <Section
+                    title="自动故障转移"
+                    description="沿用 cc-switch 的有界队列和断路器思路：只重试可判定的容量、限流或临时网络错误，认证和参数错误直接失败。"
+                  >
+                    <ToggleRow
+                      checked={form.model_routing.auto_failover}
+                      title="启用同提供商自动故障转移"
+                      description="失败后按顺序尝试下方模型；所有候选都不可用时也不会裸跑未知模型。"
+                      onChange={(auto_failover) => updateRouting({ auto_failover })}
+                    />
+                    <div className="mt-4 grid gap-4 md:grid-cols-3">
+                      <Field label="备用模型 ID（每行一个）" help="仅填写同一提供商可用的模型 ID。">
+                        <textarea
+                          className={inputCls + " min-h-28 resize-y py-2"}
+                          value={form.model_routing.fallback_models.join("\n")}
+                          placeholder={"provider/fallback-a\nprovider/fallback-b"}
+                          onChange={(event) =>
+                            updateRouting({
+                              fallback_models: event.target.value
+                                .split(/\r?\n/)
+                                .map((model) => model.trim())
+                                .filter(Boolean),
+                            })
+                          }
+                        />
+                      </Field>
+                      <div className="grid gap-4">
+                        <Field label="最多额外尝试次数">
+                          <input
+                            className={inputCls}
+                            type="number"
+                            min={0}
+                            max={5}
+                            value={form.model_routing.max_failover_attempts}
+                            onChange={(event) =>
+                              updateRouting({ max_failover_attempts: Number(event.target.value) || 0 })
+                            }
+                          />
+                        </Field>
+                        <Field label="连续失败阈值">
+                          <input
+                            className={inputCls}
+                            type="number"
+                            min={1}
+                            max={10}
+                            value={form.model_routing.failure_threshold}
+                            onChange={(event) =>
+                              updateRouting({ failure_threshold: Number(event.target.value) || 1 })
+                            }
+                          />
+                        </Field>
+                      </div>
+                      <Field label="断路器冷却秒数" help="冷却后允许一次半开探测请求。">
+                        <input
+                          className={inputCls}
+                          type="number"
+                          min={1}
+                          max={3600}
+                          value={form.model_routing.cooldown_seconds}
+                          onChange={(event) =>
+                            updateRouting({ cooldown_seconds: Number(event.target.value) || 1 })
+                          }
+                        />
+                      </Field>
                     </div>
                   </Section>
                 </>
@@ -2669,12 +2919,10 @@ export default function SettingsDialog({
                         />
                       </Field>
                       <Field label={t("settings.media.apiKey")} help={t("settings.media.apiKeyHelp")}>
-                        <input
-                          className={inputCls}
-                          type="password"
+                        <SecretInput
                           value={form.media_api_key}
                           placeholder="sk-..."
-                          onChange={(e) => set("media_api_key", e.target.value)}
+                          onChange={(value) => set("media_api_key", value)}
                         />
                       </Field>
                     </div>
@@ -3125,30 +3373,24 @@ export default function SettingsDialog({
                   <Section title={t("settings.web.keysTitle")} description={t("settings.web.keysDesc")}>
                     <div className="grid gap-4">
                       <Field label={t("settings.web.tavilyKey")}>
-                        <input
-                          className={inputCls}
-                          type="password"
+                        <SecretInput
                           value={form.tavily_api_key}
                           placeholder="tvly-..."
-                          onChange={(e) => set("tavily_api_key", e.target.value)}
+                          onChange={(value) => set("tavily_api_key", value)}
                         />
                       </Field>
                       <Field label={t("settings.web.braveKey")}>
-                        <input
-                          className={inputCls}
-                          type="password"
+                        <SecretInput
                           value={form.brave_search_api_key}
                           placeholder="BSA..."
-                          onChange={(e) => set("brave_search_api_key", e.target.value)}
+                          onChange={(value) => set("brave_search_api_key", value)}
                         />
                       </Field>
                       <Field label={t("settings.web.exaKey")}>
-                        <input
-                          className={inputCls}
-                          type="password"
+                        <SecretInput
                           value={form.exa_api_key}
                           placeholder="exa-..."
-                          onChange={(e) => set("exa_api_key", e.target.value)}
+                          onChange={(value) => set("exa_api_key", value)}
                         />
                       </Field>
                     </div>
@@ -3222,11 +3464,9 @@ export default function SettingsDialog({
                           />
                         </Field>
                         <Field label={t("settings.files.password")}>
-                          <input
-                            className={inputCls}
-                            type="password"
+                          <SecretInput
                             value={form.webdav_password}
-                            onChange={(e) => set("webdav_password", e.target.value)}
+                            onChange={(value) => set("webdav_password", value)}
                           />
                         </Field>
                       </div>
@@ -3740,12 +3980,10 @@ export default function SettingsDialog({
                               />
                             </Field>
                             <Field label={t("settings.embedding.apiKey")}>
-                              <input
-                                className={inputCls}
-                                type="password"
+                              <SecretInput
                                 value={form.embedding_api_key}
-                                onChange={(e) => set("embedding_api_key", e.target.value)}
                                 placeholder={t("settings.embedding.apiKeyPlaceholder")}
+                                onChange={(value) => set("embedding_api_key", value)}
                               />
                             </Field>
                             <Field label={t("settings.embedding.dims")} help={t("settings.embedding.dimsHelp")}>
@@ -3867,6 +4105,12 @@ export default function SettingsDialog({
                                     <div className="mt-0.5 truncate text-[11px] text-[#7a8088]">
                                       {agent.kind} / {agent.description || agent.path}
                                     </div>
+                                    {(agent.model_tier || agent.scope) && (
+                                      <div className="mt-1 truncate text-[10px] text-[#7a8088]">
+                                        {agent.model_tier ? `tier: ${agent.model_tier}` : "tier: auto"}
+                                        {agent.scope ? ` · scope: ${agent.scope}` : " · scope: read_only"}
+                                      </div>
+                                    )}
                                     <div className="mt-1 flex flex-wrap gap-1 text-[10px] text-[#8a9099]">
                                       <span className="rounded bg-[#eef1f5] px-1.5 py-0.5">
                                         {t("settings.agents.runs", { n: agent.runtime.run_count })}
@@ -4752,6 +4996,12 @@ export default function SettingsDialog({
                     </Field>
                   </Section>
                 </>
+              )}
+
+              {activeTab === "integrations" && (
+                <div className="-m-4 min-h-[640px] overflow-hidden rounded-lg border border-[#e6e9ee]">
+                  <IntegrationCenter />
+                </div>
               )}
             </div>
           </div>

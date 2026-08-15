@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { SessionMeta } from "@/lib/types";
 import { useI18n } from "@/lib/i18n";
 import { ChatIcon, ComposeIcon, ImageIcon, PanelLeftIcon, PersonIcon, SettingsIcon, SparklesIcon, TrashIcon } from "@/shared/components/Icons";
@@ -19,9 +19,13 @@ type Props = {
   onNewChat: () => void;
   onSelectSession: (id: string) => void;
   onRenameSession: (id: string, title: string) => Promise<void> | void;
+  onArchiveSession: (id: string, archived: boolean) => void;
   onDeleteSession: (id: string) => void;
   onOpenSettings: () => void;
 };
+
+type SessionSortMode = "time" | "project";
+type SessionScope = "active" | "all" | "archived";
 
 export function Sidebar({
   open,
@@ -37,6 +41,7 @@ export function Sidebar({
   onNewChat,
   onSelectSession,
   onRenameSession,
+  onArchiveSession,
   onDeleteSession,
   onOpenSettings,
 }: Props) {
@@ -44,7 +49,31 @@ export function Sidebar({
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draftTitle, setDraftTitle] = useState("");
   const [renameError, setRenameError] = useState<string | null>(null);
+  const [sessionSort, setSessionSort] = useState<SessionSortMode>("time");
+  const [sessionScope, setSessionScope] = useState<SessionScope>("active");
+  const [archivePendingId, setArchivePendingId] = useState<string | null>(null);
+  const [archiveError, setArchiveError] = useState<string | null>(null);
   const navigationLocked = busy || navigationPending;
+
+  const visibleSessions = useMemo(() => {
+    const scoped = sessions.filter((session) => {
+      if (sessionScope === "archived") return session.archived;
+      if (sessionScope === "all") return true;
+      return !session.archived || session.id === activeId;
+    });
+    return scoped.slice().sort((left, right) => {
+      if (sessionScope === "all" && left.archived !== right.archived) {
+        return left.archived ? 1 : -1;
+      }
+      if (sessionSort === "project") {
+        const leftProject = left.workspace_name || left.workspace_path || "未分组";
+        const rightProject = right.workspace_name || right.workspace_path || "未分组";
+        const projectOrder = leftProject.localeCompare(rightProject, "zh-CN");
+        if (projectOrder !== 0) return projectOrder;
+      }
+      return right.updated_at - left.updated_at;
+    });
+  }, [activeId, sessions, sessionScope, sessionSort]);
 
   useEffect(() => {
     if (!sessions.some((s) => s.id === editingId)) {
@@ -79,6 +108,19 @@ export function Sidebar({
       setRenameError(null);
     } catch (e) {
       setRenameError(String(e));
+    }
+  }
+
+  async function toggleArchive(session: SessionMeta) {
+    if (navigationLocked || archivePendingId) return;
+    setArchivePendingId(session.id);
+    setArchiveError(null);
+    try {
+      await onArchiveSession(session.id, !session.archived);
+    } catch (error) {
+      setArchiveError(String(error));
+    } finally {
+      setArchivePendingId(null);
     }
   }
 
@@ -159,10 +201,10 @@ export function Sidebar({
               open ? "" : "justify-center px-0"
             }`}
             aria-current={activeView === "skills" ? "page" : undefined}
-            title={t("nav.skills")}
+            title={t("nav.resources")}
           >
             <SparklesIcon size={17} className="shrink-0" />
-            {open && <span>{t("nav.skills")}</span>}
+            {open && <span>{t("nav.resources")}</span>}
           </button>
           <button
             onClick={() => navigateTo("live2d")}
@@ -179,16 +221,59 @@ export function Sidebar({
 
         <div className={`capsule-scrollbar min-h-0 flex-1 overflow-y-auto ${open ? "" : "hidden"}`}>
           <div className="px-2 pb-1.5 text-[11px] font-semibold uppercase tracking-wide text-[#8a9099]">{t("sidebar.chats")}</div>
-          {sessions.length === 0 && <div className="px-2 py-2 text-[13px] text-[#9aa1ab]">{t("sidebar.noChats")}</div>}
-          {sessions.map((s) => {
+          {open && (
+            <div className="mb-3 grid gap-2 px-1">
+              <div className="flex items-center justify-between gap-2 text-[11px] text-[#8a9099]">
+                <span>{t("sidebar.sort")}</span>
+                <div className="flex rounded-md bg-[#dfe4ea] p-0.5">
+                  {(["time", "project"] as const).map((mode) => (
+                    <button
+                      key={mode}
+                      type="button"
+                      onClick={() => setSessionSort(mode)}
+                      aria-pressed={sessionSort === mode}
+                      className={`rounded px-2 py-1 text-[11px] ${sessionSort === mode ? "bg-white font-semibold text-[#202124] shadow-sm" : "text-[#69707a]"}`}
+                    >
+                      {mode === "time" ? t("sidebar.sortTime") : t("sidebar.sortProject")}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="flex rounded-md bg-[#dfe4ea] p-0.5">
+                {(["active", "all", "archived"] as const).map((scope) => (
+                  <button
+                    key={scope}
+                    type="button"
+                    onClick={() => setSessionScope(scope)}
+                    aria-pressed={sessionScope === scope}
+                    className={`flex-1 rounded px-1.5 py-1 text-[11px] ${sessionScope === scope ? "bg-white font-semibold text-[#202124] shadow-sm" : "text-[#69707a]"}`}
+                  >
+                    {scope === "active" ? t("sidebar.scopeActive") : scope === "all" ? t("sidebar.scopeAll") : t("sidebar.scopeArchived")}
+                  </button>
+                ))}
+              </div>
+              {archiveError && <div role="alert" className="text-[11px] text-[#b42318]">{t("sidebar.archiveFailed", { error: archiveError })}</div>}
+            </div>
+          )}
+          {visibleSessions.length === 0 && (
+            <div className="px-2 py-2 text-[13px] text-[#9aa1ab]">
+              {sessionScope === "archived" ? t("sidebar.noArchivedChats") : t("sidebar.noChats")}
+            </div>
+          )}
+          {/* sessions.map is intentionally projected through the selected scope and sort mode. */}
+          {visibleSessions.map((s, index) => {
             const editing = editingId === s.id;
             return (
-              <div
-                key={s.id}
-                className={`app-session-item group relative mb-1 rounded-lg ${
+              <div key={s.id}>
+                {sessionScope === "archived" && index === 0 && (
+                  <div className="px-2 pb-1 pt-1 text-[11px] font-semibold uppercase tracking-wide text-[#8a9099]">{t("sidebar.archivedHeading", { sort: sessionSort === "time" ? t("sidebar.archivedByTime") : t("sidebar.archivedByProject") })}</div>
+                )}
+                {sessionScope === "all" && (index === 0 || visibleSessions[index - 1].archived !== s.archived) && (
+                  <div className="px-2 pb-1 pt-3 text-[11px] font-semibold uppercase tracking-wide text-[#8a9099]">{s.archived ? t("sidebar.scopeArchived") : t("sidebar.currentHeading")}</div>
+                )}
+                <div className={`app-session-item group relative mb-1 rounded-lg ${
                   activeView === "chat" && s.id === activeId ? "is-active bg-white shadow-sm" : "hover:bg-[#dfe4ea]"
-                }`}
-              >
+                }`}>
                 <div className="flex items-center">
                   {editing ? (
                     <input
@@ -251,6 +336,18 @@ export function Sidebar({
                       <ComposeIcon size={14} />
                     </button>
                   )}
+                  {!editing && (
+                    <button
+                      onClick={() => void toggleArchive(s)}
+                      disabled={navigationLocked || archivePendingId === s.id}
+                      aria-busy={archivePendingId === s.id}
+                      className="mr-0.5 grid h-7 w-7 shrink-0 place-items-center rounded-md text-[10px] text-[#69707a] opacity-0 transition hover:bg-[#cfd5dd] hover:text-[#111827] focus:opacity-100 group-focus-within:opacity-100 group-hover:opacity-100 disabled:opacity-0"
+                      aria-label={s.archived ? t("sidebar.restore") : t("sidebar.archive")}
+                      title={s.archived ? t("sidebar.restore") : t("sidebar.archive")}
+                    >
+                      {s.archived ? "↩" : "↓"}
+                    </button>
+                  )}
                   <button
                     onClick={() => onDeleteSession(s.id)}
                     disabled={navigationLocked || editing}
@@ -265,6 +362,7 @@ export function Sidebar({
                     {renameError}
                   </div>
                 )}
+                </div>
               </div>
             );
           })}
