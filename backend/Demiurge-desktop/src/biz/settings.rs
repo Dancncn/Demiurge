@@ -2,7 +2,7 @@
 
 use crate::store::Settings;
 use crate::*;
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager};
 
 pub(crate) fn get_settings(state: &AppState) -> Settings {
     state.settings.lock().unwrap().clone()
@@ -34,5 +34,10 @@ pub(crate) fn save_settings(
     store::save_settings(&dir, &settings)?;
     crate::biz::window::sync_desktop_companion_window(&app, &settings)?;
     crate::biz::window::emit_settings_updated(&app, &settings);
+    let mcp_app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let state = mcp_app.state::<AppState>();
+        crate::mcp::ensure_initialized(state.inner()).await;
+    });
     Ok(())
 }

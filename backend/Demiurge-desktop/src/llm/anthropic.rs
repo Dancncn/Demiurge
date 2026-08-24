@@ -155,10 +155,25 @@ pub fn build_anthropic_body_with_structured_output(
                     }
                 }
             }
-            "user" => out_messages.push(json!({
-                "role": "user",
-                "content": [{ "type": "text", "text": msg.content.as_deref().unwrap_or_default() }]
-            })),
+            "user" => {
+                let mut content = Vec::with_capacity(msg.images.len() + 1);
+                if let Some(text) = msg.model_content().as_deref() {
+                    if !text.is_empty() {
+                        content.push(json!({ "type": "text", "text": text }));
+                    }
+                }
+                for image in &msg.images {
+                    content.push(json!({
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": image.mime_type,
+                            "data": image.data,
+                        }
+                    }));
+                }
+                out_messages.push(json!({ "role": "user", "content": content }));
+            }
             "assistant" => {
                 let mut content = Vec::new();
                 if let Some(text) = msg.content.as_deref() {
@@ -436,7 +451,7 @@ fn parse_anthropic_usage(v: &Value) -> Option<Usage> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent::conversation::Message;
+    use crate::agent::conversation::{ConversationContext, ImageAttachment, Message};
     use crate::store::{ProviderKind, ReasoningEffort, Settings};
 
     fn cfg() -> Settings {
@@ -475,6 +490,56 @@ mod tests {
         assert_eq!(body["max_tokens"], cfg().reserved_output_tokens);
         assert_eq!(body["stream"], true);
         assert!(body["tools"].is_array());
+    }
+
+    #[test]
+    fn anthropic_body_converts_images_to_base64_sources() {
+        let body = build_anthropic_body(
+            &cfg(),
+            &[Message::user_with_images(
+                "look",
+                vec![ImageAttachment {
+                    mime_type: "image/webp".to_string(),
+                    data: "YWJj".to_string(),
+                    name: None,
+                }],
+            )],
+            &json!([]),
+            ProviderProfile::anthropic(),
+        )
+        .unwrap();
+
+        assert_eq!(body["messages"][0]["content"][1]["type"], "image");
+        assert_eq!(
+            body["messages"][0]["content"][1]["source"]["media_type"],
+            "image/webp"
+        );
+        assert_eq!(body["messages"][0]["content"][1]["source"]["data"], "YWJj");
+    }
+
+    #[test]
+    fn anthropic_body_includes_conversation_provenance() {
+        let body = build_anthropic_body(
+            &cfg(),
+            &[Message::user_with_context(
+                "hello",
+                Vec::new(),
+                ConversationContext {
+                    scene: "minecraft".to_string(),
+                    channel: Some("whisper".to_string()),
+                    speaker: Some("Steve".to_string()),
+                    is_primary_user: Some(false),
+                    addressed_to_ai: Some(true),
+                },
+            )],
+            &json!([]),
+            ProviderProfile::anthropic(),
+        )
+        .unwrap();
+        assert!(body["messages"][0]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("speaker=Steve"));
     }
 
     #[test]

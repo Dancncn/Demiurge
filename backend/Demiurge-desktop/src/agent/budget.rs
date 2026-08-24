@@ -91,8 +91,8 @@ pub fn estimate_text_tokens(text: &str) -> usize {
 pub fn estimate_message_tokens(message: &Message) -> usize {
     let mut total = MESSAGE_OVERHEAD_TOKENS + estimate_text_tokens(&message.role);
 
-    if let Some(content) = &message.content {
-        total += estimate_text_tokens(content);
+    if let Some(content) = message.model_content() {
+        total += estimate_text_tokens(&content);
     }
     if let Some(tool_call_id) = &message.tool_call_id {
         total += estimate_text_tokens(tool_call_id);
@@ -108,6 +108,10 @@ pub fn estimate_message_tokens(message: &Message) -> usize {
             total += estimate_text_tokens(&tc.function.arguments);
         }
     }
+
+    // Provider image tokenization depends on dimensions and model. Use a
+    // conservative fixed estimate without counting base64 bytes as text.
+    total += message.images.len().saturating_mul(1024);
 
     total
 }

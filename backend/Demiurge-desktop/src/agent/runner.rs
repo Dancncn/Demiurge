@@ -6,7 +6,7 @@ use std::time::Instant;
 use serde_json::json;
 use tauri::{AppHandle, Emitter};
 
-use super::conversation::{Message, ToolExecutionRecord, ToolExecutionStatus};
+use super::conversation::{ImageAttachment, Message, ToolExecutionRecord, ToolExecutionStatus};
 use super::{
     budget, context, custom, goal, memory, prompt, session_engine, summary, workflow_journal,
 };
@@ -160,15 +160,11 @@ pub struct TurnOptions {
     pub workflow_run_id: Option<String>,
     pub agent_names: Vec<String>,
     pub token_budget: Option<budget::TokenBudgetState>,
-}
-
-pub async fn run_turn(
-    app: &AppHandle,
-    state: &crate::AppState,
-    session_id: &str,
-    user_text: String,
-) -> Result<(), String> {
-    run_turn_with_options(app, state, session_id, user_text, TurnOptions::default()).await
+    pub user_images: Vec<ImageAttachment>,
+    pub conversation_context: Option<super::conversation::ConversationContext>,
+    /// A model-only control reply that should be persisted for continuity but
+    /// represented as an empty completion in the desktop projection.
+    pub silent_assistant_marker: Option<String>,
 }
 
 pub async fn run_turn_with_options(
@@ -236,6 +232,11 @@ pub async fn run_turn_with_options(
         .clone()
         .unwrap_or_else(|| user_text.clone());
     let original_user_text = stored_user_text.clone();
+    let memory_user_text = options
+        .conversation_context
+        .as_ref()
+        .map(|context| context.annotate(&original_user_text))
+        .unwrap_or_else(|| original_user_text.clone());
     if let Some(run_id) = &options.workflow_run_id {
         let _ = workflow_journal::append(
             state,
@@ -256,7 +257,11 @@ pub async fn run_turn_with_options(
     let push = |msg: Message| session_store.append_message(msg);
 
     // 追加用户消息；若标题仍是默认值，用首条用户消息生成标题
-    session_store.append_user_message(stored_user_text.clone());
+    session_store.append_user_message_with_context(
+        stored_user_text.clone(),
+        options.user_images.clone(),
+        options.conversation_context.clone(),
+    );
 
     for _step in 0..max_steps {
         if state.cancel.load(Ordering::Relaxed) {
@@ -275,7 +280,7 @@ pub async fn run_turn_with_options(
                 &settings,
                 &persona_text,
                 summary,
-                &original_user_text,
+                &memory_user_text,
             );
             if settings.permission_mode == store::PermissionMode::Plan {
                 apply_system_overlay(&mut system, Some(plan_mode_overlay()));
@@ -502,7 +507,10 @@ pub async fn run_turn_with_options(
                     json!({ "assistant_text": assistant_text.clone() }),
                 );
             }
-            events.assistant_done(assistant_text.clone());
+            events.assistant_done(assistant_completion_event_text(
+                &assistant_text,
+                options.silent_assistant_marker.as_deref(),
+            ));
 
             let sandbox_dir = state.sandbox_dir.lock().unwrap().clone();
             let packs_dir = state.packs_dir.lock().unwrap().clone();
@@ -514,8 +522,9 @@ pub async fn run_turn_with_options(
                 &sandbox_dir,
                 &packs_dir,
                 &settings.current_pack,
-                &original_user_text,
+                &memory_user_text,
                 &assistant_text,
+                options.conversation_context.as_ref(),
                 &state.cancel,
             )
             .await
@@ -529,8 +538,9 @@ pub async fn run_turn_with_options(
                 state,
                 &data_dir,
                 &sid,
-                &original_user_text,
+                &memory_user_text,
                 &assistant_text,
+                options.conversation_context.as_ref(),
                 &state.cancel,
             )
             .await;
@@ -809,6 +819,15 @@ fn apply_system_overlay(system: &mut String, overlay: Option<&str>) {
     system.push_str(overlay.trim());
 }
 
+fn assistant_completion_event_text(assistant_text: &str, silent_marker: Option<&str>) -> String {
+    if silent_marker.is_some_and(|marker| assistant_text.trim().eq_ignore_ascii_case(marker.trim()))
+    {
+        String::new()
+    } else {
+        assistant_text.to_string()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -858,5 +877,20 @@ mod tests {
 
         let unknown = empty_assistant_response_message("provider_blank", "en");
         assert!(unknown.contains("finish_reason: provider_blank"));
+    }
+
+    #[test]
+    fn minecraft_no_reply_marker_stays_out_of_desktop_projection() {
+        assert_eq!(
+            assistant_completion_event_text(
+                " [[MINECRAFT:NO_REPLY]] ",
+                Some("[[minecraft:no_reply]]")
+            ),
+            ""
+        );
+        assert_eq!(
+            assistant_completion_event_text("我来帮你。", Some("[[minecraft:no_reply]]")),
+            "我来帮你。"
+        );
     }
 }

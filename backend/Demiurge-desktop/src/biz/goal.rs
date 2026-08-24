@@ -119,6 +119,9 @@ async fn run_goal_control_turn(
             workflow_run_id: None,
             agent_names: Vec::new(),
             token_budget: None,
+            user_images: Vec::new(),
+            conversation_context: None,
+            silent_assistant_marker: None,
         },
     )
     .await?;

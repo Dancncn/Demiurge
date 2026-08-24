@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use serde::{Deserialize, Serialize};
 
-use super::conversation::Message;
+use super::conversation::{ConversationContext, Message};
 use crate::agent::session_engine::SessionTurnStore;
 use crate::llm;
 use crate::model_routing::{stream_with_failover, FailoverRequest};
@@ -329,6 +329,7 @@ pub async fn extract_and_update(
     pack_id: &str,
     user_text: &str,
     assistant_text: &str,
+    conversation_context: Option<&ConversationContext>,
     cancel: &AtomicBool,
 ) -> Result<(), String> {
     // Keep the existing client parameter for API compatibility. Auxiliary
@@ -353,6 +354,8 @@ Keep only stable, durable information:
 - user preferences and working style;
 - project constraints and architecture decisions;
 - facts that should influence future conversations.
+
+When the conversation contains a `Conversation context` marker, preserve its scene and speaker identity in any extracted memory. Never attribute a non-primary player's facts, preferences, words, or experiences to the primary user. For multiplayer memories, include the exact player username in the memory text.
 
 Do not record temporary task steps, one-off bugs, ordinary chat, secrets, tokens, full command output, stack traces, or uncertain guesses.
 If there is nothing worth remembering, output {{"memories":[]}}.
@@ -402,7 +405,10 @@ Conversation:
     }
 
     let extraction = parse_extraction(&turn.content)?;
-    let entries = normalize_candidates(extraction.memories);
+    let entries = add_conversation_provenance(
+        normalize_candidates(extraction.memories),
+        conversation_context,
+    );
     if entries.is_empty() {
         return Ok(());
     }
@@ -646,6 +652,27 @@ fn normalize_candidates(candidates: Vec<MemoryCandidate>) -> Vec<(String, String
     out
 }
 
+fn add_conversation_provenance(
+    entries: Vec<(String, String)>,
+    context: Option<&ConversationContext>,
+) -> Vec<(String, String)> {
+    let Some(context) = context else {
+        return entries;
+    };
+    let marker = context.model_marker();
+    entries
+        .into_iter()
+        .map(|(kind, text)| {
+            let text = if text.starts_with(&marker) {
+                text
+            } else {
+                format!("{marker} {text}")
+            };
+            (kind, cap_chars(text, MAX_MEMORY_CHARS))
+        })
+        .collect()
+}
+
 fn append_entries(
     sandbox_dir: &Path,
     namespace: Option<&str>,
@@ -709,6 +736,7 @@ fn normalize_kind(kind: &str) -> String {
         "routine" => "routine".to_string(),
         "stress" => "stress".to_string(),
         "encouragement" => "encouragement".to_string(),
+        "minecraft" | "minecraft_experience" => "minecraft".to_string(),
         _ => "project".to_string(),
     }
 }
@@ -773,6 +801,26 @@ mod tests {
             duplicates[0].duplicate_ids,
             vec!["project:mem-3".to_string()]
         );
+    }
+
+    #[test]
+    fn automatic_memories_keep_scene_speaker_and_primary_user_provenance() {
+        let entries = add_conversation_provenance(
+            vec![("preference".to_string(), "喜欢建造红石门".to_string())],
+            Some(&ConversationContext {
+                scene: "minecraft".to_string(),
+                channel: Some("public".to_string()),
+                speaker: Some("Alex".to_string()),
+                is_primary_user: Some(false),
+                addressed_to_ai: Some(true),
+            }),
+        );
+        assert_eq!(entries.len(), 1);
+        assert!(entries[0].1.contains("scene=minecraft"));
+        assert!(entries[0].1.contains("channel=public"));
+        assert!(entries[0].1.contains("speaker=Alex"));
+        assert!(entries[0].1.contains("primary_user=false"));
+        assert!(entries[0].1.ends_with("喜欢建造红石门"));
     }
 
     #[test]

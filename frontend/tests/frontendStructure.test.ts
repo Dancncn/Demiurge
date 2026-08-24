@@ -76,6 +76,7 @@ test("App commits assistant_done as the canonical turn body", async () => {
   assert.match(app, /kind: "done"/);
   assert.match(app, /text: canonicalText/);
   assert.doesNotMatch(app, /text: it\.text\.trim\(\) \? it\.text : text/);
+  assert.match(app, /m\.content\.trim\(\)\.toLowerCase\(\) !== "\[\[minecraft:no_reply\]\]"/);
 });
 
 test("layout contains explicit safeguards for 980, 1280, and 1811 pixel widths", async () => {

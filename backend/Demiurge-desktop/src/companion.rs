@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 
-use crate::agent::conversation::Message;
+use crate::agent::conversation::{ConversationContext, Message};
 use crate::agent::session_engine::SessionTurnStore;
 use crate::llm;
 use crate::model_routing::{stream_with_failover, FailoverRequest};
@@ -457,6 +457,7 @@ pub async fn extract_memory_to_queue(
     source_session: &str,
     user_text: &str,
     assistant_text: &str,
+    conversation_context: Option<&ConversationContext>,
     cancel: &AtomicBool,
 ) -> Result<CompanionMemoryQueueState, String> {
     // Keep the public parameter for callers that already own a configured
@@ -467,6 +468,7 @@ pub async fn extract_memory_to_queue(
     if !settings.companion_enabled
         || !settings.companion_memory_extraction_enabled
         || (profile.requires_api_key && settings.api_key.trim().is_empty())
+        || conversation_context.is_some_and(|context| context.is_primary_user == Some(false))
         || cancel.load(Ordering::Relaxed)
     {
         return Ok(memory_queue_state(data_dir));
@@ -539,7 +541,10 @@ Conversation:
     }
 
     let extraction = parse_companion_memory_extraction(&turn.content)?;
-    let candidates = normalize_companion_memory_candidates(extraction.memories);
+    let candidates = add_companion_memory_provenance(
+        normalize_companion_memory_candidates(extraction.memories),
+        conversation_context,
+    );
     for candidate in candidates {
         let _ = enqueue_memory_queue_item(
             data_dir,
@@ -639,6 +644,28 @@ fn normalize_companion_memory_candidates(
         });
     }
     out
+}
+
+fn add_companion_memory_provenance(
+    candidates: Vec<CompanionMemoryCandidate>,
+    context: Option<&ConversationContext>,
+) -> Vec<CompanionMemoryCandidate> {
+    let Some(context) = context else {
+        return candidates;
+    };
+    let marker = context.model_marker();
+    candidates
+        .into_iter()
+        .map(|mut candidate| {
+            if let Some(text) = candidate.text.take() {
+                candidate.text = Some(sanitize_memory_text(
+                    &format!("{marker} {text}"),
+                    MAX_COMPANION_MEMORY_TEXT_CHARS,
+                ));
+            }
+            candidate
+        })
+        .collect()
 }
 
 fn normalize_memory_scope(scope: &str) -> String {
@@ -1687,6 +1714,29 @@ mod tests {
         assert_eq!(candidates[0].kind.as_deref(), Some("stress"));
         assert_eq!(candidates[1].scope.as_deref(), Some("session"));
         assert_eq!(candidates[1].kind.as_deref(), Some("encouragement"));
+    }
+
+    #[test]
+    fn companion_memory_candidates_keep_primary_user_scene_provenance() {
+        let candidates = add_companion_memory_provenance(
+            vec![CompanionMemoryCandidate {
+                scope: Some("user".to_string()),
+                kind: Some("preference".to_string()),
+                text: Some("喜欢简短回复".to_string()),
+                reason: Some("稳定偏好".to_string()),
+            }],
+            Some(&ConversationContext {
+                scene: "desktop_companion".to_string(),
+                channel: Some("desktop_chat".to_string()),
+                speaker: Some("primary_user".to_string()),
+                is_primary_user: Some(true),
+                addressed_to_ai: Some(true),
+            }),
+        );
+        let text = candidates[0].text.as_deref().unwrap();
+        assert!(text.contains("scene=desktop_companion"));
+        assert!(text.contains("speaker=primary_user"));
+        assert!(text.contains("喜欢简短回复"));
     }
 
     #[test]

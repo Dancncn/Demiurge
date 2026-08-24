@@ -37,3 +37,28 @@ export async function pickFolder(title?: string): Promise<FolderPickOutcome> {
   if (typeof path !== "string" || !path) return { status: "cancelled" };
   return { status: "selected", path };
 }
+
+export async function pickFile(
+  title?: string,
+  extensions?: string[],
+): Promise<FolderPickOutcome> {
+  if (!isDesktopRuntime()) return { status: "unavailable" };
+
+  let selected: string | string[] | null;
+  try {
+    selected = await open({
+      directory: false,
+      multiple: false,
+      ...(title ? { title } : {}),
+      ...(extensions?.length
+        ? { filters: [{ name: "Files", extensions }] }
+        : {}),
+    });
+  } catch (e) {
+    return { status: "failed", error: String(e) };
+  }
+
+  const path = Array.isArray(selected) ? selected[0] : selected;
+  if (typeof path !== "string" || !path) return { status: "cancelled" };
+  return { status: "selected", path };
+}

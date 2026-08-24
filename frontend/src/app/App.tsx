@@ -47,7 +47,13 @@ import {
   PinIcon,
   VolumeIcon,
 } from "@/shared/components/Icons";
-import { attachmentKindLabel, buildAttachmentPrompt, formatAttachmentSize, type ProcessedAttachment } from "@/lib/fileProcessing";
+import {
+  attachmentKindLabel,
+  buildAttachmentPrompt,
+  formatAttachmentSize,
+  multimodalImages,
+  type ProcessedAttachment,
+} from "@/lib/fileProcessing";
 import { autoContextBudget } from "@/lib/providers";
 import { canDrawToday, isAutoPromptEnabled, isDismissedToday } from "@/lib/fortune";
 import { useI18n } from "@/lib/i18n";
@@ -221,10 +227,12 @@ function buildHistory(msgs: Message[]): DisplayItem[] {
     if (m.role === "user") {
       const text = m.content ?? "";
       if (!text.startsWith("[Goal ")) {
-        out.push({ id: id(), kind: "user", text });
+        out.push({ id: id(), kind: "user", text, context: m.context });
       }
     } else if (m.role === "assistant") {
-      if (m.content) out.push({ id: id(), kind: "assistant", text: m.content, streaming: false });
+      if (m.content && m.content.trim().toLowerCase() !== "[[minecraft:no_reply]]") {
+        out.push({ id: id(), kind: "assistant", text: m.content, streaming: false });
+      }
       for (const tc of m.tool_calls ?? []) {
         let args: unknown = {};
         try {
@@ -950,6 +958,7 @@ export default function App() {
   async function handleSend(textArg?: string, attachments: ProcessedAttachment[] = []) {
     const text = (textArg ?? input).trim();
     const attachmentPrompt = buildAttachmentPrompt(attachments);
+    const images = multimodalImages(attachments);
     if ((!text && !attachmentPrompt) || appBusy || navigationPendingRef.current) return false;
     const turnSessionId = activeIdRef.current;
     let completed = false;
@@ -962,7 +971,9 @@ export default function App() {
     try {
       const prompt = `${text || "Please review the attached files."}${attachmentPrompt}`;
       lastRetryText.current = prompt;
-      if (selectedAgentNames.length) {
+      if (images.length) {
+        await api.sendMultimodal(prompt, images, selectedAgentNames);
+      } else if (selectedAgentNames.length) {
         await api.sendWithAgents(prompt, selectedAgentNames);
       } else {
         await api.send(prompt);

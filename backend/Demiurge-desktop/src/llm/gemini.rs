@@ -153,10 +153,23 @@ pub fn build_gemini_body_with_structured_output(
                     }
                 }
             }
-            "user" => contents.push(json!({
-                "role": "user",
-                "parts": [{ "text": msg.content.as_deref().unwrap_or_default() }]
-            })),
+            "user" => {
+                let mut parts = Vec::with_capacity(msg.images.len() + 1);
+                if let Some(text) = msg.model_content().as_deref() {
+                    if !text.is_empty() {
+                        parts.push(json!({ "text": text }));
+                    }
+                }
+                for image in &msg.images {
+                    parts.push(json!({
+                        "inlineData": {
+                            "mimeType": image.mime_type,
+                            "data": image.data,
+                        }
+                    }));
+                }
+                contents.push(json!({ "role": "user", "parts": parts }));
+            }
             "assistant" => {
                 let mut parts = Vec::new();
                 if let Some(text) = msg.content.as_deref() {
@@ -367,7 +380,7 @@ fn parse_gemini_usage(v: &Value) -> Option<Usage> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent::conversation::Message;
+    use crate::agent::conversation::{ConversationContext, ImageAttachment, Message};
     use crate::store::{ProviderKind, ReasoningEffort, Settings};
 
     fn cfg() -> Settings {
@@ -414,6 +427,58 @@ mod tests {
             cfg().reserved_output_tokens
         );
         assert!(body["tools"].is_array());
+    }
+
+    #[test]
+    fn gemini_body_converts_images_to_inline_data() {
+        let body = build_gemini_body(
+            &cfg(),
+            &[Message::user_with_images(
+                "look",
+                vec![ImageAttachment {
+                    mime_type: "image/jpeg".to_string(),
+                    data: "YWJj".to_string(),
+                    name: None,
+                }],
+            )],
+            &json!([]),
+            ProviderProfile::gemini(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            body["contents"][0]["parts"][1]["inlineData"]["mimeType"],
+            "image/jpeg"
+        );
+        assert_eq!(
+            body["contents"][0]["parts"][1]["inlineData"]["data"],
+            "YWJj"
+        );
+    }
+
+    #[test]
+    fn gemini_body_includes_conversation_provenance() {
+        let body = build_gemini_body(
+            &cfg(),
+            &[Message::user_with_context(
+                "hello",
+                Vec::new(),
+                ConversationContext {
+                    scene: "desktop_companion".to_string(),
+                    channel: Some("desktop_chat".to_string()),
+                    speaker: Some("primary_user".to_string()),
+                    is_primary_user: Some(true),
+                    addressed_to_ai: Some(true),
+                },
+            )],
+            &json!([]),
+            ProviderProfile::gemini(),
+        )
+        .unwrap();
+        assert!(body["contents"][0]["parts"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("scene=desktop_companion"));
     }
 
     #[test]

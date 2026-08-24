@@ -60,6 +60,8 @@ import { useI18n, type TFunction } from "@/lib/i18n";
 import { isAutoPromptEnabled, setAutoPromptEnabled } from "@/lib/fortune";
 import { pickFolder, type FolderPickOutcome } from "@/lib/folderPicker";
 import IntegrationCenter from "@/features/agent/IntegrationCenter";
+import { MinecraftSettingsPanel } from "@/features/settings/MinecraftSettingsPanel";
+import { findMinecraftMcpServer, MINECRAFT_MCP_SERVER_NAME } from "@/features/settings/minecraftMcpConfig";
 
 interface Props {
   open: boolean;
@@ -86,6 +88,7 @@ export type SettingsTab =
   | "files"
   | "context"
   | "tools"
+  | "minecraft"
   | "voice"
   | "advanced"
   | "integrations";
@@ -1856,6 +1859,14 @@ export default function SettingsDialog({
         ? t("settings.nav.detail.mcpOcrReady", { n: form.mcp_servers.length })
         : t("settings.nav.detail.mcpOcr", { n: form.mcp_servers.length }),
       icon: <WrenchIcon size={18} />,
+    },
+    {
+      id: "minecraft",
+      label: t("settings.nav.minecraft"),
+      detail: findMinecraftMcpServer(form.mcp_servers)?.enabled
+        ? t("settings.nav.detail.enabled")
+        : t("settings.nav.detail.disabled"),
+      icon: <SparklesIcon size={18} />,
     },
     {
       id: "voice",
@@ -4847,6 +4858,18 @@ export default function SettingsDialog({
                     </div>
                   </Section>
                 </>
+              )}
+
+              {activeTab === "minecraft" && (
+                <Section title={t("settings.minecraft.title")} description={t("settings.minecraft.description")}>
+                  <MinecraftSettingsPanel
+                    servers={form.mcp_servers}
+                    runtime={mcpState?.servers.find((server) => server.name === MINECRAFT_MCP_SERVER_NAME)}
+                    onChange={(servers) => set("mcp_servers", servers)}
+                    onRefresh={refreshMcp}
+                    isRefreshing={mcpBusy}
+                  />
+                </Section>
               )}
 
               {activeTab === "voice" && (

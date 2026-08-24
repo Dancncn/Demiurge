@@ -31,6 +31,7 @@ Demiurge 是一个桌面伴侣 Agent 的“空引擎”。它不绑定具体角�
 - **原生桌面体验**：默认“水晶花”（`Crystal Bloom`）与经典中性主题共享 Material 布局和字体层级；吉签、陪伴、番茄钟使用独立常驻小工具窗口，Windows 主窗口控制由 Rust/Win32 可靠执行。
 - **角色与引擎分离**：角色包用 manifest 2.0 描述 persona、结构化 Character Card（身份/背景/人格/说话风格/示例对话/OOC 规则）、Runtime 策略（技能绑定、memory namespace、voice、permission 偏好）与 Lorebook 知识库；引擎保持通用。
 - **会动手**：可读写当前会话项目中的文件、编辑代码、跑 shell、联网搜索、截图/OCR、派生子 Agent、运行 workflow。
+- **Minecraft 角色接入**：设置页可启动独立 Mineflayer MCP 项目；游戏角色沿用当前人物包、Lorebook、会话和 memory namespace，动作由 Skill 执行，Demiurge 当前 LLM 是唯一规划模型。
 - **可控安全**：写文件、shell、打开路径、截图/OCR 等敏感操作走确认门；文件工具被限制在当前会话项目根；角色卡可声明 permission 偏好，在用户规则与工具默认之间形成可配置 overlay。
 - **可持续推进**：`/goal` 可以设置长期目标，普通回合结束后继续自动驱动，直到完成、暂停、阻塞或预算耗尽。
 - **Lorebook 向量召回**：本地 BM25 稀疏检索 + 远程 embedding 稠密检索 + RRF 混合融合，chunk 向量按 provider+维度缓存；`/recall` 与设置面板可视化命中关键词、score、索引状态。
@@ -54,6 +55,14 @@ Demiurge 是一个桌面伴侣 Agent 的“空引擎”。它不绑定具体角�
 - Git 面板展示当前分支、本地/远程分支与未提交文件；分支请求与缓存绑定项目路径，切换时由后端再次验证调用方看到的项目，脏工作区仍会二次确认。
 - 文件编辑工具在消息流中显示“正在编辑/已编辑”的文件活动卡片，可展开查看受影响路径、参数、结果与差异预览。
 - 三类 Provider 共用有界 SSE 语义并校验协议终止标记；前端按 session + turn 去重事件，最终正文可修复漏 delta。Markdown/ToolCard 使用稳定渲染，Mermaid 等到流完成后再执行。
+- 输入区图片会作为原生多模态内容发送：OpenAI-compatible 使用 `image_url` content part，Anthropic 使用 base64 image source，Gemini 使用 `inlineData`；OCR 仅作为可选补充，不再代替视觉输入。
+
+### Minecraft MCP
+
+- “设置 → Minecraft”管理独立项目路径、Node 运行时、服务器、AI 游戏用户名、主用户、安全和视觉参数。
+- 启用后应用自动启动 stdio MCP 子进程，设置变化自动重启，退出时终止；Mineflayer 不持有第二套 LLM 凭据。
+- 公开聊天和私聊都会保留精确玩家用户名、主用户身份与 Minecraft 场景。玩家直接叫 AI 游戏用户名即可互动；未点名消息由当前模型结合语境判断。自动长期记忆由代码强制写入场景、频道、玩家用户名和主用户标识，不依赖提取模型自行补全，因此不会混淆不同玩家。
+- 死亡、维度切换、重要 Skill 成败和视觉异常写入当前人物包的 namespaced 长期记忆。
 
 ### Context Engineering
 

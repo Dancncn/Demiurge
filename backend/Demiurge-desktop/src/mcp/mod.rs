@@ -4,7 +4,7 @@
 //! servers, dynamic tool discovery, resource listing/reading, and tool calls
 //! through Demiurge's existing permission gate.
 
-use std::collections::{hash_map::DefaultHasher, HashMap};
+use std::collections::{hash_map::DefaultHasher, HashMap, VecDeque};
 use std::hash::{Hash, Hasher};
 use std::path::Path;
 use std::process::Stdio;
@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, Command};
-use tokio::sync::oneshot;
+use tokio::sync::{oneshot, Notify};
 
 use crate::store;
 use crate::tools::{
@@ -87,6 +87,14 @@ pub struct McpPanelState {
     pub servers: Vec<McpServerView>,
     pub tools: Vec<McpToolView>,
     pub resources: HashMap<String, Vec<McpResourceView>>,
+}
+
+#[derive(Clone, Debug)]
+pub struct McpIncomingNotification {
+    pub server_name: String,
+    pub method: String,
+    pub params: Value,
+    pub received_at: u64,
 }
 
 #[derive(Clone, Debug)]
@@ -195,9 +203,20 @@ impl McpServerRuntime {
     }
 }
 
-#[derive(Default)]
 pub struct McpManager {
     servers: Mutex<HashMap<String, McpServerRuntime>>,
+    notifications: Arc<Mutex<VecDeque<McpIncomingNotification>>>,
+    notification_signal: Arc<Notify>,
+}
+
+impl Default for McpManager {
+    fn default() -> Self {
+        Self {
+            servers: Mutex::new(HashMap::new()),
+            notifications: Arc::new(Mutex::new(VecDeque::new())),
+            notification_signal: Arc::new(Notify::new()),
+        }
+    }
 }
 
 impl McpManager {
@@ -258,6 +277,16 @@ impl McpManager {
             }
         }
         None
+    }
+
+    pub async fn next_notification(&self) -> McpIncomingNotification {
+        loop {
+            let notified = self.notification_signal.notified();
+            if let Some(notification) = self.notifications.lock().unwrap().pop_front() {
+                return notification;
+            }
+            notified.await;
+        }
     }
 }
 
@@ -426,6 +455,27 @@ pub async fn call_tool(
     Ok(format_mcp_tool_result(&result))
 }
 
+pub async fn call_original_tool(
+    state: &crate::AppState,
+    server_name: &str,
+    original_tool: &str,
+    args: Value,
+) -> Result<String, String> {
+    let exposed_name = {
+        let servers = state.mcp.servers.lock().unwrap();
+        let server = servers
+            .get(server_name)
+            .ok_or_else(|| format!("MCP server `{server_name}` 不存在。"))?;
+        server
+            .tools
+            .iter()
+            .find(|tool| tool.original_name == original_tool)
+            .map(|tool| tool.exposed_name.clone())
+            .ok_or_else(|| format!("MCP server `{server_name}` 没有工具 `{original_tool}`。"))?
+    };
+    call_tool(state, &exposed_name, args).await
+}
+
 async fn connect_stdio_server(
     state: &crate::AppState,
     config: McpServerConfig,
@@ -447,7 +497,8 @@ async fn connect_stdio_server(
         .args(&config.args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
     for env in &config.env {
         if !env.key.trim().is_empty() {
             command.env(env.key.trim(), &env.value);
@@ -478,6 +529,9 @@ async fn connect_stdio_server(
         handle.clone(),
         stdout,
         state.sandbox_dir.lock().unwrap().clone(),
+        config.name.clone(),
+        state.mcp.notifications.clone(),
+        state.mcp.notification_signal.clone(),
     );
     if let Some(stderr) = stderr {
         spawn_stderr_reader(handle.stderr.clone(), stderr);
@@ -642,6 +696,9 @@ fn spawn_stdout_reader(
     handle: McpClientHandle,
     stdout: tokio::process::ChildStdout,
     sandbox_dir: std::path::PathBuf,
+    server_name: String,
+    notifications: Arc<Mutex<VecDeque<McpIncomingNotification>>>,
+    notification_signal: Arc<Notify>,
 ) {
     tauri::async_runtime::spawn(async move {
         let mut lines = BufReader::new(stdout).lines();
@@ -654,7 +711,15 @@ fn spawn_stdout_reader(
                     let Ok(message) = serde_json::from_str::<Value>(&line) else {
                         continue;
                     };
-                    handle_incoming_message(&handle, message, &sandbox_dir).await;
+                    handle_incoming_message(
+                        &handle,
+                        message,
+                        &sandbox_dir,
+                        &server_name,
+                        &notifications,
+                        &notification_signal,
+                    )
+                    .await;
                 }
                 Ok(None) => break,
                 Err(error) => {
@@ -683,7 +748,14 @@ fn spawn_stderr_reader(stderr: Arc<Mutex<String>>, stream: tokio::process::Child
     });
 }
 
-async fn handle_incoming_message(handle: &McpClientHandle, message: Value, sandbox_dir: &Path) {
+async fn handle_incoming_message(
+    handle: &McpClientHandle,
+    message: Value,
+    sandbox_dir: &Path,
+    server_name: &str,
+    notifications: &Arc<Mutex<VecDeque<McpIncomingNotification>>>,
+    notification_signal: &Arc<Notify>,
+) {
     if let Some(id) = message.get("id").and_then(Value::as_u64) {
         if message.get("method").is_none() {
             let sender = handle.pending.lock().unwrap().remove(&id);
@@ -702,6 +774,21 @@ async fn handle_incoming_message(handle: &McpClientHandle, message: Value, sandb
     let Some(method) = message.get("method").and_then(Value::as_str) else {
         return;
     };
+    if message.get("id").is_none() && method.starts_with("notifications/") {
+        let mut queue = notifications.lock().unwrap();
+        queue.push_back(McpIncomingNotification {
+            server_name: server_name.to_string(),
+            method: method.to_string(),
+            params: message.get("params").cloned().unwrap_or_else(|| json!({})),
+            received_at: store::now_millis(),
+        });
+        while queue.len() > 1_000 {
+            queue.pop_front();
+        }
+        drop(queue);
+        notification_signal.notify_one();
+        return;
+    }
     if let Some(id) = message.get("id").cloned() {
         let result = match method {
             "roots/list" => Ok(json!({

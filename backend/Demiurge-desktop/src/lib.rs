@@ -10,6 +10,7 @@ mod integrations;
 mod llm;
 pub mod mcp;
 mod media;
+mod minecraft;
 mod model_routing;
 mod models;
 mod ocr;
@@ -22,6 +23,7 @@ mod startup;
 mod store;
 mod tools;
 mod usage;
+mod verification;
 mod voice;
 mod workspace;
 

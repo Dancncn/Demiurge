@@ -15,6 +15,9 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 # 本地 embedding provider（fastembed / ONNX runtime）。默认不启用，避免打进 ONNX runtime 增大包体。
 # 启用后编译 LocalEmbeddingProvider 桩；真实本地推理仍需后续接入 fastembed crate 与模型下载 UX。
 embeddings-local = []
+# Allows `cargo check` on targets where oar-ocr has no prebuilt ONNX Runtime.
+# This feature is verification-only and is never enabled for a runnable build.
+check-no-ocr-link = ["dep:ort-sys", "ort-sys/disable-linking"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
@@ -40,5 +43,6 @@ keyring = "4.1.2"
 xcap = "0.9"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
 oar-ocr = "=0.7.0"
+ort-sys = { version = "=2.0.0-rc.12", optional = true, default-features = false }
 base64 = "0.22"
 zip = { version = "2", default-features = false, features = ["deflate"] }

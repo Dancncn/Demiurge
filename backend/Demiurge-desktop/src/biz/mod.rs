@@ -11,6 +11,7 @@ pub(crate) mod integrations;
 pub(crate) mod mcp;
 pub(crate) mod media;
 pub(crate) mod memory;
+pub(crate) mod minecraft;
 pub(crate) mod models;
 pub(crate) mod pack;
 pub(crate) mod permission;
