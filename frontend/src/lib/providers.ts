@@ -28,7 +28,7 @@ export const PROVIDER_OPTIONS: ProviderOption[] = [
     baseUrl: "https://api.deepseek.com/v1",
     model: "deepseek-v4-pro",
     help: "DeepSeek official OpenAI-compatible endpoint. deepseek-chat / deepseek-reasoner are stable aliases to the latest.",
-    models: ["deepseek-v4-pro", "deepseek-v4-flash", "deepseek-reasoner", "deepseek-chat"],
+    models: ["deepseek-v4-pro", "deepseek-v4-flash", "deepseek-v4-flash-vision-exp", "deepseek-reasoner", "deepseek-chat"],
   },
   {
     value: "openai",
@@ -247,6 +247,7 @@ const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   "deepseek-reasoner": 131_072,
   "deepseek-v4-pro": 1_048_576,
   "deepseek-v4-flash": 1_048_576,
+  "deepseek-v4-flash-vision-exp": 1_048_576,
   "deepseek-v4-pro-0813": 1_048_576,
   // OpenAI (GPT-5 family input ~272K; backend profile caps appropriately)
   "gpt-5.5": 272_000,

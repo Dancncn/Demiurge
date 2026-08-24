@@ -413,6 +413,11 @@ pub struct Settings {
     pub base_url: String,
     pub api_key: String,
     pub model: String,
+    /// Optional provider-local model for turns whose retained context contains images.
+    /// When empty, DeepSeek uses its official vision model and other providers keep
+    /// the selected text model.
+    #[serde(default)]
+    pub vision_model: String,
     pub current_pack: String,
     #[serde(default)]
     pub current_pet: String,
@@ -563,6 +568,7 @@ impl Default for Settings {
             base_url: "https://api.deepseek.com/v1".to_string(),
             api_key: String::new(),
             model: "deepseek-chat".to_string(),
+            vision_model: String::new(),
             current_pack: "default".to_string(),
             current_pet: String::new(),
             max_context_chars: DEFAULT_MAX_CONTEXT_CHARS,
@@ -653,6 +659,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(settings.provider, ProviderKind::DeepSeek);
+        assert!(settings.vision_model.is_empty());
         assert_eq!(settings.permission_mode, PermissionMode::Default);
         assert_eq!(settings.reasoning_effort, ReasoningEffort::Auto);
         assert_eq!(settings.theme, "system");

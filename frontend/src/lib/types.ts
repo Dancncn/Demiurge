@@ -89,6 +89,7 @@ export interface Settings {
   base_url: string;
   api_key: string;
   model: string;
+  vision_model: string;
   current_pack: string;
   current_pet: string;
   max_context_chars: number;

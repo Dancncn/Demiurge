@@ -375,6 +375,15 @@ pub async fn run_turn_with_options(
             v.extend(msgs);
             v
         };
+        let contains_images = full.iter().any(|message| !message.images.is_empty());
+        let primary_model = crate::model_routing::resolve_model_for_messages(&settings, &full);
+        // A provider-local text fallback may not understand images. Fail clearly
+        // instead of silently retrying the same multimodal payload on one.
+        let fallback_models: &[String] = if contains_images {
+            &[]
+        } else {
+            &settings.model_routing.fallback_models
+        };
 
         if turn_budget
             .as_ref()
@@ -404,8 +413,8 @@ pub async fn run_turn_with_options(
                 settings: &settings,
                 messages: &full,
                 tools: &tools_schema,
-                primary_model: &settings.model,
-                fallback_models: &settings.model_routing.fallback_models,
+                primary_model: &primary_model,
+                fallback_models,
                 cancel: &state.cancel,
                 request_cancel: None,
                 session_id: &sid,

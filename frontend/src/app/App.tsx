@@ -79,6 +79,7 @@ const PREVIEW_SETTINGS: Settings = {
   base_url: "https://api.deepseek.com/v1",
   api_key: "",
   model: "deepseek-chat",
+  vision_model: "",
   reasoning_effort: "auto",
   model_routing: {
     enabled: false,

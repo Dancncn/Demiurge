@@ -2151,6 +2151,7 @@ export default function SettingsDialog({
                                 set("provider", provider.value);
                                 set("base_url", provider.baseUrl);
                                 set("model", provider.model);
+                                set("vision_model", "");
                               }}
                               className={`cf-press flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left ${
                                 selected ? "bg-white shadow-sm" : "hover:bg-white/70"
@@ -2251,6 +2252,14 @@ export default function SettingsDialog({
                                 )}
                               </div>
                             )}
+                          </Field>
+                          <Field label={t("settings.provider.visionModel")} help={t("settings.provider.visionModelHelp")}>
+                            <input
+                              className={inputCls}
+                              value={form.vision_model}
+                              placeholder={form.provider === "deepseek" ? "deepseek-v4-flash-vision-exp" : t("settings.provider.visionModelPlaceholder")}
+                              onChange={(e) => set("vision_model", e.target.value)}
+                            />
                           </Field>
                           <Field
                             label={t("settings.provider.effort")}
