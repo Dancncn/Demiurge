@@ -61,6 +61,30 @@ async function visible(page, text) {
 
 try {
   browser = await chromium.launch({ executablePath: browserPath, headless: true, args: ["--autoplay-policy=no-user-gesture-required"] });
+  await check("multimodal-composer-send", async (page) => {
+    const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a7E0AAAAASUVORK5CYII=";
+    await page.locator('input[type="file"]').setInputFiles({ name: "smoke.png", mimeType: "image/png", buffer: Buffer.from(png, "base64") });
+    await visible(page, "smoke.png");
+    await send(page, "Review this image");
+    const submission = await page.evaluate(() => window.__DEMIURGE_SMOKE__.lastSubmission());
+    assert.equal(submission.command, "send_multimodal");
+    assert.deepEqual(submission.args.images, [{ mime_type: "image/png", data: png, name: "smoke.png" }]);
+    assert.deepEqual(submission.args.agentNames, []);
+    assert.match(submission.args.text, /Review this image/);
+    assert.match(submission.args.text, /Smoke image OCR/);
+    await page.evaluate(async () => {
+      const mock = window.__DEMIURGE_SMOKE__;
+      await mock.agentEvent("assistant_done", "Image received", "image-answer");
+      mock.saveAnswer("Image received");
+      await mock.settle();
+    });
+    await visible(page, "Image received");
+    await page.getByRole("button", { name: "Smoke B", exact: true }).click();
+    await page.getByRole("button", { name: "Smoke A", exact: true }).click();
+    await visible(page, "Image received");
+    assert.equal(await page.locator(".user-message-content").filter({ hasText: "smoke.png" }).count(), 1);
+  });
+
   await check("goal-continuations", async (page) => {
     await send(page, "Run the Goal smoke");
     await page.evaluate(async () => {

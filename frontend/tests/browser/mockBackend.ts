@@ -9,6 +9,7 @@ const settings: Settings = {
   base_url: "https://api.deepseek.com/v1",
   api_key: "",
   model: "deepseek-chat",
+  vision_model: "",
   reasoning_effort: "auto",
   model_routing: {
     enabled: false,
@@ -104,6 +105,7 @@ let lastRun: TurnRunState | undefined;
 const synthesis: Array<(url: string) => void> = [];
 const unknownCommands: string[] = [];
 const calls: string[] = [];
+let lastSubmission: { command: string; args: Record<string, unknown> } | undefined;
 let permissionRefreshFails = false;
 const permissions: PermissionPanelState = {
   rules: [{ tool: "shell", effect: "ask", scope: "user", reason: "Smoke saved rule", updated_at: 1 }],
@@ -174,6 +176,7 @@ mockIPC(async (command, rawArgs) => {
     case "context_panel_state": return null;
     case "read_pack_manifest_json": return "{}";
     case "ocr_model_status": return null;
+    case "ocr_image_bytes": return "Smoke image OCR";
     case "memory_panel_state": return null;
     case "companion_memory_suggestions": return [];
     case "companion_memory_queue_state": return null;
@@ -192,13 +195,17 @@ mockIPC(async (command, rawArgs) => {
     };
     case "voice_synthesize": return new Promise<string>((resolve) => synthesis.push(resolve));
     case "send":
-    case "send_with_agents": {
+    case "send_with_agents":
+    case "send_multimodal": {
+      lastSubmission = { command, args: structuredClone(args) };
       const turn: TurnRunState = {
         id: `smoke-turn-${++runSequence}`, session_id: activeSession, entrypoint: "send", status: "running",
         input_preview: String(args.text), agent_names: [], started_at: Date.now(), updated_at: Date.now(),
       };
       lastRun = turn;
-      histories.get(activeSession)!.push({ role: "user", content: String(args.text) });
+      histories.get(activeSession)!.push({ role: "user", content: String(args.text),
+        ...(command === "send_multimodal" ? { images: structuredClone(args.images) as Message["images"] } : {}),
+      });
       engine = { busy: true, cancel_requested: false, active_turn: turn };
       const result = new Promise<void>((resolve, reject) => { pending = { turn, resolve, reject }; });
       await emit("session-engine-updated", engine);
@@ -236,6 +243,7 @@ Object.assign(window, { __DEMIURGE_SMOKE__: {
   settle,
   saveAnswer(text: string) { histories.get(lastRun!.session_id)!.push({ role: "assistant", content: text }); },
   calls: () => [...calls],
+  lastSubmission: () => structuredClone(lastSubmission),
   unknownCommands: () => [...unknownCommands],
   failPermissionRefresh() { permissionRefreshFails = true; },
   synthesisCount: () => synthesis.length,

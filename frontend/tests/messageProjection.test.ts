@@ -22,6 +22,24 @@ const identity = (responseId: string, turnId = "turn-goal", sessionId = "session
   responseId,
 });
 
+test("history retains scene context and hides Minecraft no-reply bodies without dropping tools", () => {
+  const { projection } = fixture();
+  const context = { scene: "minecraft", channel: "world", speaker: "Alex", is_primary_user: false, addressed_to_ai: true };
+  projection.replaceHistory("session-a", [
+    { role: "user", content: "Look at this scene", context, images: [{ mime_type: "image/png", data: "YWJj", name: "scene.png" }] },
+    { role: "assistant", content: "  [[MINECRAFT:NO_REPLY]]  ", tool_calls: [{
+      id: "observe", type: "function", function: { name: "read_file", arguments: '{"path":"scene.txt"}' },
+    }] },
+    { role: "tool", tool_call_id: "observe", content: "observed scene" },
+    { role: "assistant", content: "A normal reply" },
+  ]);
+  const items = projection.getSnapshot();
+  assert.deepEqual(items.map((item) => item.kind), ["user", "tool", "assistant"]);
+  assert.deepEqual(items[0], { id: items[0].id, kind: "user", text: "Look at this scene", context });
+  assert.equal(items[1].kind === "tool" && items[1].result, "observed scene");
+  assert.equal(items[2].kind === "assistant" && items[2].text, "A normal reply");
+});
+
 test("one engine turn projects both Goal answers and ignores duplicate completion", () => {
   const { projection, paint, pendingFrames } = fixture();
   projection.beginSubmission("question", "question");

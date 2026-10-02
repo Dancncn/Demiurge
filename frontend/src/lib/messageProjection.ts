@@ -315,10 +315,12 @@ function buildHistory(msgs: Message[], id: () => string): DisplayItem[] {
     if (m.role === "user") {
       const text = m.content ?? "";
       if (!text.startsWith("[Goal ")) {
-        out.push({ id: id(), kind: "user", text });
+        out.push({ id: id(), kind: "user", text, ...(m.context ? { context: m.context } : {}) });
       }
     } else if (m.role === "assistant") {
-      if (m.content) out.push({ id: id(), kind: "assistant", text: m.content, streaming: false });
+      if (m.content && m.content.trim().toLowerCase() !== "[[minecraft:no_reply]]") {
+        out.push({ id: id(), kind: "assistant", text: m.content, streaming: false });
+      }
       for (const tc of m.tool_calls ?? []) {
         let args: unknown = {};
         try {

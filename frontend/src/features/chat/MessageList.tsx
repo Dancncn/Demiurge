@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useRef, useState } from "react";
-import type { DisplayItem } from "@/lib/types";
+import type { ConversationContext, DisplayItem } from "@/lib/types";
 import { isScrollNearBottom } from "@/lib/agentEventReducer";
 import { Markdown } from "@/shared/components/Markdown";
 import ToolCard from "@/features/agent/ToolCard";
@@ -22,10 +22,27 @@ function ThinkingDots({ label }: { label: string }) {
   );
 }
 
-const UserMessage = memo(function UserMessage({ text }: { text: string }) {
+function contextLabel(context?: ConversationContext) {
+  if (!context) return "";
+  const scene = context.scene === "desktop_companion"
+    ? "Demiurge Desktop"
+    : context.scene === "minecraft"
+      ? "Minecraft"
+      : context.scene;
+  return [
+    scene,
+    context.channel,
+    context.speaker === "primary_user" ? "" : context.speaker,
+    context.is_primary_user ? "primary user" : "",
+  ].filter(Boolean).join(" · ");
+}
+
+const UserMessage = memo(function UserMessage({ text, context }: { text: string; context?: ConversationContext }) {
+  const label = contextLabel(context);
   return (
     <article className="cf-message-in flex justify-end">
       <div className="user-message-content">
+        {label && <div className="mb-1 text-right text-[10px] text-[#8a9099]">{label}</div>}
         <div className="app-user-message md-type-body-large whitespace-pre-wrap rounded-lg bg-[#eef1f5] px-4 py-2.5 text-[#202124]">
           {text}
         </div>
@@ -190,7 +207,7 @@ export function MessageList({ items, thinking, greeting, onRetry, onOpenFortune 
           <div className="space-y-5">
             {items.map((item) =>
               item.kind === "user" ? (
-                <UserMessage key={item.id} text={item.text} />
+                <UserMessage key={item.id} text={item.text} context={item.context} />
               ) : item.kind === "assistant" ? (
                 <AssistantMessage
                   key={item.id}

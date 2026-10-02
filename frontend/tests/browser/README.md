@@ -26,7 +26,11 @@ on an available port and closes the server, browser, and contexts on completion.
 Each scenario gets a fresh page and native fixture state. Unexpected IPC calls
 and page exceptions fail the check.
 
-The nine scenarios cover:
+The ten scenarios cover:
+
+- A real Composer image attachment is encoded and sent through multimodal IPC
+  with its image bytes, OCR context, and agent selection; the conversation can be
+  reloaded from history.
 
 - Two Goal answers under one engine turn, busy state between answers, and a late
   event from a completed answer.

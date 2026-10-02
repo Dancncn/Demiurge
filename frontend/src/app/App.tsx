@@ -43,7 +43,13 @@ import {
   PinIcon,
   VolumeIcon,
 } from "@/shared/components/Icons";
-import { attachmentKindLabel, buildAttachmentPrompt, formatAttachmentSize, type ProcessedAttachment } from "@/lib/fileProcessing";
+import {
+  attachmentKindLabel,
+  buildAttachmentPrompt,
+  formatAttachmentSize,
+  multimodalImages,
+  type ProcessedAttachment,
+} from "@/lib/fileProcessing";
 import { autoContextBudget } from "@/lib/providers";
 import { canDrawToday, isAutoPromptEnabled, isDismissedToday } from "@/lib/fortune";
 import { useI18n } from "@/lib/i18n";
@@ -68,6 +74,7 @@ const PREVIEW_SETTINGS: Settings = {
   base_url: "https://api.deepseek.com/v1",
   api_key: "",
   model: "deepseek-chat",
+  vision_model: "",
   reasoning_effort: "auto",
   model_routing: {
     enabled: false,
@@ -621,6 +628,7 @@ export default function App() {
   async function handleSend(textArg?: string, attachments: ProcessedAttachment[] = []) {
     const text = (textArg ?? input).trim();
     const attachmentPrompt = buildAttachmentPrompt(attachments);
+    const images = multimodalImages(attachments);
     if ((!text && !attachmentPrompt) || appBusy || navigationPendingRef.current) return false;
     const turnSessionId = activeIdRef.current;
     let completed = false;
@@ -631,7 +639,9 @@ export default function App() {
     confirmations.clear();
     setBusy(true);
     try {
-      if (selectedAgentNames.length) {
+      if (images.length) {
+        await api.sendMultimodal(prompt, images, selectedAgentNames);
+      } else if (selectedAgentNames.length) {
         await api.sendWithAgents(prompt, selectedAgentNames);
       } else {
         await api.send(prompt);

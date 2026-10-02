@@ -148,8 +148,29 @@ impl<'a> SessionTurnStore<'a> {
     }
 
     pub fn append_user_message(&self, text: String) {
+        self.append_user_message_with_images(text, Vec::new());
+    }
+
+    pub fn append_user_message_with_images(
+        &self,
+        text: String,
+        images: Vec<super::conversation::ImageAttachment>,
+    ) {
+        self.append_user_message_with_context(text, images, None);
+    }
+
+    pub fn append_user_message_with_context(
+        &self,
+        text: String,
+        images: Vec<super::conversation::ImageAttachment>,
+        context: Option<super::conversation::ConversationContext>,
+    ) {
         self.mutate_and_persist(|session| {
-            session.append_message(Message::user(text));
+            let message = match context {
+                Some(context) => Message::user_with_context(text, images, context),
+                None => Message::user_with_images(text, images),
+            };
+            session.append_message(message);
             if session.title == "新对话" {
                 session.title = store::derive_title(&session.messages);
             }

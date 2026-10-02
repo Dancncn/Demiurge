@@ -41,6 +41,55 @@ pub struct ToolExecutionRecord {
     pub affected_paths: Vec<String>,
 }
 
+/// A user-provided image kept with the conversation and translated into the
+/// provider-specific multimodal content format at the LLM boundary.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct ImageAttachment {
+    pub mime_type: String,
+    pub data: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+}
+
+/// Local conversation provenance. It is persisted with history but translated
+/// into a text marker only at the model boundary, so provider payload schemas
+/// never receive Demiurge-specific fields.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct ConversationContext {
+    pub scene: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speaker: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub is_primary_user: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub addressed_to_ai: Option<bool>,
+}
+
+impl ConversationContext {
+    pub fn model_marker(&self) -> String {
+        let mut fields = vec![format!("scene={}", self.scene)];
+        if let Some(channel) = self.channel.as_deref() {
+            fields.push(format!("channel={channel}"));
+        }
+        if let Some(speaker) = self.speaker.as_deref() {
+            fields.push(format!("speaker={speaker}"));
+        }
+        if let Some(value) = self.is_primary_user {
+            fields.push(format!("primary_user={value}"));
+        }
+        if let Some(value) = self.addressed_to_ai {
+            fields.push(format!("addressed_to_ai={value}"));
+        }
+        format!("[Conversation context: {}]", fields.join("; "))
+    }
+
+    pub fn annotate(&self, text: &str) -> String {
+        format!("{}\n{text}", self.model_marker())
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
 pub struct Message {
     pub role: String,
@@ -52,6 +101,12 @@ pub struct Message {
     pub tool_call_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub images: Vec<ImageAttachment>,
+    /// Local provenance metadata. Provider adapters use `model_content` to
+    /// expose it as an explicit context marker without leaking custom fields.
+    #[serde(default, skip_serializing)]
+    pub context: Option<ConversationContext>,
     /// Local execution metadata. Normal message serialization intentionally
     /// omits it so provider payloads remain protocol-compatible. Session
     /// persistence and history views add it explicitly through `history_value`.
@@ -70,6 +125,10 @@ pub struct HistoryMessage {
     pub tool_call_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub images: Vec<ImageAttachment>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context: Option<ConversationContext>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_execution: Option<ToolExecutionRecord>,
 }
@@ -82,6 +141,8 @@ impl From<&Message> for HistoryMessage {
             tool_calls: message.tool_calls.clone(),
             tool_call_id: message.tool_call_id.clone(),
             name: message.name.clone(),
+            images: message.images.clone(),
+            context: message.context.clone(),
             tool_execution: message.tool_execution.clone(),
         }
     }
@@ -92,6 +153,27 @@ impl Message {
         Message {
             role: "user".into(),
             content: Some(text.into()),
+            ..Default::default()
+        }
+    }
+    pub fn user_with_images(text: impl Into<String>, images: Vec<ImageAttachment>) -> Self {
+        Message {
+            role: "user".into(),
+            content: Some(text.into()),
+            images,
+            ..Default::default()
+        }
+    }
+    pub fn user_with_context(
+        text: impl Into<String>,
+        images: Vec<ImageAttachment>,
+        context: ConversationContext,
+    ) -> Self {
+        Message {
+            role: "user".into(),
+            content: Some(text.into()),
+            images,
+            context: Some(context),
             ..Default::default()
         }
     }
@@ -144,12 +226,25 @@ impl Message {
 
     pub fn history_value(&self) -> serde_json::Value {
         let mut value = serde_json::to_value(self).unwrap_or(serde_json::Value::Null);
+        if let (Some(object), Some(context)) = (value.as_object_mut(), &self.context) {
+            if let Ok(context) = serde_json::to_value(context) {
+                object.insert("context".to_string(), context);
+            }
+        }
         if let (Some(object), Some(execution)) = (value.as_object_mut(), &self.tool_execution) {
             if let Ok(execution) = serde_json::to_value(execution) {
                 object.insert("tool_execution".to_string(), execution);
             }
         }
         value
+    }
+
+    pub fn model_content(&self) -> Option<String> {
+        let content = self.content.as_deref()?;
+        Some(match &self.context {
+            Some(context) if self.role == "user" => context.annotate(content),
+            _ => content.to_string(),
+        })
     }
 }
 
@@ -196,5 +291,42 @@ mod tests {
         )
         .unwrap();
         assert!(message.tool_execution.is_none());
+        assert!(message.images.is_empty());
+        assert!(message.context.is_none());
+    }
+
+    #[test]
+    fn image_messages_round_trip_in_session_history() {
+        let message = Message::user_with_images(
+            "describe this",
+            vec![ImageAttachment {
+                mime_type: "image/png".to_string(),
+                data: "YWJj".to_string(),
+                name: Some("sample.png".to_string()),
+            }],
+        );
+        let value = serde_json::to_value(&message).unwrap();
+        assert_eq!(value["images"][0]["mime_type"], "image/png");
+        let restored: Message = serde_json::from_value(value).unwrap();
+        assert_eq!(restored, message);
+    }
+
+    #[test]
+    fn conversation_context_is_persisted_but_not_sent_as_a_provider_field() {
+        let message = Message::user_with_context(
+            "你好",
+            Vec::new(),
+            ConversationContext {
+                scene: "minecraft".to_string(),
+                channel: Some("public".to_string()),
+                speaker: Some("Alex".to_string()),
+                is_primary_user: Some(false),
+                addressed_to_ai: Some(true),
+            },
+        );
+        let provider_value = serde_json::to_value(&message).unwrap();
+        assert!(provider_value.get("context").is_none());
+        assert_eq!(message.history_value()["context"]["speaker"], "Alex");
+        assert!(message.model_content().unwrap().contains("speaker=Alex"));
     }
 }

@@ -2,6 +2,12 @@ export type AttachmentKind = "text" | "image" | "pdf" | "document" | "spreadshee
 
 export type AttachmentStatus = "ready" | "error";
 
+export interface MultimodalImageInput {
+  mime_type: string;
+  data: string;
+  name?: string;
+}
+
 export interface ProcessedAttachment {
   id: string;
   name: string;
@@ -11,6 +17,7 @@ export interface ProcessedAttachment {
   status: AttachmentStatus;
   content?: string;
   previewUrl?: string;
+  imageInput?: MultimodalImageInput;
   note?: string;
   error?: string;
   truncated?: boolean;
@@ -54,6 +61,7 @@ function loadZip() {
 
 const MAX_FILE_CHARS = 28_000;
 const MAX_PDF_PAGES = 80;
+const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 
 const TEXT_EXTENSIONS = new Set([
   "txt",
@@ -155,6 +163,12 @@ export function buildAttachmentPrompt(attachments: ProcessedAttachment[]) {
   return `\n\nAttached files processed by Demiurge:\n${blocks.join("\n\n")}`;
 }
 
+export function multimodalImages(attachments: ProcessedAttachment[]): MultimodalImageInput[] {
+  return attachments.flatMap((attachment) =>
+    attachment.status === "ready" && attachment.imageInput ? [attachment.imageInput] : [],
+  );
+}
+
 async function processFile(
   file: File,
   options: { extractImageText?: ImageTextExtractor },
@@ -177,7 +191,17 @@ async function processFile(
       };
     }
     if (kind === "image") {
+      const mime = supportedImageMime(file);
+      if (!mime) throw new Error("Native image input supports JPEG, PNG, GIF and WebP.");
+      if (file.size <= 0 || file.size > MAX_IMAGE_BYTES) {
+        throw new Error(`Images must be smaller than ${formatAttachmentSize(MAX_IMAGE_BYTES)}.`);
+      }
       const previewUrl = URL.createObjectURL(file);
+      const imageInput: MultimodalImageInput = {
+        mime_type: mime,
+        data: await fileToBase64(file),
+        name: file.name,
+      };
       if (options.extractImageText) {
         try {
           const bytes = Array.from(new Uint8Array(await file.arrayBuffer()));
@@ -186,15 +210,17 @@ async function processFile(
             ...base,
             status: "ready",
             previewUrl,
+            imageInput,
             content: clip(text),
-            note: "OCR text extracted from image.",
+            note: "Image will be sent to the current vision model; OCR text was also extracted.",
           };
         } catch (error) {
           return {
             ...base,
             status: "ready",
             previewUrl,
-            note: `Image preview is available. OCR did not run: ${
+            imageInput,
+            note: `Image will be sent to the current vision model. OCR did not run: ${
               error instanceof Error ? error.message : String(error)
             }`,
           };
@@ -204,7 +230,8 @@ async function processFile(
         ...base,
         status: "ready",
         previewUrl,
-        note: "Image preview is available. OCR integration is not configured.",
+        imageInput,
+        note: "Image will be sent directly to the current vision model.",
       };
     }
     if (kind === "pdf") {
@@ -247,6 +274,33 @@ async function processFile(
       error: error instanceof Error ? error.message : String(error),
     };
   }
+}
+
+function supportedImageMime(file: File) {
+  const mime = file.type.trim().toLowerCase();
+  if (["image/jpeg", "image/png", "image/gif", "image/webp"].includes(mime)) return mime;
+  const fallback: Record<string, string> = {
+    jpg: "image/jpeg",
+    jpeg: "image/jpeg",
+    png: "image/png",
+    gif: "image/gif",
+    webp: "image/webp",
+  };
+  return fallback[extension(file.name)] ?? "";
+}
+
+function fileToBase64(file: File) {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(reader.error ?? new Error("Unable to read image."));
+    reader.onload = () => {
+      const result = String(reader.result ?? "");
+      const comma = result.indexOf(",");
+      if (comma < 0) reject(new Error("Unable to encode image."));
+      else resolve(result.slice(comma + 1));
+    };
+    reader.readAsDataURL(file);
+  });
 }
 
 function detectKind(file: File): AttachmentKind {

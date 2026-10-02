@@ -117,9 +117,13 @@ pub fn build_openai_body_with_structured_output(
     profile: ProviderProfile,
     structured_output: Option<&StructuredOutputRequest>,
 ) -> Result<Value, String> {
+    let provider_messages = messages
+        .iter()
+        .map(openai_message_value)
+        .collect::<Result<Vec<_>, _>>()?;
     let mut body = json!({
         "model": cfg.model,
-        "messages": messages,
+        "messages": provider_messages,
         "stream": profile.supports_streaming,
     });
     let max_output_tokens = profile.effective_reserved_output_tokens(cfg);
@@ -153,6 +157,40 @@ pub fn build_openai_body_with_structured_output(
         });
     }
     Ok(body)
+}
+
+fn openai_message_value(message: &Message) -> Result<Value, String> {
+    if message.role != "user" {
+        return serde_json::to_value(message).map_err(|error| error.to_string());
+    }
+
+    let model_content = message.model_content();
+    if message.images.is_empty() {
+        let mut value = serde_json::to_value(message).map_err(|error| error.to_string())?;
+        if let Some(object) = value.as_object_mut() {
+            match model_content {
+                Some(content) => object.insert("content".to_string(), json!(content)),
+                None => object.remove("content"),
+            };
+        }
+        return Ok(value);
+    }
+
+    let mut content = Vec::with_capacity(message.images.len() + 1);
+    if let Some(text) = model_content.as_deref() {
+        if !text.is_empty() {
+            content.push(json!({ "type": "text", "text": text }));
+        }
+    }
+    for image in &message.images {
+        content.push(json!({
+            "type": "image_url",
+            "image_url": {
+                "url": format!("data:{};base64,{}", image.mime_type, image.data)
+            }
+        }));
+    }
+    Ok(json!({ "role": "user", "content": content }))
 }
 
 #[derive(Default)]
@@ -333,6 +371,7 @@ fn parse_openai_usage(v: &Value) -> Option<Usage> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agent::conversation::{ConversationContext, ImageAttachment};
     use crate::store::{ProviderKind, ReasoningEffort, Settings};
 
     fn settings(provider: ProviderKind, api_key: &str) -> Settings {
@@ -356,6 +395,58 @@ mod tests {
         assert_eq!(body["stream"], true);
         assert!(body["tools"].is_array());
         assert_eq!(body["tool_choice"], "auto");
+    }
+
+    #[test]
+    fn openai_body_converts_images_to_content_parts() {
+        let body = build_openai_body(
+            &settings(ProviderKind::OpenAiCompatible, "sk-test"),
+            &[Message::user_with_images(
+                "what is this?",
+                vec![ImageAttachment {
+                    mime_type: "image/png".to_string(),
+                    data: "YWJj".to_string(),
+                    name: Some("sample.png".to_string()),
+                }],
+            )],
+            &json!([]),
+            ProviderProfile::openai_compatible(),
+        )
+        .unwrap();
+
+        assert_eq!(body["messages"][0]["content"][0]["type"], "text");
+        assert_eq!(body["messages"][0]["content"][1]["type"], "image_url");
+        assert_eq!(
+            body["messages"][0]["content"][1]["image_url"]["url"],
+            "data:image/png;base64,YWJj"
+        );
+        assert!(body["messages"][0].get("images").is_none());
+    }
+
+    #[test]
+    fn openai_body_includes_local_conversation_provenance_in_user_text() {
+        let message = Message::user_with_context(
+            "你好",
+            Vec::new(),
+            ConversationContext {
+                scene: "minecraft".to_string(),
+                channel: Some("public".to_string()),
+                speaker: Some("Alex".to_string()),
+                is_primary_user: Some(false),
+                addressed_to_ai: Some(true),
+            },
+        );
+        let body = build_openai_body(
+            &settings(ProviderKind::OpenAiCompatible, "sk-test"),
+            &[message],
+            &json!([]),
+            ProviderProfile::openai_compatible(),
+        )
+        .unwrap();
+        assert!(body["messages"][0]["content"]
+            .as_str()
+            .unwrap()
+            .contains("speaker=Alex"));
     }
 
     #[test]

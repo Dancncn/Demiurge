@@ -55,6 +55,9 @@ pub async fn dispatch(
                         workflow_run_id: None,
                         agent_names: Vec::new(),
                         token_budget: None,
+                        user_images: Vec::new(),
+                        conversation_context: None,
+                        silent_assistant_marker: None,
                     },
                 )
                 .await,
@@ -149,6 +152,9 @@ pub async fn dispatch(
                     workflow_run_id: Some(run_id),
                     agent_names: Vec::new(),
                     token_budget: None,
+                    user_images: Vec::new(),
+                    conversation_context: None,
+                    silent_assistant_marker: None,
                 },
             )
             .await,
@@ -174,6 +180,9 @@ pub async fn dispatch(
                     workflow_run_id: Some(run_id),
                     agent_names: Vec::new(),
                     token_budget: None,
+                    user_images: Vec::new(),
+                    conversation_context: None,
+                    silent_assistant_marker: None,
                 },
             )
             .await,

@@ -16,6 +16,7 @@ use crate::store::{ModelTier, ProviderKind, Settings};
 use crate::{llm, AppState};
 
 const MAX_FAILOVER_ATTEMPTS: usize = 5;
+const DEEPSEEK_DEFAULT_VISION_MODEL: &str = "deepseek-v4-flash-vision-exp";
 
 pub struct RoutedTurn {
     pub turn: llm::AssistantTurn,
@@ -103,6 +104,21 @@ pub fn resolve_model_for_tier(
     } else {
         settings.model.clone()
     }
+}
+
+pub fn resolve_model_for_messages(settings: &Settings, messages: &[Message]) -> String {
+    if messages.iter().all(|message| message.images.is_empty()) {
+        return settings.model.clone();
+    }
+
+    let configured = settings.vision_model.trim();
+    if !configured.is_empty() {
+        return configured.to_string();
+    }
+    if settings.provider == ProviderKind::DeepSeek {
+        return DEEPSEEK_DEFAULT_VISION_MODEL.to_string();
+    }
+    settings.model.clone()
 }
 
 pub fn route_candidates(
@@ -371,6 +387,7 @@ fn usage_status(result: &Result<llm::AssistantTurn, String>) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agent::conversation::ImageAttachment;
     use crate::store::{ModelRoutingConfig, Settings};
 
     #[test]
@@ -426,5 +443,36 @@ mod tests {
             settings.model
         );
         let _ = ModelRoutingConfig::default();
+    }
+
+    #[test]
+    fn image_turns_use_the_configured_vision_model() {
+        let mut settings = Settings::default();
+        settings.model = "deepseek-v4-flash".to_string();
+        settings.vision_model = "deepseek-v4-flash-vision-exp".to_string();
+        let text_only = vec![Message::user("hello")];
+        let with_image = vec![Message::user_with_images(
+            "what is this?",
+            vec![ImageAttachment {
+                mime_type: "image/png".to_string(),
+                data: "YWJj".to_string(),
+                name: Some("frame.png".to_string()),
+            }],
+        )];
+
+        assert_eq!(
+            resolve_model_for_messages(&settings, &text_only),
+            settings.model
+        );
+        assert_eq!(
+            resolve_model_for_messages(&settings, &with_image),
+            "deepseek-v4-flash-vision-exp"
+        );
+
+        settings.vision_model.clear();
+        assert_eq!(
+            resolve_model_for_messages(&settings, &with_image),
+            "deepseek-v4-flash-vision-exp"
+        );
     }
 }

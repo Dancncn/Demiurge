@@ -15,6 +15,16 @@ export interface Message {
   tool_calls?: ToolCall[];
   tool_call_id?: string;
   name?: string;
+  images?: Array<{ mime_type: string; data: string; name?: string }>;
+  context?: ConversationContext;
+}
+
+export interface ConversationContext {
+  scene: string;
+  channel?: string;
+  speaker?: string;
+  is_primary_user?: boolean;
+  addressed_to_ai?: boolean;
 }
 
 export type ProviderKind =
@@ -79,6 +89,7 @@ export interface Settings {
   base_url: string;
   api_key: string;
   model: string;
+  vision_model: string;
   current_pack: string;
   current_pet: string;
   max_context_chars: number;
@@ -1371,7 +1382,7 @@ export interface AssistantErrorEvent {
 
 // ---- 前端聊天展示项 ----
 export type DisplayItem =
-  | { id: string; kind: "user"; text: string }
+  | { id: string; kind: "user"; text: string; context?: ConversationContext }
   | {
       id: string;
       kind: "assistant";

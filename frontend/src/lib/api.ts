@@ -73,11 +73,14 @@ import type {
   WorkspaceState,
   WorkflowPanelState,
 } from "@/lib/types";
+import type { MultimodalImageInput } from "@/lib/fileProcessing";
 
 // ---- 命令 ----
 export const send = (text: string) => invoke<void>("send", { text });
 export const sendWithAgents = (text: string, agentNames: string[]) =>
   invoke<void>("send_with_agents", { text, agentNames });
+export const sendMultimodal = (text: string, images: MultimodalImageInput[], agentNames: string[] = []) =>
+  invoke<void>("send_multimodal", { text, images, agentNames });
 export const interrupt = () => invoke<void>("interrupt");
 export const sessionEngineState = () => invoke<SessionEnginePanelState>("session_engine_state");
 export const respondConfirm = (id: string, allow: boolean, scope: PermissionScope) =>

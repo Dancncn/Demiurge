@@ -56,6 +56,8 @@ import { isAutoPromptEnabled, setAutoPromptEnabled } from "@/lib/fortune";
 import { pickFolder, type FolderPickOutcome } from "@/lib/folderPicker";
 import IntegrationCenter from "@/features/agent/IntegrationCenter";
 import { usePermissionSettings } from "./PermissionSettings";
+import { MinecraftSettingsPanel } from "@/features/settings/MinecraftSettingsPanel";
+import { findMinecraftMcpServer, MINECRAFT_MCP_SERVER_NAME } from "@/features/settings/minecraftMcpConfig";
 
 interface Props {
   open: boolean;
@@ -82,6 +84,7 @@ export type SettingsTab =
   | "files"
   | "context"
   | "tools"
+  | "minecraft"
   | "voice"
   | "advanced"
   | "integrations";
@@ -1744,6 +1747,14 @@ export default function SettingsDialog({
       icon: <WrenchIcon size={18} />,
     },
     {
+      id: "minecraft",
+      label: t("settings.nav.minecraft"),
+      detail: findMinecraftMcpServer(form.mcp_servers)?.enabled
+        ? t("settings.nav.detail.enabled")
+        : t("settings.nav.detail.disabled"),
+      icon: <SparklesIcon size={18} />,
+    },
+    {
       id: "voice",
       label: t("settings.nav.voice"),
       detail: form.voice_enabled ? t("settings.nav.detail.enabled") : t("settings.nav.detail.disabled"),
@@ -2026,6 +2037,7 @@ export default function SettingsDialog({
                                 set("provider", provider.value);
                                 set("base_url", provider.baseUrl);
                                 set("model", provider.model);
+                                set("vision_model", "");
                               }}
                               className={`cf-press flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left ${
                                 selected ? "bg-white shadow-sm" : "hover:bg-white/70"
@@ -2126,6 +2138,14 @@ export default function SettingsDialog({
                                 )}
                               </div>
                             )}
+                          </Field>
+                          <Field label={t("settings.provider.visionModel")} help={t("settings.provider.visionModelHelp")}>
+                            <input
+                              className={inputCls}
+                              value={form.vision_model}
+                              placeholder={form.provider === "deepseek" ? "deepseek-v4-flash-vision-exp" : t("settings.provider.visionModelPlaceholder")}
+                              onChange={(e) => set("vision_model", e.target.value)}
+                            />
                           </Field>
                           <Field
                             label={t("settings.provider.effort")}
@@ -4469,6 +4489,18 @@ export default function SettingsDialog({
                   </Section>
                   {permissionSettings}
                 </>
+              )}
+
+              {activeTab === "minecraft" && (
+                <Section title={t("settings.minecraft.title")} description={t("settings.minecraft.description")}>
+                  <MinecraftSettingsPanel
+                    servers={form.mcp_servers}
+                    runtime={mcpState?.servers.find((server) => server.name === MINECRAFT_MCP_SERVER_NAME)}
+                    onChange={(servers) => set("mcp_servers", servers)}
+                    onRefresh={refreshMcp}
+                    isRefreshing={mcpBusy}
+                  />
+                </Section>
               )}
 
               {activeTab === "voice" && (

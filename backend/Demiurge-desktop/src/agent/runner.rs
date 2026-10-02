@@ -5,7 +5,7 @@ use std::sync::atomic::Ordering;
 use serde_json::json;
 use tauri::AppHandle;
 
-use super::conversation::Message;
+use super::conversation::{ImageAttachment, Message};
 use super::{
     budget, context, custom, goal, memory, prompt, session_engine, summary, workflow_journal,
 };
@@ -87,15 +87,19 @@ pub struct TurnOptions {
     pub workflow_run_id: Option<String>,
     pub agent_names: Vec<String>,
     pub token_budget: Option<budget::TokenBudgetState>,
+    pub user_images: Vec<ImageAttachment>,
+    pub conversation_context: Option<super::conversation::ConversationContext>,
+    /// A model-only control reply that should be persisted for continuity but
+    /// represented as an empty completion in the desktop projection.
+    pub silent_assistant_marker: Option<String>,
 }
 
-pub async fn run_turn(
-    app: &AppHandle,
-    state: &crate::AppState,
-    session_id: &str,
-    user_text: String,
-) -> Result<(), String> {
-    run_turn_with_options(app, state, session_id, user_text, TurnOptions::default()).await
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum TurnOutcome {
+    Completed { assistant_text: String },
+    Interrupted,
+    BudgetExceeded,
+    StepLimitReached,
 }
 
 pub async fn run_turn_with_options(
@@ -105,6 +109,18 @@ pub async fn run_turn_with_options(
     user_text: String,
     options: TurnOptions,
 ) -> Result<(), String> {
+    run_turn_with_result(app, state, session_id, user_text, options)
+        .await
+        .map(|_| ())
+}
+
+pub(crate) async fn run_turn_with_result(
+    app: &AppHandle,
+    state: &crate::AppState,
+    session_id: &str,
+    user_text: String,
+    options: TurnOptions,
+) -> Result<TurnOutcome, String> {
     if state.sessions.lock().unwrap().get(session_id).is_none() {
         return Err("The target session no longer exists.".to_string());
     }
@@ -164,6 +180,11 @@ pub async fn run_turn_with_options(
         .clone()
         .unwrap_or_else(|| user_text.clone());
     let original_user_text = stored_user_text.clone();
+    let memory_user_text = options
+        .conversation_context
+        .as_ref()
+        .map(|context| context.annotate(&original_user_text))
+        .unwrap_or_else(|| original_user_text.clone());
     if let Some(run_id) = &options.workflow_run_id {
         let _ = workflow_journal::append(
             state,
@@ -184,12 +205,16 @@ pub async fn run_turn_with_options(
     let push = |msg: Message| session_store.append_message(msg);
 
     // 追加用户消息；若标题仍是默认值，用首条用户消息生成标题
-    session_store.append_user_message(stored_user_text.clone());
+    session_store.append_user_message_with_context(
+        stored_user_text.clone(),
+        options.user_images.clone(),
+        options.conversation_context.clone(),
+    );
 
     for _step in 0..max_steps {
         if state.cancel.load(Ordering::Relaxed) {
             events.assistant_interrupted();
-            return Ok(());
+            return Ok(TurnOutcome::Interrupted);
         }
 
         // 组装本轮请求消息：system + token-aware 裁剪后的历史。若裁剪掉旧消息，先滚动更新会话摘要。
@@ -203,7 +228,7 @@ pub async fn run_turn_with_options(
                 &settings,
                 &persona_text,
                 summary,
-                &original_user_text,
+                &memory_user_text,
             );
             if settings.permission_mode == store::PermissionMode::Plan {
                 apply_system_overlay(&mut system, Some(plan_mode_overlay()));
@@ -287,7 +312,7 @@ pub async fn run_turn_with_options(
         // normal stop into another provider request or an assistant error.
         if state.cancel.load(Ordering::Relaxed) {
             events.assistant_interrupted();
-            return Ok(());
+            return Ok(TurnOutcome::Interrupted);
         }
 
         if compaction_ready {
@@ -305,6 +330,15 @@ pub async fn run_turn_with_options(
             v.extend(msgs);
             v
         };
+        let contains_images = full.iter().any(|message| !message.images.is_empty());
+        let primary_model = crate::model_routing::resolve_model_for_messages(&settings, &full);
+        // A provider-local text fallback may not understand images. Fail clearly
+        // instead of silently retrying the same multimodal payload on one.
+        let fallback_models: &[String] = if contains_images {
+            &[]
+        } else {
+            &settings.model_routing.fallback_models
+        };
 
         if turn_budget
             .as_ref()
@@ -321,7 +355,7 @@ pub async fn run_turn_with_options(
                 );
             }
             events.assistant_done(message);
-            return Ok(());
+            return Ok(TurnOutcome::BudgetExceeded);
         }
 
         events.assistant_start();
@@ -334,8 +368,8 @@ pub async fn run_turn_with_options(
                 settings: &settings,
                 messages: &full,
                 tools: &tools_schema,
-                primary_model: &settings.model,
-                fallback_models: &settings.model_routing.fallback_models,
+                primary_model: &primary_model,
+                fallback_models,
                 cancel: &state.cancel,
                 request_cancel: None,
                 session_id: &sid,
@@ -367,7 +401,7 @@ pub async fn run_turn_with_options(
             Err(err) => {
                 if state.cancel.load(Ordering::Relaxed) {
                     events.assistant_interrupted();
-                    return Ok(());
+                    return Ok(TurnOutcome::Interrupted);
                 }
                 custom::record_runtime_error(state, &selected_agents.definitions, &err);
                 events.assistant_error(assistant_error_payload(&err));
@@ -405,7 +439,7 @@ pub async fn run_turn_with_options(
         let exact_usage_recorded = goal::add_provider_usage(state, &sid, turn.usage.as_ref());
 
         // 被用户中断：保留已生成的部分正文
-        if turn.finish_reason == "interrupted" {
+        if turn.finish_reason == "interrupted" || state.cancel.load(Ordering::Relaxed) {
             if !turn.content.is_empty() {
                 push(Message::assistant_text(turn.content));
             }
@@ -418,7 +452,7 @@ pub async fn run_turn_with_options(
                 );
             }
             events.assistant_interrupted();
-            return Ok(());
+            return Ok(TurnOutcome::Interrupted);
         }
 
         // 没有工具调用 → 最终答复
@@ -441,7 +475,10 @@ pub async fn run_turn_with_options(
                     json!({ "assistant_text": assistant_text.clone() }),
                 );
             }
-            events.assistant_done(assistant_text.clone());
+            events.assistant_done(assistant_completion_event_text(
+                &assistant_text,
+                options.silent_assistant_marker.as_deref(),
+            ));
 
             let sandbox_dir = state.sandbox_dir.lock().unwrap().clone();
             let packs_dir = state.packs_dir.lock().unwrap().clone();
@@ -453,8 +490,9 @@ pub async fn run_turn_with_options(
                 &sandbox_dir,
                 &packs_dir,
                 &settings.current_pack,
-                &original_user_text,
+                &memory_user_text,
                 &assistant_text,
+                options.conversation_context.as_ref(),
                 &state.cancel,
             )
             .await
@@ -468,12 +506,13 @@ pub async fn run_turn_with_options(
                 state,
                 &data_dir,
                 &sid,
-                &original_user_text,
+                &memory_user_text,
                 &assistant_text,
+                options.conversation_context.as_ref(),
                 &state.cancel,
             )
             .await;
-            return Ok(());
+            return Ok(TurnOutcome::Completed { assistant_text });
         }
 
         // 有工具调用 → 先把带 tool_calls 的 assistant 消息入历史
@@ -517,7 +556,7 @@ pub async fn run_turn_with_options(
                 );
             }
             events.assistant_interrupted();
-            return Ok(());
+            return Ok(TurnOutcome::Interrupted);
         }
         // 继续下一轮，让模型基于工具结果作答
     }
@@ -532,7 +571,7 @@ pub async fn run_turn_with_options(
             json!({ "reason": "max_steps" }),
         );
     }
-    Ok(())
+    Ok(TurnOutcome::StepLimitReached)
 }
 
 fn plan_mode_overlay() -> &'static str {
@@ -550,6 +589,15 @@ fn apply_system_overlay(system: &mut String, overlay: Option<&str>) {
     system.push_str(overlay.trim());
 }
 
+fn assistant_completion_event_text(assistant_text: &str, silent_marker: Option<&str>) -> String {
+    if silent_marker.is_some_and(|marker| assistant_text.trim().eq_ignore_ascii_case(marker.trim()))
+    {
+        String::new()
+    } else {
+        assistant_text.to_string()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -564,5 +612,20 @@ mod tests {
 
         let unknown = empty_assistant_response_message("provider_blank", "en");
         assert!(unknown.contains("finish_reason: provider_blank"));
+    }
+
+    #[test]
+    fn minecraft_no_reply_marker_stays_out_of_desktop_projection() {
+        assert_eq!(
+            assistant_completion_event_text(
+                " [[MINECRAFT:NO_REPLY]] ",
+                Some("[[minecraft:no_reply]]")
+            ),
+            ""
+        );
+        assert_eq!(
+            assistant_completion_event_text("我来帮你。", Some("[[minecraft:no_reply]]")),
+            "我来帮你。"
+        );
     }
 }

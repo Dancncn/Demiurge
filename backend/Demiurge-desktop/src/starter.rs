@@ -47,6 +47,7 @@ pub(crate) fn run() {
         .invoke_handler(tauri::generate_handler![
             send,
             send_with_agents,
+            send_multimodal,
             interrupt,
             session_engine_state,
             respond_confirm,
@@ -241,6 +242,12 @@ fn setup_runtime(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>>
     }
     agent::workflow_runtime::hydrate_persisted_runs(state.inner());
     pomodoro::hydrate(app.handle().clone(), state.inner());
+    crate::biz::minecraft::start_event_loop(app.handle().clone());
+    let mcp_app = app.handle().clone();
+    tauri::async_runtime::spawn(async move {
+        let state = mcp_app.state::<AppState>();
+        crate::mcp::ensure_initialized(state.inner()).await;
+    });
     state.persist_sessions();
     Ok(())
 }
