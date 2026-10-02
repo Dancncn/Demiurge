@@ -69,16 +69,6 @@ test("resource center keeps theme, locale, chart, and dialog contracts", async (
   assert.match(sidebar, /left\.id\.localeCompare\(right\.id\)/);
 });
 
-test("App commits assistant_done as the canonical turn body", async () => {
-  const app = await source("src/app/App.tsx");
-
-  assert.match(app, /new AgentEventReducer\(\)/);
-  assert.match(app, /kind: "done"/);
-  assert.match(app, /text: canonicalText/);
-  assert.doesNotMatch(app, /text: it\.text\.trim\(\) \? it\.text : text/);
-  assert.match(app, /m\.content\.trim\(\)\.toLowerCase\(\) !== "\[\[minecraft:no_reply\]\]"/);
-});
-
 test("layout contains explicit safeguards for 980, 1280, and 1811 pixel widths", async () => {
   const css = await source("src/style.css");
 

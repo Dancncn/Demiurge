@@ -1212,6 +1212,8 @@ export interface TurnEventContext {
 export interface AgentEventEnvelope<T = unknown> {
   kind: string;
   turn?: TurnEventContext;
+  /** Absent only on legacy backends; one engine turn may contain many answers. */
+  response_id?: string;
   timestamp: number;
   payload: T;
 }
@@ -1347,6 +1349,8 @@ export interface ToolSourceQuality {
 export interface ConfirmRequestEvent {
   id: string;
   session_id: string;
+  /** Requests without engine ownership are never presented as actionable. */
+  turn_id?: string;
   tool: string;
   args: string; // 已 pretty 的 JSON 字符串
   description?: string;

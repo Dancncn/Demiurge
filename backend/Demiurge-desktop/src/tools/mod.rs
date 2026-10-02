@@ -959,22 +959,39 @@ pub async fn execute_subagent_readonly(
     name: &str,
     args: Value,
 ) -> Result<String, String> {
+    let session_id = crate::agent::session_engine::execution_session_id(state);
+    let execution =
+        crate::agent::execution_context::ExecutionContext::for_session(state, &session_id)?;
+    execute_subagent_readonly_in_context(state, &execution, name, args).await
+}
+
+pub async fn execute_subagent_readonly_in_context(
+    state: &crate::AppState,
+    execution: &crate::agent::execution_context::ExecutionContext,
+    name: &str,
+    args: Value,
+) -> Result<String, String> {
+    execution.validate(state)?;
+    let root = &execution.workspace_root;
     if !SUBAGENT_READONLY_TOOL_NAMES.contains(&name) {
         return Err(format!("子 Agent 不允许使用工具：{name}"));
     }
 
     match name {
-        "read_file" => read_file::run(state, args),
-        "list_dir" => list_dir::run(state, args),
-        "glob" => glob::run(state, args),
-        "grep" => grep::run(state, args),
-        "git_status" => git_status::run(state, args),
+        "read_file" => read_file::run_in_workspace(root, args),
+        "list_dir" => list_dir::run_in_workspace(root, args),
+        "glob" => glob::run_in_workspace(root, args),
+        "grep" => grep::run_in_workspace(root, args),
+        "git_status" => git_status::run_in_workspace(root),
         "system_info" => system_info::run(),
         "http_get" => http_get::run(state, args).await,
         "web_fetch" => web_fetch::run(state, args).await,
         "web_search" => web_search::run(state, args).await,
-        "package_scripts" => package_scripts::run(state, args),
-        "context_inspect" => context_tools::inspect(state),
+        "package_scripts" => package_scripts::run_in_workspace(root, args),
+        "context_inspect" => serde_json::to_string_pretty(
+            &crate::agent::collapse::inspect_session(state, &execution.session_id),
+        )
+        .map_err(|e| e.to_string()),
         other => Err(format!("只读子 Agent 工具未接入执行分支：{other}")),
     }
 }

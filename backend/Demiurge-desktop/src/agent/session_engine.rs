@@ -74,6 +74,8 @@ where
 {
     pub kind: &'static str,
     pub turn: Option<TurnEventContext>,
+    /// Identifies one answer; Goal continuations share a turn but not an answer.
+    pub response_id: String,
     pub timestamp: u64,
     pub payload: T,
 }
@@ -261,9 +263,39 @@ impl<'a> SessionTurnStore<'a> {
 }
 
 #[derive(Clone)]
+struct ResponseEventIdentity {
+    turn: Option<TurnEventContext>,
+    response_id: String,
+}
+
+impl ResponseEventIdentity {
+    fn new(turn: Option<TurnEventContext>) -> Self {
+        Self {
+            turn,
+            response_id: format!(
+                "response_{}",
+                store::new_session_id().trim_start_matches("s_")
+            ),
+        }
+    }
+
+    fn context(&self, current: Option<TurnEventContext>) -> Option<TurnEventContext> {
+        let mut captured = self.turn.clone()?;
+        // Status may advance to cancelling; ownership never follows a new turn.
+        if let Some(current) = current {
+            if current.id == captured.id && current.session_id == captured.session_id {
+                captured.status = current.status;
+            }
+        }
+        Some(captured)
+    }
+}
+
+#[derive(Clone)]
 pub struct TurnEventEmitter<'a> {
     app: AppHandle,
     state: &'a crate::AppState,
+    identity: ResponseEventIdentity,
 }
 
 impl<'a> TurnEventEmitter<'a> {
@@ -271,6 +303,7 @@ impl<'a> TurnEventEmitter<'a> {
         TurnEventEmitter {
             app: app.clone(),
             state,
+            identity: ResponseEventIdentity::new(current_turn_context(state)),
         }
     }
 
@@ -321,7 +354,8 @@ impl<'a> TurnEventEmitter<'a> {
             "agent-event",
             AgentEventEnvelope {
                 kind,
-                turn: current_turn_context(self.state),
+                turn: self.identity.context(current_turn_context(self.state)),
+                response_id: self.identity.response_id.clone(),
                 timestamp: store::now_millis(),
                 payload,
             },
@@ -485,6 +519,55 @@ fn preview(input: &str) -> String {
 mod tests {
     use super::*;
     use std::sync::{mpsc, Arc};
+
+    #[test]
+    fn answers_get_distinct_identity_while_emitter_clones_keep_the_same_answer() {
+        let turn = TurnEventContext {
+            id: "turn_goal".to_string(),
+            session_id: "session_a".to_string(),
+            status: TurnStatus::Running,
+        };
+        let first = ResponseEventIdentity::new(Some(turn.clone()));
+        let cloned = first.clone();
+        let continuation = ResponseEventIdentity::new(Some(turn));
+        assert_eq!(first.response_id, cloned.response_id);
+        assert_ne!(first.response_id, continuation.response_id);
+        assert_eq!(
+            first.turn.as_ref().unwrap().id,
+            continuation.turn.as_ref().unwrap().id
+        );
+    }
+
+    #[test]
+    fn delayed_emitter_keeps_its_owner_after_engine_navigation_or_completion() {
+        let original = TurnEventContext {
+            id: "turn_a".to_string(),
+            session_id: "session_a".to_string(),
+            status: TurnStatus::Running,
+        };
+        let identity = ResponseEventIdentity::new(Some(original.clone()));
+        let cancelling = identity
+            .context(Some(TurnEventContext {
+                status: TurnStatus::Cancelling,
+                ..original
+            }))
+            .unwrap();
+        assert_eq!(cancelling.status, TurnStatus::Cancelling);
+
+        let delayed = identity
+            .context(Some(TurnEventContext {
+                id: "turn_b".to_string(),
+                session_id: "session_b".to_string(),
+                status: TurnStatus::Running,
+            }))
+            .unwrap();
+        assert_eq!(delayed.id, "turn_a");
+        assert_eq!(delayed.session_id, "session_a");
+        assert_eq!(identity.context(None).unwrap().id, "turn_a");
+        assert!(ResponseEventIdentity::new(None)
+            .context(identity.turn.clone())
+            .is_none());
+    }
 
     #[test]
     fn preview_collapses_whitespace_and_truncates() {

@@ -460,7 +460,10 @@ mod tests {
             }],
         )];
 
-        assert_eq!(resolve_model_for_messages(&settings, &text_only), settings.model);
+        assert_eq!(
+            resolve_model_for_messages(&settings, &text_only),
+            settings.model
+        );
         assert_eq!(
             resolve_model_for_messages(&settings, &with_image),
             "deepseek-v4-flash-vision-exp"

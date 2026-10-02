@@ -59,6 +59,7 @@ pub struct SubagentRequest {
     pub output_format: SubagentOutputFormat,
     pub reviewer_count: usize,
     pub cancel: Option<Arc<AtomicBool>>,
+    pub execution: Option<super::execution_context::ExecutionContext>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -423,10 +424,7 @@ impl SubagentContextMode {
 }
 
 fn request_cancelled(state: &crate::AppState, cancel: Option<&AtomicBool>) -> bool {
-    state.cancel.load(Ordering::Relaxed)
-        || cancel
-            .map(|flag| flag.load(Ordering::Relaxed))
-            .unwrap_or(false)
+    cancel.unwrap_or(&state.cancel).load(Ordering::Relaxed)
 }
 
 pub async fn run(state: &crate::AppState, req: SubagentRequest) -> Result<String, String> {
@@ -443,7 +441,22 @@ pub async fn run(state: &crate::AppState, req: SubagentRequest) -> Result<String
     }
 
     let settings = state.settings.lock().unwrap().clone();
-    let sid = session_engine::execution_session_id(state);
+    let execution = match req.execution.clone() {
+        Some(execution) => {
+            if request_cancel.is_none() {
+                return Err(
+                    "Owned background execution requires its own cancellation token.".to_string(),
+                );
+            }
+            execution
+        }
+        None => super::execution_context::ExecutionContext::for_session(
+            state,
+            &session_engine::execution_session_id(state),
+        )?,
+    };
+    execution.validate(state)?;
+    let sid = execution.session_id.clone();
     let turn_store = session_engine::SessionTurnStore::new(state, sid.clone());
     let packs_dir = state.packs_dir.lock().unwrap().clone();
     let persona_text = match pack::load_pack(&packs_dir, &settings.current_pack) {
@@ -460,8 +473,12 @@ pub async fn run(state: &crate::AppState, req: SubagentRequest) -> Result<String
     let template = req
         .agent_name
         .as_deref()
-        .and_then(|name| custom::load_agent(state, name).ok())
-        .or_else(|| custom::load_agent(state, agent_type).ok());
+        .and_then(|name| {
+            custom::load_agent_in_workspace(state, &execution.workspace_root, name).ok()
+        })
+        .or_else(|| {
+            custom::load_agent_in_workspace(state, &execution.workspace_root, agent_type).ok()
+        });
     let scope = effective_scope(req.scope, template.as_ref().and_then(|agent| agent.scope));
     let model_tier = req
         .model_tier
@@ -568,9 +585,9 @@ pub async fn run(state: &crate::AppState, req: SubagentRequest) -> Result<String
     };
     let (tool_schema, mut msgs) = match req.context_mode {
         SubagentContextMode::Fork => {
-            let system = prompt::build_for_session_input(
+            let system = prompt::build_for_execution(
                 state,
-                &sid,
+                &execution,
                 &settings,
                 &persona_text,
                 session_summary,
@@ -594,9 +611,9 @@ pub async fn run(state: &crate::AppState, req: SubagentRequest) -> Result<String
             )
         }
         SubagentContextMode::Brief | SubagentContextMode::Recent => {
-            let mut system = prompt::build_for_session_input(
+            let mut system = prompt::build_for_execution(
                 state,
-                &sid,
+                &execution,
                 &settings,
                 &persona_text,
                 session_summary,
@@ -630,6 +647,7 @@ pub async fn run(state: &crate::AppState, req: SubagentRequest) -> Result<String
     };
 
     for _ in 0..MAX_SUBAGENT_STEPS {
+        execution.validate(state)?;
         if request_cancelled(state, request_cancel) {
             return Ok("[子 Agent 已被用户中断]".to_string());
         }
@@ -643,15 +661,21 @@ pub async fn run(state: &crate::AppState, req: SubagentRequest) -> Result<String
 
         // Subagent requests are auxiliary model calls, but their exact
         // context still belongs in the parent session audit stream.
+        let primary_model = crate::model_routing::resolve_model_for_messages(&call_settings, &msgs);
+        let fallback_models: &[String] = if msgs.iter().any(|message| !message.images.is_empty()) {
+            &[]
+        } else {
+            &call_settings.model_routing.fallback_models
+        };
         let routed_result = crate::model_routing::stream_with_failover(
             crate::model_routing::FailoverRequest {
                 state,
                 settings: &call_settings,
                 messages: &msgs,
                 tools: &tool_schema,
-                primary_model: &call_settings.model,
-                fallback_models: &call_settings.model_routing.fallback_models,
-                cancel: &state.cancel,
+                primary_model: &primary_model,
+                fallback_models,
+                cancel: request_cancel.unwrap_or(&state.cancel),
                 request_cancel,
                 session_id: &sid,
                 purpose: "subagent",
@@ -711,6 +735,9 @@ pub async fn run(state: &crate::AppState, req: SubagentRequest) -> Result<String
         ));
 
         for tc in turn.tool_calls {
+            if request_cancelled(state, request_cancel) {
+                return Ok("[子 Agent 已被用户中断]".to_string());
+            }
             let name = tc.function.name;
             let args: Value =
                 serde_json::from_str(&tc.function.arguments).unwrap_or_else(|_| json!({}));
@@ -719,7 +746,22 @@ pub async fn run(state: &crate::AppState, req: SubagentRequest) -> Result<String
                 return Ok(with_budget_footer(content, token_budget.as_ref()));
             }
             let result = if scope.allows_tool(&name) {
-                match tools::execute_subagent_scoped(state, &name, args, scope).await {
+                let execution_result = if scope == SubagentScope::ReadOnly {
+                    tools::execute_subagent_readonly_in_context(state, &execution, &name, args)
+                        .await
+                } else {
+                    // Writable main-turn subagents retain the existing authorization path.
+                    // Never let a captured background identity silently follow UI selection.
+                    let active_root = state.sandbox_dir.lock().unwrap().clone();
+                    if std::fs::canonicalize(active_root).ok().as_ref()
+                        != Some(&execution.workspace_root)
+                    {
+                        Err("Document workspace changed; refusing to execute.".to_string())
+                    } else {
+                        tools::execute_subagent_scoped(state, &name, args, scope).await
+                    }
+                };
+                match execution_result {
                     Ok(s) => s,
                     Err(e) => format!("错误：{e}"),
                 }
@@ -957,6 +999,229 @@ fn cap_chars(s: String, max: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn multimodal_fork_uses_vision_model_and_never_retries_a_text_fallback() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        use std::time::{Duration, Instant};
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            let mut stream = loop {
+                match listener.accept() {
+                    Ok((stream, _)) => break stream,
+                    Err(error)
+                        if error.kind() == std::io::ErrorKind::WouldBlock
+                            && Instant::now() < deadline =>
+                    {
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(error) => panic!("fork did not reach the local provider: {error}"),
+                }
+            };
+            stream
+                .set_read_timeout(Some(Duration::from_secs(3)))
+                .unwrap();
+            let mut headers = Vec::new();
+            let mut byte = [0u8; 1];
+            while !headers.ends_with(b"\r\n\r\n") {
+                stream.read_exact(&mut byte).unwrap();
+                headers.push(byte[0]);
+            }
+            let headers = String::from_utf8(headers).unwrap();
+            let length = headers
+                .lines()
+                .find_map(|line| {
+                    let (name, value) = line.split_once(':')?;
+                    name.eq_ignore_ascii_case("content-length")
+                        .then(|| value.trim().parse::<usize>().unwrap())
+                })
+                .unwrap();
+            let mut body = vec![0; length];
+            stream.read_exact(&mut body).unwrap();
+            stream.write_all(b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 4\r\nConnection: close\r\n\r\nbusy").unwrap();
+            serde_json::from_slice::<Value>(&body).unwrap()
+        });
+        let root = std::env::temp_dir().join(format!(
+            "demiurge_multimodal_fork_{}",
+            store::new_session_id()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let root = std::fs::canonicalize(root).unwrap();
+        let state = crate::AppState::new(reqwest::Client::builder().no_proxy().build().unwrap());
+        *state.data_dir.lock().unwrap() = root.join("data");
+        *state.packs_dir.lock().unwrap() = root.join("packs");
+        *state.sandbox_dir.lock().unwrap() = root.clone();
+        {
+            let mut sessions = state.sessions.lock().unwrap();
+            sessions.ensure_one();
+            let id = sessions.active.clone();
+            let session = sessions.get_mut(&id).unwrap();
+            session.workspace_path = root.to_string_lossy().to_string();
+            session.append_message(Message::user_with_images(
+                "Inspect this image",
+                vec![super::super::conversation::ImageAttachment {
+                    mime_type: "image/png".into(),
+                    data: "YWJj".into(),
+                    name: None,
+                }],
+            ));
+        }
+        {
+            let mut settings = state.settings.lock().unwrap();
+            settings.provider = store::ProviderKind::OpenAiCompatible;
+            settings.api_key = "local-test".into();
+            settings.base_url = format!("http://{address}");
+            settings.model = "parent-text-model".into();
+            settings.vision_model = "required-vision-model".into();
+            settings.model_routing.enabled = true;
+            settings.model_routing.haiku_model = "cheap-text-model".into();
+            settings.model_routing.fallback_models = vec!["text-only-fallback".into()];
+        }
+        let execution =
+            super::super::execution_context::ExecutionContext::capture_selected(&state).unwrap();
+        let result = tokio::time::timeout(
+            Duration::from_secs(5),
+            run(
+                &state,
+                SubagentRequest {
+                    prompt: "Describe the inherited image".into(),
+                    label: None,
+                    agent_type: None,
+                    agent_name: None,
+                    model: None,
+                    model_tier: None,
+                    scope: SubagentScope::ReadOnly,
+                    context_mode: SubagentContextMode::Fork,
+                    max_total_tokens: None,
+                    output_format: SubagentOutputFormat::Plain,
+                    reviewer_count: 1,
+                    cancel: Some(Arc::new(AtomicBool::new(false))),
+                    execution: Some(execution),
+                },
+            ),
+        )
+        .await
+        .unwrap();
+        assert!(result.is_err());
+        let request = server.join().unwrap();
+        assert_eq!(request["model"], "required-vision-model");
+        assert!(request["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|message| {
+                message["content"]
+                    .as_array()
+                    .is_some_and(|parts| parts.iter().any(|part| part["type"] == "image_url"))
+            }));
+        let usage = std::fs::read_to_string(root.join("data/usage.jsonl")).unwrap();
+        assert_eq!(
+            usage.lines().count(),
+            1,
+            "a failed image request must not fall back to a text model"
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn workflow_ownership_cancel_reaches_a_stalled_provider_without_inheriting_chat_cancel() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        use std::time::{Duration, Instant};
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let address = listener.local_addr().unwrap();
+        let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let server = std::thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            let mut stream = loop {
+                match listener.accept() {
+                    Ok((stream, _)) => break stream,
+                    Err(error)
+                        if error.kind() == std::io::ErrorKind::WouldBlock
+                            && Instant::now() < deadline =>
+                    {
+                        std::thread::sleep(Duration::from_millis(10))
+                    }
+                    Err(error) => {
+                        panic!("owned subagent did not reach the local provider: {error}")
+                    }
+                }
+            };
+            stream
+                .set_read_timeout(Some(Duration::from_secs(3)))
+                .unwrap();
+            let mut request = Vec::new();
+            let mut byte = [0u8; 1];
+            while !request.ends_with(b"\r\n\r\n") {
+                stream.read_exact(&mut byte).unwrap();
+                request.push(byte[0]);
+            }
+            stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n").unwrap();
+            ready_tx.send(()).unwrap();
+            let _ = release_rx.recv_timeout(Duration::from_secs(5));
+        });
+        let root =
+            std::env::temp_dir().join(format!("demiurge_owned_cancel_{}", store::new_session_id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let root = std::fs::canonicalize(root).unwrap();
+        let state = crate::AppState::new(reqwest::Client::builder().no_proxy().build().unwrap());
+        *state.data_dir.lock().unwrap() = root.join("data");
+        *state.packs_dir.lock().unwrap() = root.join("packs");
+        *state.sandbox_dir.lock().unwrap() = root.clone();
+        {
+            let mut sessions = state.sessions.lock().unwrap();
+            sessions.ensure_one();
+            let id = sessions.active.clone();
+            sessions.get_mut(&id).unwrap().workspace_path = root.to_string_lossy().to_string();
+        }
+        let execution =
+            super::super::execution_context::ExecutionContext::capture_selected(&state).unwrap();
+        {
+            let mut settings = state.settings.lock().unwrap();
+            settings.provider = store::ProviderKind::OpenAiCompatible;
+            settings.api_key = "local-test".to_string();
+            settings.base_url = format!("http://{address}");
+            settings.model = "test-model".to_string();
+        }
+        state.cancel.store(true, Ordering::Relaxed);
+        let cancel = Arc::new(AtomicBool::new(false));
+        let req = SubagentRequest {
+            prompt: "Inspect this project".to_string(),
+            label: None,
+            agent_type: None,
+            agent_name: None,
+            model: None,
+            model_tier: None,
+            scope: SubagentScope::ReadOnly,
+            context_mode: SubagentContextMode::Brief,
+            max_total_tokens: None,
+            output_format: SubagentOutputFormat::Plain,
+            reviewer_count: 1,
+            cancel: Some(cancel.clone()),
+            execution: Some(execution),
+        };
+        let result = tokio::time::timeout(Duration::from_secs(4), async {
+            let (result, ()) = tokio::join!(run(&state, req), async {
+                ready_rx.await.unwrap();
+                cancel.store(true, Ordering::Relaxed);
+            });
+            result
+        })
+        .await;
+        let _ = release_tx.send(());
+        server.join().unwrap();
+        let output = result
+            .expect("cancel must interrupt a provider with no next chunk")
+            .unwrap();
+        assert!(output.contains("中断"));
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn parses_context_mode_aliases() {

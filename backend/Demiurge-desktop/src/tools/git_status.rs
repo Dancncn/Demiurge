@@ -8,6 +8,11 @@ const TIMEOUT_SECS: u64 = 5;
 
 pub fn run(state: &crate::AppState, _args: Value) -> Result<String, String> {
     let sandbox = state.sandbox_dir.lock().unwrap().clone();
+    run_in_workspace(&sandbox)
+}
+
+pub(super) fn run_in_workspace(sandbox: &std::path::Path) -> Result<String, String> {
+    let sandbox = sandbox.to_path_buf();
     let (tx, rx) = mpsc::channel();
 
     std::thread::spawn(move || {

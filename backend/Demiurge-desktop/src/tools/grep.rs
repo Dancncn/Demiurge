@@ -9,6 +9,11 @@ const MAX_FILE_BYTES: u64 = 256 * 1024;
 const MAX_LINE_CHARS: usize = 240;
 
 pub fn run(state: &crate::AppState, args: Value) -> Result<String, String> {
+    let sandbox = state.sandbox_dir.lock().unwrap().clone();
+    run_in_workspace(&sandbox, args)
+}
+
+pub(super) fn run_in_workspace(sandbox: &std::path::Path, args: Value) -> Result<String, String> {
     let query = super::args::required_non_empty_str(&args, "query")?;
 
     let rel = super::args::optional_str(&args, "path").unwrap_or("");
@@ -22,7 +27,6 @@ pub fn run(state: &crate::AppState, args: Value) -> Result<String, String> {
         MAX_LIMIT as u64,
     ) as usize;
 
-    let sandbox = state.sandbox_dir.lock().unwrap().clone();
     let root = super::resolve_in_sandbox(&sandbox, rel)?;
     if !root.exists() {
         return Err("path 不存在".to_string());

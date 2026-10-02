@@ -8,6 +8,11 @@ const DEFAULT_LIMIT: usize = 200;
 const MAX_LIMIT: usize = 500;
 
 pub fn run(state: &crate::AppState, args: Value) -> Result<String, String> {
+    let sandbox = state.sandbox_dir.lock().unwrap().clone();
+    run_in_workspace(&sandbox, args)
+}
+
+pub(super) fn run_in_workspace(sandbox: &Path, args: Value) -> Result<String, String> {
     let pattern = super::args::required_non_empty_str(&args, "pattern")?;
     validate_pattern(pattern)?;
 
@@ -20,7 +25,6 @@ pub fn run(state: &crate::AppState, args: Value) -> Result<String, String> {
         MAX_LIMIT as u64,
     ) as usize;
 
-    let sandbox = state.sandbox_dir.lock().unwrap().clone();
     let base_path = super::resolve_in_sandbox(&sandbox, base)?;
     if !base_path.exists() {
         return Err("base 路径不存在".to_string());

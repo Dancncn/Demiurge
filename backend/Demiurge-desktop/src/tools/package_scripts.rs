@@ -3,11 +3,15 @@ use serde_json::Value;
 use std::path::{Path, PathBuf};
 
 pub fn run(state: &crate::AppState, args: Value) -> Result<String, String> {
+    let sandbox = state.sandbox_dir.lock().unwrap().clone();
+    run_in_workspace(&sandbox, args)
+}
+
+pub(super) fn run_in_workspace(sandbox: &Path, args: Value) -> Result<String, String> {
     let rel = super::args::optional_str(&args, "path").unwrap_or("package.json");
     let script = super::args::optional_str(&args, "script")
         .map(str::trim)
         .filter(|s| !s.is_empty());
-    let sandbox = state.sandbox_dir.lock().unwrap().clone();
     let path = resolve_package_path(&sandbox, rel)?;
     let raw = std::fs::read_to_string(&path).map_err(|e| format!("读取 package.json 失败：{e}"))?;
     let value: Value =

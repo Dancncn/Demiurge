@@ -187,6 +187,11 @@ pub async fn run_manual_dream(
     .await;
     let _ = permission::remember_response(state, &permission_context, "dream", &response);
 
+    if state.cancel.load(Ordering::Relaxed) {
+        events.assistant_interrupted();
+        return Ok(());
+    }
+
     if !response.allow {
         emit_delta(&events, &mut visible, "已取消写入，记忆文件保持不变。");
         finish(&events, state, &sid, visible);

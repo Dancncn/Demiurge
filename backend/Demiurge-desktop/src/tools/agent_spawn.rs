@@ -46,6 +46,7 @@ pub async fn run(state: &crate::AppState, args: Value) -> Result<String, String>
             output_format,
             reviewer_count,
             cancel: None,
+            execution: None,
         },
     )
     .await

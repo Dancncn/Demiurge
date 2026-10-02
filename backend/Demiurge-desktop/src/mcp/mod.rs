@@ -461,6 +461,15 @@ pub async fn call_original_tool(
     original_tool: &str,
     args: Value,
 ) -> Result<String, String> {
+    let exposed_name = original_tool_name(state, server_name, original_tool)?;
+    call_tool(state, &exposed_name, args).await
+}
+
+pub(crate) fn original_tool_name(
+    state: &crate::AppState,
+    server_name: &str,
+    original_tool: &str,
+) -> Result<String, String> {
     let exposed_name = {
         let servers = state.mcp.servers.lock().unwrap();
         let server = servers
@@ -473,7 +482,7 @@ pub async fn call_original_tool(
             .map(|tool| tool.exposed_name.clone())
             .ok_or_else(|| format!("MCP server `{server_name}` 没有工具 `{original_tool}`。"))?
     };
-    call_tool(state, &exposed_name, args).await
+    Ok(exposed_name)
 }
 
 async fn connect_stdio_server(
