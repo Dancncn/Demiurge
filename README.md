@@ -287,6 +287,8 @@ npm run tauri build
 - [开发接手指南与后续优化顺序](docs/DEVELOPER-ONBOARDING.md)
 - [首批优化与测试验收](docs/OPTIMIZATION-VERIFICATION.md)
 - [TypeScript 7 编译提速实测](docs/TS7-FEASIBILITY.md)
+- [企业 Agent 内核：定位、差距与优化路线](docs/ENTERPRISE-AGENT-KERNEL-ROADMAP.md)
+- [企业 Agent 官方证据与发展判断](docs/AGENT-MARKET-EVIDENCE.md)
 - [模块化架构与迁移约束](docs/MODULAR-ARCHITECTURE.md)
 - [模块技术原理文档（存档）](docs/modules/README.md) — 逐子系统的深度技术文档，从[架构总览](docs/modules/01-architecture-overview.md)开始
 - [实现说明](docs/IMPLEMENTATION.md)
