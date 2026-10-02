@@ -4,8 +4,12 @@ use serde_json::Value;
 const MAX_READ: u64 = 256 * 1024; // 256 KB 上限，避免把超大文件灌进上下文
 
 pub fn run(state: &crate::AppState, args: Value) -> Result<String, String> {
-    let rel = super::args::required_non_empty_str(&args, "path")?;
     let sandbox = state.sandbox_dir.lock().unwrap().clone();
+    run_in_workspace(&sandbox, args)
+}
+
+pub(super) fn run_in_workspace(sandbox: &std::path::Path, args: Value) -> Result<String, String> {
+    let rel = super::args::required_non_empty_str(&args, "path")?;
     let path = super::resolve_in_sandbox(&sandbox, rel)?;
 
     let meta = std::fs::metadata(&path).map_err(|e| format!("无法访问文件：{e}"))?;

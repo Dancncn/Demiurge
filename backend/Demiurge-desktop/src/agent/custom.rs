@@ -303,7 +303,16 @@ pub fn record_runtime_error(
 }
 
 pub fn load_agent(state: &crate::AppState, name: &str) -> Result<AgentDefinitionInfo, String> {
-    let dir = ensure_dir(state)?;
+    let root = state.sandbox_dir.lock().unwrap().clone();
+    load_agent_in_workspace(state, &root, name)
+}
+
+pub fn load_agent_in_workspace(
+    state: &crate::AppState,
+    root: &Path,
+    name: &str,
+) -> Result<AgentDefinitionInfo, String> {
+    let dir = root.join(AGENTS_DIR);
     let path = find_agent_path(&dir, name).ok_or_else(|| format!("未找到 Agent `{name}`。"))?;
     definition_from_path(&path, &valid_tool_names(state))
 }

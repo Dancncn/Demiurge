@@ -1,6 +1,14 @@
-export type AgentPresentationEvent =
-  | { kind: "start" | "activity" | "error" | "interrupted"; sessionId: string; turnId: string }
-  | { kind: "delta" | "reasoning" | "done"; sessionId: string; turnId: string; text: string };
+interface EventIdentity {
+  sessionId: string;
+  turnId: string;
+  /** One runner answer, including its tool steps and provider retries. */
+  responseId?: string;
+}
+
+export type AgentPresentationEvent = EventIdentity & (
+  | { kind: "start" | "activity" | "error" | "interrupted" }
+  | { kind: "delta" | "reasoning" | "done"; text: string }
+);
 
 export interface AgentEventDecision {
   accepted: boolean;
@@ -12,23 +20,28 @@ export interface AgentEventDecision {
   repaired?: boolean;
 }
 
-interface ActiveTurn {
-  turnId: string;
+interface ActiveResponse {
+  responseId: string;
   content: string;
   reasoning: string;
 }
 
-function eventKey(sessionId: string, turnId: string) {
-  return `${sessionId}\u0000${turnId}`;
+interface SessionPresentation {
+  turnId: string;
+  active?: ActiveResponse;
+}
+
+function eventKey(...parts: string[]) {
+  return parts.join("\u0000");
 }
 
 /**
- * Orders frontend presentation events independently for every session.
- * Terminal turn keys are retained in a bounded set so duplicate or delayed
- * events cannot reopen an answer after its canonical body was committed.
+ * Answers can finish while their engine turn continues a Goal. Retain both
+ * closed answers and superseded engine turns so neither can be reopened by
+ * delayed events. Legacy envelopes without responseId retain one-answer turns.
  */
 export class AgentEventReducer {
-  private readonly activeBySession = new Map<string, ActiveTurn>();
+  private readonly activeBySession = new Map<string, SessionPresentation>();
   private readonly closedKeys = new Set<string>();
   private readonly closedOrder: string[] = [];
   private readonly maxClosedTurns: number;
@@ -37,30 +50,46 @@ export class AgentEventReducer {
     this.maxClosedTurns = maxClosedTurns;
   }
 
+  /** The caller has committed authoritative history or begun a new submission. */
+  finishTurn(sessionId: string) {
+    const session = this.activeBySession.get(sessionId);
+    if (!session) return;
+    this.close(eventKey("turn", sessionId, session.turnId));
+    session.active = undefined;
+  }
+
   accept(event: AgentPresentationEvent): AgentEventDecision {
     const sessionId = event.sessionId.trim();
     const turnId = event.turnId.trim();
-    const key = eventKey(sessionId, turnId);
-    if (!sessionId || !turnId) {
+    const responseId = event.responseId === undefined ? turnId : event.responseId.trim();
+    const turnKey = eventKey("turn", sessionId, turnId);
+    const key = eventKey("answer", sessionId, turnId, responseId);
+    if (!sessionId || !turnId || !responseId) {
       return { accepted: false, key, reason: "invalid_identity" };
     }
-    if (this.closedKeys.has(key)) {
+    if (this.closedKeys.has(key) || this.closedKeys.has(turnKey)) {
       return { accepted: false, key, reason: "closed" };
     }
 
-    let active = this.activeBySession.get(sessionId);
-    if (active && active.turnId !== turnId) {
-      if (event.kind !== "start") {
+    let session = this.activeBySession.get(sessionId);
+    if (session && session.turnId !== turnId) {
+      if (session.active && event.kind !== "start") {
         return { accepted: false, key, reason: "out_of_order" };
       }
-      this.close(eventKey(sessionId, active.turnId));
-      active = undefined;
+      this.close(eventKey("turn", sessionId, session.turnId));
+      session = undefined;
+    }
+    if (!session) {
+      session = { turnId };
+      this.activeBySession.set(sessionId, session);
     }
 
-    if (!active) {
-      active = { turnId, content: "", reasoning: "" };
-      this.activeBySession.set(sessionId, active);
+    if (session.active && session.active.responseId !== responseId) {
+      if (event.kind !== "start") return { accepted: false, key, reason: "out_of_order" };
+      this.close(eventKey("answer", sessionId, turnId, session.active.responseId));
+      session.active = undefined;
     }
+    const active = session.active ??= { responseId, content: "", reasoning: "" };
 
     if (event.kind === "start") {
       active.content = "";
@@ -89,7 +118,7 @@ export class AgentEventReducer {
       decision.canonicalText = event.text;
       decision.repaired = active.content !== event.text;
     }
-    this.activeBySession.delete(sessionId);
+    session.active = undefined;
     this.close(key);
     return decision;
   }

@@ -1,15 +1,11 @@
-import { Suspense, lazy, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, lazy, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import { getCurrentWindow, PhysicalSize } from "@tauri-apps/api/window";
 import * as api from "@/lib/api";
 import type {
   AgentPanelState,
-  AssistantErrorEvent,
-  ConfirmRequestEvent,
-  DisplayItem,
   GoalPanelState,
   GoalProgressEvent,
-  Message,
   NavigationSnapshot,
   PackManifest,
   PermissionMode,
@@ -55,12 +51,11 @@ import { useClickOutside } from "@/lib/hooks";
 import { usePomodoroNotifications } from "@/lib/usePomodoroNotifications";
 import { useStreamingTtsQueue } from "@/lib/useStreamingTtsQueue";
 import {
-  eventBelongsToSession,
   NavigationEpoch,
-  turnBelongsToSession,
   type NavigationTicket,
 } from "@/lib/navigationEpoch";
-import { AgentEventReducer } from "@/lib/agentEventReducer";
+import { MessageProjection } from "@/lib/messageProjection";
+import { ToolConfirmationState } from "@/lib/confirmationState";
 
 const Live2DPanel = lazy(() => import("@/features/live2d/Live2DPanel"));
 
@@ -152,102 +147,6 @@ const PREVIEW_SETTINGS: Settings = {
   mcp_servers: [],
 };
 
-function friendlyAssistantError(err: unknown, event?: AssistantErrorEvent) {
-  const raw = event?.message || String(err);
-  const lower = raw.toLowerCase();
-  let title = "Request failed";
-  let hint = event?.hint || "Check the provider settings and try again.";
-
-  if (event?.kind === "llm" || lower.includes("llm") || lower.includes("model")) {
-    title = "Model request failed";
-    hint = event?.hint || "Verify the model name, base URL, API key, and provider capability settings.";
-  }
-  if (lower.includes("401") || lower.includes("403") || lower.includes("unauthorized") || lower.includes("api key")) {
-    title = "Provider authentication failed";
-    hint = event?.hint || "Re-save the provider API key in Settings, then retry the same request.";
-  } else if (lower.includes("timeout") || lower.includes("timed out")) {
-    title = "Request timed out";
-    hint = event?.hint || "The provider or network was slow. Retry once; if it repeats, lower context size or switch endpoint.";
-  } else if (
-    lower.includes("network") ||
-    lower.includes("connection") ||
-    lower.includes("dns") ||
-    lower.includes("econn") ||
-    lower.includes("fetch")
-  ) {
-    title = "Network request failed";
-    hint = event?.hint || "Check the endpoint and local network path. If you use a proxy, confirm the app can reach it.";
-  }
-
-  return { title, message: raw.replace(/^Error:\s*/i, ""), hint, retryable: event?.retryable ?? true };
-}
-
-function affectedPathsFromTool(name: string, args: unknown): string[] {
-  if (!args || typeof args !== "object") return [];
-  const value = args as Record<string, unknown>;
-  if (name === "write_file" || name === "edit_file") {
-    return typeof value.path === "string" && value.path.trim() ? [value.path] : [];
-  }
-  if (name === "multi_edit" && Array.isArray(value.edits)) {
-    return Array.from(
-      new Set(
-        value.edits
-          .map((edit) => (edit && typeof edit === "object" ? (edit as Record<string, unknown>).path : null))
-          .filter((path): path is string => typeof path === "string" && Boolean(path.trim())),
-      ),
-    );
-  }
-  if (name === "apply_patch" && Array.isArray(value.hunks)) {
-    return Array.from(
-      new Set(
-        value.hunks
-          .map((hunk) => (hunk && typeof hunk === "object" ? (hunk as Record<string, unknown>).path : null))
-          .filter((path): path is string => typeof path === "string" && Boolean(path.trim())),
-      ),
-    );
-  }
-  return [];
-}
-
-function buildHistory(msgs: Message[]): DisplayItem[] {
-  const out: DisplayItem[] = [];
-  const results = new Map<string, string>();
-  for (const m of msgs) {
-    if (m.role === "tool" && m.tool_call_id) results.set(m.tool_call_id, m.content ?? "");
-  }
-  let seq = 0;
-  const id = () => `h_${++seq}`;
-  for (const m of msgs) {
-    if (m.role === "user") {
-      const text = m.content ?? "";
-      if (!text.startsWith("[Goal ")) {
-        out.push({ id: id(), kind: "user", text });
-      }
-    } else if (m.role === "assistant") {
-      if (m.content) out.push({ id: id(), kind: "assistant", text: m.content, streaming: false });
-      for (const tc of m.tool_calls ?? []) {
-        let args: unknown = {};
-        try {
-          args = JSON.parse(tc.function.arguments || "{}");
-        } catch {
-          args = tc.function.arguments;
-        }
-        out.push({
-          id: id(),
-          kind: "tool",
-          tool_call_id: tc.id,
-          name: tc.function.name,
-          args,
-          status: "done",
-          result: results.get(tc.id),
-          affected_paths: affectedPathsFromTool(tc.function.name, args),
-        });
-      }
-    }
-  }
-  return out;
-}
-
 function buildUserDisplayText(text: string, attachments: ProcessedAttachment[]) {
   if (attachments.length === 0) return text;
   const lines = text ? [text] : ["Attached files"];
@@ -289,43 +188,14 @@ function waitForNextPaint() {
   });
 }
 
-function lastUserIndex(items: DisplayItem[]) {
-  for (let i = items.length - 1; i >= 0; i -= 1) {
-    if (items[i].kind === "user") return i;
-  }
-  return -1;
-}
-
-function hasCompletedAssistantAfterLastUser(items: DisplayItem[]) {
-  const userIndex = lastUserIndex(items);
-  return items.some(
-    (item, index) =>
-      index > userIndex &&
-      item.kind === "assistant" &&
-      !item.streaming &&
-      !item.error &&
-      Boolean(item.text.trim() || item.reasoning?.trim()),
-  );
-}
-
-function hasSameAssistantTextAfterLastUser(items: DisplayItem[], text: string) {
-  const userIndex = lastUserIndex(items);
-  const normalized = text.trim();
-  if (!normalized) return false;
-  return items.some(
-    (item, index) =>
-      index > userIndex &&
-      item.kind === "assistant" &&
-      !item.streaming &&
-      !item.error &&
-      item.text.trim() === normalized,
-  );
-}
-
 export default function App() {
   const { t, setLang } = useI18n();
   usePomodoroNotifications();
-  const [items, setItems] = useState<DisplayItem[]>([]);
+  const [projection] = useState(() => new MessageProjection({
+    request: (callback) => requestAnimationFrame(callback),
+    cancel: (frame) => cancelAnimationFrame(frame),
+  }));
+  const items = useSyncExternalStore(projection.subscribe, projection.getSnapshot);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [settings, setSettings] = useState<Settings | null>(null);
@@ -352,7 +222,8 @@ export default function App() {
   const [packMenuOpen, setPackMenuOpen] = useState(false);
   const [agentMenuOpen, setAgentMenuOpen] = useState(false);
   const [titleMenuOpen, setTitleMenuOpen] = useState<"file" | "edit" | "view" | "persona" | "help" | null>(null);
-  const [confirmReq, setConfirmReq] = useState<ConfirmRequestEvent | null>(null);
+  const [confirmations] = useState(() => new ToolConfirmationState());
+  const confirmReq = useSyncExternalStore(confirmations.subscribe, confirmations.getSnapshot);
   const [planState, setPlanState] = useState<PlanState>({ active: false, approved: false });
   const [fortuneOpen, setFortuneOpen] = useState(false);
   const [workflowOpen, setWorkflowOpen] = useState(false);
@@ -363,19 +234,6 @@ export default function App() {
   const [voiceCallMuted, setVoiceCallMuted] = useState(false);
   const ttsQueue = useStreamingTtsQueue(settings);
 
-  const seq = useRef(0);
-  const genId = () => `it_${++seq.current}`;
-  const curAssistantId = useRef<string | null>(null);
-  const toolItemIds = useRef<Map<string, string>>(new Map());
-  const lastRetryText = useRef<string>("");
-  const assistantErrorDelivered = useRef(false);
-  // 流式增量缓冲：把每个 token 的 setState 合并到「每帧一次」（requestAnimationFrame），
-  // 避免逐 token 触发 setItems + markdown 全量重解析造成的卡顿（长回复尤甚）。
-  const pendingStream = useRef<{ content: string; reasoning: string; raf: number }>({
-    content: "",
-    reasoning: "",
-    raf: 0,
-  });
   const packMenuRef = useRef<HTMLDivElement | null>(null);
   const agentMenuRef = useRef<HTMLDivElement | null>(null);
   const titleMenuRef = useRef<HTMLDivElement | null>(null);
@@ -383,15 +241,9 @@ export default function App() {
   const spokenRepliesEnabledRef = useRef(spokenRepliesEnabled);
   const voiceCallActiveRef = useRef(voiceCallActive);
   const ttsQueueRef = useRef(ttsQueue);
-  const itemsRef = useRef<DisplayItem[]>(items);
   const activeIdRef = useRef(activeId);
   const navigationEpochRef = useRef(new NavigationEpoch());
   const navigationPendingRef = useRef(true);
-  const agentEventReducerRef = useRef(new AgentEventReducer());
-
-  useEffect(() => {
-    itemsRef.current = items;
-  }, [items]);
 
   useEffect(() => {
     activeIdRef.current = activeId;
@@ -456,6 +308,7 @@ export default function App() {
 
   function beginNavigation(expectedSessionId?: string) {
     const ticket = navigationEpochRef.current.begin(expectedSessionId);
+    confirmations.clear();
     setNavigationPendingValue(true);
     return ticket;
   }
@@ -471,16 +324,16 @@ export default function App() {
     if (!snapshot.sessions.some((session) => session.id === snapshot.session_id)) return false;
 
     activeIdRef.current = snapshot.session_id;
+    confirmations.selectSession(snapshot.session_id);
     setActiveId(snapshot.session_id);
     setSessions(snapshot.sessions);
     setGoalPanel(snapshot.goal);
     setWorkspace(snapshot.workspace);
     setWorkspaceRefreshKey((value) => value + 1);
     if (replaceHistory) {
-      resetTurnRefs();
-      setItems(buildHistory(snapshot.history));
+      projection.replaceHistory(snapshot.session_id, snapshot.history);
       setGoalProgress(null);
-      setConfirmReq(null);
+      confirmations.clear();
     }
     return true;
   }
@@ -625,6 +478,7 @@ export default function App() {
         setAgentPanel(agents);
         applyNavigationSnapshot(snapshot, navigationTicket, true);
         setPlanState(plan);
+        confirmations.updateEngine(engine);
         setSessionEngine(engine);
         setBusy(engine.busy);
       } catch (e) {
@@ -660,237 +514,56 @@ export default function App() {
     let un: UnlistenFn | undefined;
     let disposed = false;
 
-    // 把累积的增量一次性写入当前 assistant 项（必要时创建）；推理与正文分开累积。
-    const flushPending = () => {
-      if (pendingStream.current.raf) {
-        cancelAnimationFrame(pendingStream.current.raf);
-        pendingStream.current.raf = 0;
-      }
-      const { content, reasoning } = pendingStream.current;
-      if (!content && !reasoning) return;
-      pendingStream.current.content = "";
-      pendingStream.current.reasoning = "";
-      setItems((p) => {
-        let id = curAssistantId.current;
-        let arr = p;
-        if (!id) {
-          id = genId();
-          curAssistantId.current = id;
-          arr = [...p, { id, kind: "assistant", text: "", reasoning: "", streaming: true }];
-        }
-        return arr.map((it) =>
-          it.id === id && it.kind === "assistant"
-            ? { ...it, text: it.text + content, reasoning: (it.reasoning ?? "") + reasoning }
-            : it,
-        );
-      });
-    };
-
-    const scheduleFlush = () => {
-      if (pendingStream.current.raf) return;
-      pendingStream.current.raf = requestAnimationFrame(() => {
-        pendingStream.current.raf = 0;
-        flushPending();
-      });
-    };
-
-    const finalizeAssistant = () => {
-      flushPending();
-      const id = curAssistantId.current;
-      if (id) {
-        setItems((p) => p.map((it) => (it.id === id && it.kind === "assistant" ? { ...it, streaming: false } : it)));
-        curAssistantId.current = null;
-      }
-    };
-
     api
       .listenAgentEvents({
-        onAssistantStart: (turn) => {
-          if (!turn || !turnBelongsToSession(activeIdRef.current, turn)) return;
-          const decision = agentEventReducerRef.current.accept({
-            kind: "start",
-            sessionId: turn.session_id,
-            turnId: turn.id,
-          });
-          if (!decision.accepted) return;
-          finalizeAssistant();
+        onAssistantStart: (turn, responseId) => {
+          if (!projection.consume({ kind: "start", turn, responseId })) return;
           ttsQueueRef.current.beginTurn(spokenRepliesEnabledRef.current || voiceCallActiveRef.current);
         },
-        onAssistantDelta: (text, turn) => {
-          if (!turn || !turnBelongsToSession(activeIdRef.current, turn)) return;
-          const decision = agentEventReducerRef.current.accept({
-            kind: "delta",
-            sessionId: turn.session_id,
-            turnId: turn.id,
-            text,
-          });
-          if (!decision.accepted) return;
-          pendingStream.current.content += text;
+        onAssistantDelta: (text, turn, responseId) => {
+          if (!projection.consume({ kind: "delta", text, turn, responseId })) return;
           if (spokenRepliesEnabledRef.current || voiceCallActiveRef.current) ttsQueueRef.current.pushText(text);
-          scheduleFlush();
         },
-        onAssistantReasoning: (text, turn) => {
-          if (!turn || !turnBelongsToSession(activeIdRef.current, turn)) return;
-          const decision = agentEventReducerRef.current.accept({
-            kind: "reasoning",
-            sessionId: turn.session_id,
-            turnId: turn.id,
-            text,
-          });
-          if (!decision.accepted) return;
-          pendingStream.current.reasoning += text;
-          scheduleFlush();
+        onAssistantReasoning: (text, turn, responseId) => {
+          projection.consume({ kind: "reasoning", text, turn, responseId });
         },
-        onAssistantDone: (text, turn) => {
-          if (!turn || !turnBelongsToSession(activeIdRef.current, turn)) return;
-          const decision = agentEventReducerRef.current.accept({
-            kind: "done",
-            sessionId: turn.session_id,
-            turnId: turn.id,
-            text,
-          });
-          if (!decision.accepted) return;
-          flushPending();
+        onAssistantDone: (text, turn, responseId) => {
+          if (!projection.consume({ kind: "done", text, turn, responseId })) return;
+          confirmations.clear();
           if (spokenRepliesEnabledRef.current || voiceCallActiveRef.current) ttsQueueRef.current.flush();
-          const canonicalText = decision.canonicalText ?? text;
-          const id = curAssistantId.current;
-          if (id) {
-            setItems((p) =>
-              p.map((it) =>
-                it.id === id && it.kind === "assistant"
-                  ? { ...it, streaming: false, text: canonicalText }
-                  : it,
-              ),
-            );
-          } else if (canonicalText.trim()) {
-            const nid = genId();
-            setItems((p) =>
-              hasSameAssistantTextAfterLastUser(p, canonicalText)
-                ? p
-                : [...p, { id: nid, kind: "assistant", text: canonicalText, streaming: false }],
-            );
-          }
-          curAssistantId.current = null;
           setBusy(false);
           void refreshGoalPanel();
         },
-        onAssistantError: (e, turn) => {
-          if (!turn || !turnBelongsToSession(activeIdRef.current, turn)) return;
-          const decision = agentEventReducerRef.current.accept({
-            kind: "error",
-            sessionId: turn.session_id,
-            turnId: turn.id,
-          });
-          if (!decision.accepted) return;
-          finalizeAssistant();
-          ttsQueueRef.current.stop();
-          assistantErrorDelivered.current = true;
-          const friendly = friendlyAssistantError(e.message, e);
-          setItems((p) => [
-            ...p,
-            {
-              id: genId(),
-              kind: "assistant",
-              text: friendly.message,
-              streaming: false,
-              error: true,
-              errorTitle: friendly.title,
-              errorHint: friendly.hint,
-              retryText: friendly.retryable ? lastRetryText.current : undefined,
-            },
-          ]);
-          setBusy(false);
-          void refreshGoalPanel();
-        },
-        onAssistantInterrupted: (turn) => {
-          if (!turn || !turnBelongsToSession(activeIdRef.current, turn)) return;
-          const decision = agentEventReducerRef.current.accept({
-            kind: "interrupted",
-            sessionId: turn.session_id,
-            turnId: turn.id,
-          });
-          if (!decision.accepted) return;
-          finalizeAssistant();
+        onAssistantError: (error, turn, responseId) => {
+          if (!projection.consume({ kind: "error", error, turn, responseId })) return;
+          confirmations.clear();
           ttsQueueRef.current.stop();
           setBusy(false);
           void refreshGoalPanel();
         },
-        onToolStart: (e, turn) => {
-          if (!turn || !turnBelongsToSession(activeIdRef.current, turn)) return;
-          const decision = agentEventReducerRef.current.accept({
-            kind: "activity",
-            sessionId: turn.session_id,
-            turnId: turn.id,
-          });
-          if (!decision.accepted) return;
-          finalizeAssistant();
-          const nid = genId();
-          toolItemIds.current.set(e.tool_call_id, nid);
-          setItems((p) => [
-            ...p,
-            {
-              id: nid,
-              kind: "tool",
-              tool_call_id: e.tool_call_id,
-              name: e.name,
-              args: e.args,
-              status: "running",
-              preview: e.preview,
-              affected_paths: e.affected_paths,
-              description: e.description,
-              risk: e.risk,
-              permission_effect: e.permission_effect,
-            },
-          ]);
+        onAssistantInterrupted: (turn, responseId) => {
+          if (!projection.consume({ kind: "interrupted", turn, responseId })) return;
+          confirmations.clear();
+          ttsQueueRef.current.stop();
+          setBusy(false);
+          void refreshGoalPanel();
         },
-        onToolEnd: (e, turn) => {
-          if (!turn || !turnBelongsToSession(activeIdRef.current, turn)) return;
-          const decision = agentEventReducerRef.current.accept({
-            kind: "activity",
-            sessionId: turn.session_id,
-            turnId: turn.id,
-          });
-          if (!decision.accepted) return;
-          const id = toolItemIds.current.get(e.tool_call_id);
-          if (id) toolItemIds.current.delete(e.tool_call_id);
-          setItems((p) =>
-            p.map((it) =>
-              it.kind === "tool" && (it.id === id || it.tool_call_id === e.tool_call_id)
-                ? {
-                    ...it,
-                    status: e.denied ? "denied" : e.ok ? "done" : "failed",
-                    result: e.result,
-                    duration_ms: e.duration_ms,
-                    error_hint: e.error_hint,
-                    source_quality: e.source_quality,
-                  }
-                : it,
-            ),
-          );
-          if (["write_file", "edit_file", "multi_edit", "apply_patch", "undo_edit"].includes(e.name)) {
+        onToolStart: (tool, turn, responseId) => {
+          projection.consume({ kind: "tool_start", tool, turn, responseId });
+        },
+        onToolEnd: (tool, turn, responseId) => {
+          if (!projection.consume({ kind: "tool_end", tool, turn, responseId })) return;
+          if (["write_file", "edit_file", "multi_edit", "apply_patch", "undo_edit"].includes(tool.name)) {
             void refreshWorkspaceState();
           }
         },
-        onConfirmRequest: (e) => {
-          if (!eventBelongsToSession(activeIdRef.current, e.session_id)) return;
-          setConfirmReq(e);
+        onConfirmRequest: (event) => {
+          confirmations.receive(event);
         },
-        onGoalProgress: (e) => {
-          if (!eventBelongsToSession(activeIdRef.current, e.session_id)) return;
-          setGoalProgress(e);
+        onGoalProgress: (event) => {
+          if (!projection.appendGoalProgress(event)) return;
+          setGoalProgress(event);
           void refreshGoalPanel();
-          setItems((p) => [
-            ...p,
-            {
-              id: genId(),
-              kind: "tool",
-              name: "goal",
-              args: { turns_executed: e.turns_executed, tokens_used: e.tokens_used, token_budget: e.token_budget },
-              status: e.status === "active" ? "running" : "done",
-              result: e.message,
-              description: "Goal progress",
-            },
-          ]);
         },
       })
       .then((u) => {
@@ -921,6 +594,7 @@ export default function App() {
       else unSettings = u;
     }).catch((e) => console.warn("subscribe failed", e));
     api.listenSessionEngineUpdated((next) => {
+      confirmations.updateEngine(next);
       setSessionEngine(next);
       setBusy(next.busy);
     }).then((u) => {
@@ -930,10 +604,7 @@ export default function App() {
 
     return () => {
       disposed = true;
-      if (pendingStream.current.raf) {
-        cancelAnimationFrame(pendingStream.current.raf);
-        pendingStream.current.raf = 0;
-      }
+      projection.dispose();
       un?.();
       unPlan?.();
       unMode?.();
@@ -955,13 +626,11 @@ export default function App() {
     let completed = false;
     setInput("");
     setActiveView("chat");
-    assistantErrorDelivered.current = false;
-    const uid = genId();
-    setItems((p) => [...p, { id: uid, kind: "user", text: buildUserDisplayText(text, attachments) }]);
+    const prompt = `${text || "Please review the attached files."}${attachmentPrompt}`;
+    const submission = projection.beginSubmission(buildUserDisplayText(text, attachments), prompt);
+    confirmations.clear();
     setBusy(true);
     try {
-      const prompt = `${text || "Please review the attached files."}${attachmentPrompt}`;
-      lastRetryText.current = prompt;
       if (selectedAgentNames.length) {
         await api.sendWithAgents(prompt, selectedAgentNames);
       } else {
@@ -969,28 +638,8 @@ export default function App() {
       }
       completed = true;
     } catch (err) {
-      const id = curAssistantId.current;
-      if (id) {
-        setItems((p) => p.map((it) => (it.id === id && it.kind === "assistant" ? { ...it, streaming: false } : it)));
-        curAssistantId.current = null;
-      }
-      if (!assistantErrorDelivered.current) {
-        const friendly = friendlyAssistantError(err);
-        const nid = genId();
-        setItems((p) => [
-          ...p,
-          {
-            id: nid,
-            kind: "assistant",
-            text: friendly.message,
-            streaming: false,
-            error: true,
-            errorTitle: friendly.title,
-            errorHint: friendly.hint,
-            retryText: friendly.retryable ? lastRetryText.current : undefined,
-          },
-        ]);
-      }
+      confirmations.clear();
+      projection.failSubmission(submission, err);
     } finally {
       setBusy(false);
       if (completed) await syncHistoryIfMissingAssistant(turnSessionId);
@@ -1000,10 +649,17 @@ export default function App() {
     return true;
   }
 
+  function handleInterrupt() {
+    confirmations.cancel();
+    ttsQueue.stop();
+    void api.interrupt();
+  }
+
   async function handleRespondConfirm(allow: boolean, scope: PermissionScope) {
-    if (!confirmReq) return;
-    const id = confirmReq.id;
-    setConfirmReq(null);
+    const request = confirmations.getSnapshot();
+    if (!request) return;
+    const id = request.id;
+    confirmations.clear();
     try {
       await api.respondConfirm(id, allow, scope);
     } catch (e) {
@@ -1035,37 +691,22 @@ export default function App() {
       }
     } catch (err) {
       if (!navigationEpochRef.current.accepts(ticket, activeIdRef.current)) return;
-      const nid = genId();
-      setItems((p) => [
-        ...p,
-        { id: nid, kind: "assistant", text: `Warning: ${String(err)}`, streaming: false, error: true },
-      ]);
+      projection.appendWarning(`Warning: ${String(err)}`);
     } finally {
       if (action === "resume" || action === "continue") setBusy(false);
       if (navigationEpochRef.current.accepts(ticket, activeIdRef.current)) void refreshGoalPanel();
     }
   }
 
-  function resetTurnRefs() {
-    if (pendingStream.current.raf) {
-      cancelAnimationFrame(pendingStream.current.raf);
-      pendingStream.current.raf = 0;
-    }
-    pendingStream.current.content = "";
-    pendingStream.current.reasoning = "";
-    curAssistantId.current = null;
-    toolItemIds.current.clear();
-  }
-
   async function syncHistoryIfMissingAssistant(sessionId: string) {
     const ticket = navigationEpochRef.current.capture(sessionId);
     await waitForNextPaint();
     if (!navigationEpochRef.current.accepts(ticket, activeIdRef.current)) return;
-    if (hasCompletedAssistantAfterLastUser(itemsRef.current)) return;
+    if (!projection.needsHistory(sessionId)) return;
 
     try {
       const snapshot = await api.navigationSnapshot(sessionId);
-      if (hasCompletedAssistantAfterLastUser(itemsRef.current)) return;
+      if (!projection.needsHistory(sessionId)) return;
       applyNavigationSnapshot(snapshot, ticket, true);
     } catch (e) {
       if (navigationEpochRef.current.accepts(ticket, sessionId)) {
@@ -1417,8 +1058,7 @@ export default function App() {
                   type="button"
                   onClick={() => {
                     setTitleMenuOpen(null);
-                    void api.interrupt();
-                    setConfirmReq(null);
+                    handleInterrupt();
                   }}
                   className="cf-menu-item flex w-full items-center justify-between gap-2 disabled:cursor-default disabled:opacity-45"
                   disabled={!appBusy}
@@ -1904,9 +1544,7 @@ export default function App() {
                     textareaRef={textareaRef}
                     onSubmit={(attachments) => handleSend(undefined, attachments)}
                     onStop={() => {
-                      ttsQueue.stop();
-                      void api.interrupt();
-                      setConfirmReq(null);
+                      handleInterrupt();
                     }}
                     onInputChange={setInput}
                   />

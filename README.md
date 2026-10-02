@@ -21,7 +21,7 @@
 
 ---
 
-> 文档状态：2026-07-26 已按当前实现复核。验证基线为前端 44 项测试、生产构建和 Rust 297 项测试通过；真正音频字节流、Computer Use 执行闭环与 Live2D 桌宠交互扩展仍在路线图中。
+> 文档状态：2026-10-02 已完成首批执行边界与复杂度优化。前端 78 项测试、生产构建和 Rust 352 项测试通过（默认及全部 feature）；覆盖范围与剩余边界见 [验收记录](docs/OPTIMIZATION-VERIFICATION.md)。真正音频字节流、Computer Use 执行闭环与 Live2D 桌宠交互扩展仍在路线图中。
 
 ## 这是什么
 
@@ -275,6 +275,9 @@ npm run tauri build
 
 ## Documentation
 
+- [开发接手指南与后续优化顺序](docs/DEVELOPER-ONBOARDING.md)
+- [首批优化与测试验收](docs/OPTIMIZATION-VERIFICATION.md)
+- [TypeScript 7 编译提速实测](docs/TS7-FEASIBILITY.md)
 - [模块化架构与迁移约束](docs/MODULAR-ARCHITECTURE.md)
 - [模块技术原理文档（存档）](docs/modules/README.md) — 逐子系统的深度技术文档，从[架构总览](docs/modules/01-architecture-overview.md)开始
 - [实现说明](docs/IMPLEMENTATION.md)

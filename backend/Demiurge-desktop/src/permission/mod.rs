@@ -177,6 +177,7 @@ pub struct PermissionRequest<'a> {
 pub struct PermissionPromptPayload<'a> {
     pub id: &'a str,
     pub session_id: &'a str,
+    pub turn_id: &'a str,
     pub tool: &'a str,
     pub args: &'a str,
     pub description: &'a str,
@@ -546,17 +547,53 @@ pub async fn confirm(
     state: &crate::AppState,
     req: PermissionRequest<'_>,
 ) -> PermissionResponse {
+    confirm_with_emitter(state, req, Duration::from_secs(300), |payload| {
+        app.emit("tool-confirm-request", payload)
+            .map_err(|error| error.to_string())
+    })
+    .await
+}
+
+async fn confirm_with_emitter(
+    state: &crate::AppState,
+    req: PermissionRequest<'_>,
+    timeout: Duration,
+    emit: impl FnOnce(PermissionPromptPayload<'_>) -> Result<(), String>,
+) -> PermissionResponse {
+    let turn_id = {
+        let engine = state.session_engine.lock().unwrap();
+        engine
+            .active_turn
+            .as_ref()
+            .filter(|turn| {
+                turn.session_id == req.session_id
+                    && turn.status == crate::agent::session_engine::TurnStatus::Running
+            })
+            .map(|turn| turn.id.clone())
+    };
+    let Some(turn_id) = turn_id else {
+        return PermissionResponse::deny_once();
+    };
     let id = next_id();
     let (tx, rx) = oneshot::channel::<PermissionResponse>();
-    state
-        .pending_confirms
-        .lock()
-        .unwrap()
-        .insert(id.clone(), tx);
+    {
+        // interrupt sets cancel before taking this same lock. Either it drains
+        // this sender, or this check observes the completed cancellation.
+        let mut pending = state.pending_confirms.lock().unwrap();
+        if state.cancel.load(Ordering::Relaxed) {
+            return PermissionResponse::deny_once();
+        }
+        pending.insert(id.clone(), tx);
+    }
+    let _waiter = ConfirmationWaiter {
+        state,
+        id: id.clone(),
+    };
 
     let payload = PermissionPromptPayload {
         id: &id,
         session_id: req.session_id,
+        turn_id: &turn_id,
         tool: req.tool,
         args: req.args_pretty,
         description: req.description,
@@ -570,15 +607,30 @@ pub async fn confirm(
         affected_paths: req.affected_paths,
     };
 
-    let _ = app.emit("tool-confirm-request", payload);
+    if emit(payload).is_err() {
+        return PermissionResponse::deny_once();
+    }
 
-    match tokio::time::timeout(Duration::from_secs(300), rx).await {
-        Ok(Ok(v)) => v,
-        _ => {
-            // 超时或通道异常：清理并按拒绝处理
-            state.pending_confirms.lock().unwrap().remove(&id);
-            PermissionResponse::deny_once()
-        }
+    match tokio::time::timeout(timeout, rx).await {
+        Ok(Ok(v)) if !state.cancel.load(Ordering::Relaxed) => v,
+        _ => PermissionResponse::deny_once(),
+    }
+}
+
+struct ConfirmationWaiter<'a> {
+    state: &'a crate::AppState,
+    id: String,
+}
+
+impl Drop for ConfirmationWaiter<'_> {
+    fn drop(&mut self) {
+        self.state.pending_confirms.lock().unwrap().remove(&self.id);
+    }
+}
+
+pub(crate) fn deny_pending_confirmations(state: &crate::AppState) {
+    for (_, sender) in state.pending_confirms.lock().unwrap().drain() {
+        let _ = sender.send(PermissionResponse::deny_once());
     }
 }
 
@@ -1109,6 +1161,201 @@ fn append_audit(dir: &Path, entry: &PermissionAuditEntry) -> Result<(), String> 
 
 #[cfg(test)]
 mod tests {
+    fn confirmation_state() -> crate::AppState {
+        use crate::agent::session_engine::{TurnEntrypoint, TurnRunState, TurnStatus};
+        let state = crate::AppState::new(reqwest::Client::new());
+        state.session_engine.lock().unwrap().active_turn = Some(TurnRunState {
+            id: "turn-a".into(),
+            session_id: "session-a".into(),
+            entrypoint: TurnEntrypoint::Send,
+            status: TurnStatus::Running,
+            input_preview: String::new(),
+            workflow_run_id: None,
+            agent_names: Vec::new(),
+            started_at: 1,
+            updated_at: 1,
+            completed_at: None,
+            error: None,
+        });
+        state
+    }
+
+    fn confirmation_request() -> super::PermissionRequest<'static> {
+        super::PermissionRequest {
+            session_id: "session-a",
+            tool: "write_file",
+            args_pretty: "{}",
+            description: "write",
+            risk: super::ToolRisk::Privileged,
+            decision: super::PermissionDecision {
+                effect: super::PermissionEffect::Ask,
+                scope: super::PermissionScope::Once,
+                reason: "confirm".into(),
+                source: super::PermissionDecisionSource::ToolDefault,
+                mode: None,
+            },
+            summary: "write".into(),
+            preview: None,
+            affected_paths: Vec::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn cancelled_turn_cannot_register_a_late_confirmation() {
+        let state = confirmation_state();
+        state
+            .cancel
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        let mut emitted = false;
+        let response = super::confirm_with_emitter(
+            &state,
+            confirmation_request(),
+            std::time::Duration::from_millis(100),
+            |payload| {
+                emitted = true;
+                crate::biz::permission::respond_confirm(
+                    &state,
+                    payload.id.to_string(),
+                    true,
+                    super::PermissionScope::Once,
+                );
+                Ok(())
+            },
+        )
+        .await;
+        assert!(
+            !response.allow,
+            "a cancelled owner must not accept a late confirmation"
+        );
+        assert!(!emitted);
+        assert!(state.pending_confirms.lock().unwrap().is_empty());
+    }
+    #[tokio::test]
+    async fn confirmation_response_is_consumed_once_and_waiter_is_cleaned() {
+        let state = confirmation_state();
+        let response = super::confirm_with_emitter(
+            &state,
+            confirmation_request(),
+            std::time::Duration::from_secs(1),
+            |payload| {
+                assert_eq!(payload.turn_id, "turn-a");
+                assert_eq!(payload.session_id, "session-a");
+                assert_eq!(state.pending_confirms.lock().unwrap().len(), 1);
+                crate::biz::permission::respond_confirm(
+                    &state,
+                    payload.id.into(),
+                    true,
+                    super::PermissionScope::Session,
+                );
+                crate::biz::permission::respond_confirm(
+                    &state,
+                    payload.id.into(),
+                    false,
+                    super::PermissionScope::Once,
+                );
+                Ok(())
+            },
+        )
+        .await;
+        assert!(response.allow);
+        assert_eq!(response.scope, super::PermissionScope::Session);
+        assert!(state.pending_confirms.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn interrupt_drains_confirmation_and_late_approval_is_ignored() {
+        let state = confirmation_state();
+        let response = super::confirm_with_emitter(
+            &state,
+            confirmation_request(),
+            std::time::Duration::from_secs(1),
+            |payload| {
+                state
+                    .cancel
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
+                super::deny_pending_confirmations(&state);
+                crate::biz::permission::respond_confirm(
+                    &state,
+                    payload.id.into(),
+                    true,
+                    super::PermissionScope::User,
+                );
+                Ok(())
+            },
+        )
+        .await;
+        assert!(!response.allow);
+        assert_eq!(response.scope, super::PermissionScope::Once);
+        assert!(state.pending_confirms.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn failed_prompt_and_timeout_deny_without_leaking_waiters() {
+        let state = confirmation_state();
+        let failed = super::confirm_with_emitter(
+            &state,
+            confirmation_request(),
+            std::time::Duration::from_secs(300),
+            |_| Err("window unavailable".into()),
+        )
+        .await;
+        assert!(!failed.allow);
+        assert!(state.pending_confirms.lock().unwrap().is_empty());
+        let timed_out = super::confirm_with_emitter(
+            &state,
+            confirmation_request(),
+            std::time::Duration::ZERO,
+            |_| Ok(()),
+        )
+        .await;
+        assert!(!timed_out.allow);
+        assert!(state.pending_confirms.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn dropping_confirmation_future_removes_its_pending_sender() {
+        let state = confirmation_state();
+        let mut future = Box::pin(super::confirm_with_emitter(
+            &state,
+            confirmation_request(),
+            std::time::Duration::from_secs(300),
+            |_| Ok(()),
+        ));
+        std::future::poll_fn(|cx| {
+            assert!(std::future::Future::poll(future.as_mut(), cx).is_pending());
+            std::task::Poll::Ready(())
+        })
+        .await;
+        assert_eq!(state.pending_confirms.lock().unwrap().len(), 1);
+        drop(future);
+        assert!(state.pending_confirms.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn confirmation_without_a_matching_live_owner_never_emits_or_registers() {
+        use crate::agent::session_engine::TurnStatus;
+        for case in 0..3 {
+            let state = confirmation_state();
+            {
+                let mut engine = state.session_engine.lock().unwrap();
+                match case {
+                    0 => engine.active_turn = None,
+                    1 => engine.active_turn.as_mut().unwrap().session_id = "other-session".into(),
+                    _ => engine.active_turn.as_mut().unwrap().status = TurnStatus::Cancelling,
+                }
+            }
+            let response = super::confirm_with_emitter(
+                &state,
+                confirmation_request(),
+                std::time::Duration::from_secs(1),
+                |_| panic!("an unowned confirmation must never reach the UI"),
+            )
+            .await;
+            assert!(!response.allow);
+            assert!(state.pending_confirms.lock().unwrap().is_empty());
+        }
+    }
+
     use super::*;
     use crate::store::{Session, SessionStore};
 

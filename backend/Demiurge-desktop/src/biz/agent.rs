@@ -1,6 +1,5 @@
 //! agent IPC Adapter.
 
-use crate::permission::PermissionResponse;
 use crate::*;
 use std::sync::atomic::Ordering;
 use tauri::AppHandle;
@@ -123,10 +122,7 @@ pub(crate) async fn send_with_agents(
 pub(crate) fn interrupt(app: AppHandle, state: &AppState) {
     agent::session_engine::request_interrupt(&app, state);
     // 立即唤醒所有正在等待的确认（按「中断」处理），否则确认弹窗的 await 会把整轮卡住最长 5 分钟
-    let mut pending = state.pending_confirms.lock().unwrap();
-    for (_, tx) in pending.drain() {
-        let _ = tx.send(PermissionResponse::deny_once());
-    }
+    crate::permission::deny_pending_confirmations(state);
 }
 
 pub(crate) fn session_engine_state(

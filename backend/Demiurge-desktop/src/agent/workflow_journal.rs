@@ -26,7 +26,50 @@ pub fn append(
     event: &str,
     payload: Value,
 ) -> Result<(), String> {
-    let sandbox = state.sandbox_dir.lock().unwrap().clone();
+    static APPEND_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _append = APPEND_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let sandbox = match super::workflow_runtime::registered_storage_root(state, run_id)? {
+        Some(root) => root,
+        None => {
+            // Slash/Ultracode journals belong to the active main turn, never the sidebar selection.
+            let session_id = state
+                .session_engine
+                .lock()
+                .unwrap()
+                .active_turn
+                .as_ref()
+                .map(|turn| turn.session_id.clone())
+                .ok_or_else(|| "Cannot write an unowned workflow journal.".to_string())?;
+            let execution =
+                super::execution_context::ExecutionContext::for_session(state, &session_id)?;
+            let owner_path = run_dir(&execution.workspace_root, run_id).join("execution.json");
+            if owner_path.exists() {
+                let owner: super::execution_context::ExecutionContext = serde_json::from_str(
+                    &fs::read_to_string(&owner_path).map_err(|e| e.to_string())?,
+                )
+                .map_err(|e| format!("Cannot verify journal execution identity: {e}"))?;
+                if owner != execution {
+                    return Err("Journal execution identity does not match this turn.".to_string());
+                }
+            } else {
+                // Never attach a new identity to a legacy journal whose owner is unknown.
+                if run_dir(&execution.workspace_root, run_id)
+                    .join("journal.jsonl")
+                    .exists()
+                {
+                    return Err(
+                        "Legacy journal has no verified owner; start a new run.".to_string()
+                    );
+                }
+                let body = serde_json::to_vec(&execution).map_err(|e| e.to_string())?;
+                demiurge_framework::persistence::atomic_write(&owner_path, &body, false)
+                    .map_err(|e| e.to_string())?;
+            }
+            execution.workspace_root
+        }
+    };
     append_in_root(&sandbox, run_id, event, payload)
 }
 
@@ -76,8 +119,28 @@ pub fn list(state: &crate::AppState) -> Vec<WorkflowRunInfo> {
 }
 
 pub fn resume_overlay(state: &crate::AppState, run_id: &str) -> Result<String, String> {
-    let sandbox = state.sandbox_dir.lock().unwrap().clone();
-    let path = run_dir(&sandbox, run_id).join("journal.jsonl");
+    let sandbox = super::workflow_runtime::registered_storage_root(state, run_id)?
+        .unwrap_or_else(|| state.sandbox_dir.lock().unwrap().clone());
+    let owner_path = run_dir(&sandbox, run_id).join("execution.json");
+    let execution: super::execution_context::ExecutionContext =
+        serde_json::from_str(&fs::read_to_string(&owner_path).map_err(|_| {
+            "Journal has no verified execution identity; start a new run.".to_string()
+        })?)
+        .map_err(|e| format!("Cannot read journal execution identity: {e}"))?;
+    let caller = super::execution_context::ExecutionContext::for_session(
+        state,
+        &super::session_engine::execution_session_id(state),
+    )?;
+    if caller != execution
+        || fs::canonicalize(&sandbox).ok().as_ref() != Some(&execution.workspace_root)
+    {
+        return Err("Resume this journal from its original session and workspace.".to_string());
+    }
+    resume_overlay_in_root(&sandbox, run_id)
+}
+
+pub(super) fn resume_overlay_in_root(root: &Path, run_id: &str) -> Result<String, String> {
+    let path = run_dir(root, run_id).join("journal.jsonl");
     let raw = fs::read_to_string(&path).map_err(|e| format!("读取 workflow journal 失败：{e}"))?;
     let tail = raw
         .lines()
@@ -115,6 +178,63 @@ fn sanitize_run_id(run_id: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn workflow_ownership_slash_journal_remains_bound_to_its_turn_and_rejects_rebinding() {
+        use super::super::session_engine::{TurnEntrypoint, TurnRunState, TurnStatus};
+        let root = std::env::temp_dir().join(format!(
+            "demiurge_journal_owner_{}",
+            store::new_session_id()
+        ));
+        fs::create_dir_all(root.join("other")).unwrap();
+        let root = fs::canonicalize(root).unwrap();
+        let state = crate::AppState::new(reqwest::Client::new());
+        *state.sandbox_dir.lock().unwrap() = root.join("other");
+        let mut a = store::Session::new();
+        a.id = "a".to_string();
+        a.workspace_path = root.to_string_lossy().to_string();
+        let mut b = a.clone();
+        b.id = "b".to_string();
+        *state.sessions.lock().unwrap() = store::SessionStore {
+            active: "b".to_string(),
+            sessions: vec![a, b],
+        };
+        state.session_engine.lock().unwrap().active_turn = Some(TurnRunState {
+            id: "turn-a".to_string(),
+            session_id: "a".to_string(),
+            entrypoint: TurnEntrypoint::Send,
+            status: TurnStatus::Running,
+            input_preview: String::new(),
+            workflow_run_id: None,
+            agent_names: Vec::new(),
+            started_at: 1,
+            updated_at: 1,
+            completed_at: None,
+            error: None,
+        });
+        append(&state, "wf_slash", "original", json!({})).unwrap();
+        let journal = run_dir(&root, "wf_slash").join("journal.jsonl");
+        assert!(journal.exists());
+        assert!(!root.join("other").join(JOURNAL_DIR).exists());
+        *state.sandbox_dir.lock().unwrap() = root.clone();
+        assert!(resume_overlay(&state, "wf_slash")
+            .unwrap()
+            .contains("original"));
+        state
+            .session_engine
+            .lock()
+            .unwrap()
+            .active_turn
+            .as_mut()
+            .unwrap()
+            .session_id = "b".to_string();
+        assert!(append(&state, "wf_slash", "rebound", json!({})).is_err());
+        assert!(resume_overlay(&state, "wf_slash").is_err());
+        fs::remove_file(run_dir(&root, "wf_slash").join("execution.json")).unwrap();
+        assert!(append(&state, "wf_slash", "legacy_rebound", json!({})).is_err());
+        assert!(!fs::read_to_string(journal).unwrap().contains("rebound"));
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn sanitizes_run_ids_for_paths() {

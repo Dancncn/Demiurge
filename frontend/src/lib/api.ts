@@ -322,14 +322,14 @@ export const listenUnifiedAgentEvents = (handler: (e: AgentEventEnvelope) => voi
 
 // ---- 事件订阅 ----
 export interface AgentEventHandlers {
-  onAssistantStart: (turn?: TurnEventContext) => void;
-  onAssistantDelta: (text: string, turn?: TurnEventContext) => void;
-  onAssistantReasoning?: (text: string, turn?: TurnEventContext) => void;
-  onAssistantDone: (text: string, turn?: TurnEventContext) => void;
-  onAssistantError: (e: AssistantErrorEvent, turn?: TurnEventContext) => void;
-  onAssistantInterrupted: (turn?: TurnEventContext) => void;
-  onToolStart: (e: ToolStartEvent, turn?: TurnEventContext) => void;
-  onToolEnd: (e: ToolEndEvent, turn?: TurnEventContext) => void;
+  onAssistantStart: (turn?: TurnEventContext, responseId?: string) => void;
+  onAssistantDelta: (text: string, turn?: TurnEventContext, responseId?: string) => void;
+  onAssistantReasoning?: (text: string, turn?: TurnEventContext, responseId?: string) => void;
+  onAssistantDone: (text: string, turn?: TurnEventContext, responseId?: string) => void;
+  onAssistantError: (e: AssistantErrorEvent, turn?: TurnEventContext, responseId?: string) => void;
+  onAssistantInterrupted: (turn?: TurnEventContext, responseId?: string) => void;
+  onToolStart: (e: ToolStartEvent, turn?: TurnEventContext, responseId?: string) => void;
+  onToolEnd: (e: ToolEndEvent, turn?: TurnEventContext, responseId?: string) => void;
   onConfirmRequest: (e: ConfirmRequestEvent) => void;
   onGoalProgress: (e: GoalProgressEvent) => void;
 }
@@ -343,28 +343,28 @@ export async function listenAgentEvents(h: AgentEventHandlers): Promise<Unlisten
       const turn = event.turn;
       switch (event.kind) {
         case "assistant_start":
-          h.onAssistantStart(turn);
+          h.onAssistantStart(turn, event.response_id);
           break;
         case "assistant_delta":
-          h.onAssistantDelta(String(event.payload ?? ""), turn);
+          h.onAssistantDelta(String(event.payload ?? ""), turn, event.response_id);
           break;
         case "assistant_reasoning":
-          h.onAssistantReasoning?.(String(event.payload ?? ""), turn);
+          h.onAssistantReasoning?.(String(event.payload ?? ""), turn, event.response_id);
           break;
         case "assistant_done":
-          h.onAssistantDone(String(event.payload ?? ""), turn);
+          h.onAssistantDone(String(event.payload ?? ""), turn, event.response_id);
           break;
         case "assistant_error":
-          h.onAssistantError(event.payload as AssistantErrorEvent, turn);
+          h.onAssistantError(event.payload as AssistantErrorEvent, turn, event.response_id);
           break;
         case "assistant_interrupted":
-          h.onAssistantInterrupted(turn);
+          h.onAssistantInterrupted(turn, event.response_id);
           break;
         case "tool_start":
-          h.onToolStart(event.payload as ToolStartEvent, turn);
+          h.onToolStart(event.payload as ToolStartEvent, turn, event.response_id);
           break;
         case "tool_end":
-          h.onToolEnd(event.payload as ToolEndEvent, turn);
+          h.onToolEnd(event.payload as ToolEndEvent, turn, event.response_id);
           break;
       }
     }),

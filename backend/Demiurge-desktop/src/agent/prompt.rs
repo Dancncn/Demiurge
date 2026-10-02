@@ -117,6 +117,46 @@ fn build_with_report_for_session_input(
     user_text: Option<&str>,
 ) -> PromptBuild {
     let sandbox = state.sandbox_dir.lock().unwrap().clone();
+    build_with_report_at_root(
+        state,
+        &sandbox,
+        session_id,
+        settings,
+        persona_text,
+        session_summary,
+        user_text,
+    )
+}
+
+pub fn build_for_execution(
+    state: &crate::AppState,
+    execution: &super::execution_context::ExecutionContext,
+    settings: &Settings,
+    persona_text: &str,
+    session_summary: Option<&str>,
+    user_text: &str,
+) -> String {
+    build_with_report_at_root(
+        state,
+        &execution.workspace_root,
+        &execution.session_id,
+        settings,
+        persona_text,
+        session_summary,
+        Some(user_text),
+    )
+    .text
+}
+
+fn build_with_report_at_root(
+    state: &crate::AppState,
+    sandbox: &Path,
+    session_id: &str,
+    settings: &Settings,
+    persona_text: &str,
+    session_summary: Option<&str>,
+    user_text: Option<&str>,
+) -> PromptBuild {
     let data_dir = state.data_dir.lock().unwrap().clone();
     let packs_dir = state.packs_dir.lock().unwrap().clone();
     let goal_block = super::goal::build_goal_context_block_for_session(state, session_id);

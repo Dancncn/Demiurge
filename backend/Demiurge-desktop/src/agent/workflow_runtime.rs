@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, Manager};
 
+use super::execution_context::ExecutionContext;
 use super::subagent::{SubagentContextMode, SubagentRequest};
 use super::{budget, subagent, workflow_journal};
 use crate::store;
@@ -28,9 +29,8 @@ pub use workflow_schema::{
 };
 
 const WORKFLOW_DIR: &str = ".demiurge/workflows";
-const RUN_STATE_SCHEMA_VERSION: u32 = 1;
+const RUN_STATE_SCHEMA_VERSION: u32 = 2;
 const RUN_STATE_FILE: &str = "state.json";
-const RUN_STATE_TMP_FILE: &str = "state.json.tmp";
 
 type StepFuture<'a> = Pin<Box<dyn Future<Output = Result<(), String>> + Send + 'a>>;
 
@@ -79,6 +79,13 @@ pub struct WorkflowRunProgress {
     pub parent_run_id: Option<String>,
     #[serde(default)]
     pub retry_node_id: Option<String>,
+    #[serde(default)]
+    execution: Option<ExecutionContext>,
+    #[serde(default)]
+    definition_snapshot: Option<WorkflowFile>,
+    /// Only populated from a verified on-disk location; legacy metadata is not authority.
+    #[serde(skip)]
+    storage_root: Option<PathBuf>,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -166,6 +173,9 @@ pub fn panel_state(state: &crate::AppState) -> WorkflowPanelState {
             failed_node: None,
             parent_run_id: None,
             retry_node_id: None,
+            execution: None,
+            definition_snapshot: None,
+            storage_root: None,
         });
     }
     runs.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
@@ -195,11 +205,32 @@ pub fn hydrate_persisted_runs(state: &crate::AppState) {
 }
 
 pub fn resume_overlay(state: &crate::AppState, run_id: &str) -> Result<String, String> {
-    match workflow_journal::resume_overlay(state, run_id) {
+    let root = registered_storage_root(state, run_id)?
+        .unwrap_or_else(|| state.sandbox_dir.lock().unwrap().clone());
+    let run = registered_run(state, run_id)
+        .ok()
+        .or_else(|| read_run_state_in_root(&root, run_id));
+    if let Some(run) = &run {
+        let (execution, _) = owned_definition(state, run)?;
+        let caller = ExecutionContext::for_session(
+            state,
+            &super::session_engine::execution_session_id(state),
+        )?;
+        if caller != execution {
+            return Err(
+                "Resume this workflow from its original session and workspace.".to_string(),
+            );
+        }
+    }
+    let journal = if run.is_some() {
+        workflow_journal::resume_overlay_in_root(&root, run_id)
+    } else {
+        workflow_journal::resume_overlay(state, run_id)
+    };
+    match journal {
         Ok(overlay) => Ok(overlay),
         Err(journal_err) => {
-            let sandbox = state.sandbox_dir.lock().unwrap().clone();
-            let Some(run) = read_run_state_in_root(&sandbox, run_id) else {
+            let Some(run) = run else {
                 return Err(journal_err);
             };
             let snapshot = serde_json::to_string_pretty(&run)
@@ -282,17 +313,40 @@ pub fn launch_with_inputs(
     name: &str,
     inputs: BTreeMap<String, Value>,
 ) -> Result<String, String> {
-    let (workflow, path) = load_workflow(state, name)?;
+    let progress = prepare_run(state, name, inputs)?;
+    let run_id = progress.run_id.clone();
+    let path = progress.logs.first().cloned().unwrap_or_default();
+    state.workflow_runs.lock().unwrap().push(progress);
+    state
+        .workflow_cancels
+        .lock()
+        .unwrap()
+        .insert(run_id.clone(), Arc::new(AtomicBool::new(false)));
+    emit_update(app, state);
+    let _ = workflow_journal::append(
+        state,
+        &run_id,
+        "workflow_started",
+        json!({"name": name, "path": path}),
+    );
+    Ok(run_id)
+}
+
+fn prepare_run(
+    state: &crate::AppState,
+    name: &str,
+    inputs: BTreeMap<String, Value>,
+) -> Result<WorkflowRunProgress, String> {
+    let execution = ExecutionContext::capture_selected(state)?;
+    let (workflow, path) = load_workflow_in_root(&execution.workspace_root, name)?;
     let report = validate_workflow(&workflow, &inputs);
     if !report.valid {
         return Err(format_validation_errors(&report.issues));
     }
     let rendered = render_workflow(&workflow, &report.normalized_inputs)?;
     let run_id = workflow_journal::new_run_id();
-    let journal_path = state
-        .sandbox_dir
-        .lock()
-        .unwrap()
+    let journal_path = execution
+        .workspace_root
         .join(".demiurge")
         .join("workflow-runs")
         .join(&run_id)
@@ -320,21 +374,11 @@ pub fn launch_with_inputs(
         failed_node: None,
         parent_run_id: None,
         retry_node_id: None,
+        execution: Some(execution),
+        definition_snapshot: Some(rendered),
+        storage_root: None,
     };
-    state.workflow_runs.lock().unwrap().push(progress);
-    state
-        .workflow_cancels
-        .lock()
-        .unwrap()
-        .insert(run_id.clone(), Arc::new(AtomicBool::new(false)));
-    emit_update(app, state);
-    let _ = workflow_journal::append(
-        state,
-        &run_id,
-        "workflow_started",
-        json!({ "name": name, "path": path.to_string_lossy() }),
-    );
-    Ok(run_id)
+    Ok(progress)
 }
 
 pub fn validate_definition(
@@ -428,64 +472,10 @@ pub fn launch_failed_node_retry(
             read_run_state_in_root(&root, parent_run_id)
         })
         .ok_or_else(|| format!("workflow run `{parent_run_id}` was not found"))?;
-    let failed = parent
-        .failed_node
-        .clone()
-        .filter(|failed| failed.retryable)
-        .ok_or_else(|| "this workflow has no retryable failed node".to_string())?;
-    let definition_name = if parent.definition_name.trim().is_empty() {
-        parent.name.clone()
-    } else {
-        parent.definition_name.clone()
-    };
-    let (workflow, _) = load_workflow(state, &definition_name)?;
-    let report = validate_workflow(&workflow, &parent.input_values);
-    if !report.valid {
-        return Err(format_validation_errors(&report.issues));
-    }
-    let rendered = render_workflow(&workflow, &report.normalized_inputs)?;
-    let (step, _) = find_step(&rendered.steps, &failed.node_id).ok_or_else(|| {
-        format!(
-            "failed node `{}` no longer exists in workflow `{definition_name}`",
-            failed.node_id
-        )
-    })?;
-
-    let run_id = workflow_journal::new_run_id();
-    let now = store::now_millis();
-    let journal_path =
-        workflow_journal::run_dir(&state.sandbox_dir.lock().unwrap().clone(), &run_id)
-            .join("journal.jsonl")
-            .to_string_lossy()
-            .to_string();
-    state
-        .workflow_runs
-        .lock()
-        .unwrap()
-        .push(WorkflowRunProgress {
-            run_id: run_id.clone(),
-            name: format!("{} / retry {}", parent.name, failed.label),
-            definition_name,
-            status: WorkflowStatus::Running,
-            cancel_requested: false,
-            current_phase: failed.phase.clone(),
-            agents: Vec::new(),
-            logs: vec![format!(
-                "retrying node {} from run {}",
-                failed.node_id, parent_run_id
-            )],
-            journal_path,
-            started_at: now,
-            updated_at: now,
-            error: None,
-            budget: parent.budget.clone(),
-            steps_total: count_steps(std::slice::from_ref(&step)),
-            steps_done: 0,
-            input_values: report.normalized_inputs,
-            failed_node: None,
-            parent_run_id: Some(parent_run_id.to_string()),
-            retry_node_id: Some(failed.node_id.clone()),
-        });
+    let retry = prepare_retry(state, &parent)?;
+    let run_id = retry.run_id.clone();
+    let node_id = retry.retry_node_id.clone();
+    state.workflow_runs.lock().unwrap().push(retry);
     state
         .workflow_cancels
         .lock()
@@ -496,13 +486,69 @@ pub fn launch_failed_node_retry(
         &run_id,
         "workflow_node_retry_started",
         json!({
-            "parent_run_id": parent_run_id,
-            "node_id": failed.node_id,
-            "definition": parent.definition_name,
+            "parent_run_id": parent_run_id, "node_id": node_id, "definition": parent.definition_name,
         }),
     );
     emit_update(app, state);
     Ok(run_id)
+}
+
+fn prepare_retry(
+    state: &crate::AppState,
+    parent: &WorkflowRunProgress,
+) -> Result<WorkflowRunProgress, String> {
+    let parent_run_id = &parent.run_id;
+    let failed = parent
+        .failed_node
+        .clone()
+        .filter(|failed| failed.retryable)
+        .ok_or_else(|| "this workflow has no retryable failed node".to_string())?;
+    let definition_name = if parent.definition_name.trim().is_empty() {
+        parent.name.clone()
+    } else {
+        parent.definition_name.clone()
+    };
+    let (execution, rendered) = owned_definition(state, &parent)?;
+    let (step, _) = find_step(&rendered.steps, &failed.node_id).ok_or_else(|| {
+        format!(
+            "failed node `{}` no longer exists in workflow `{definition_name}`",
+            failed.node_id
+        )
+    })?;
+
+    let run_id = workflow_journal::new_run_id();
+    let now = store::now_millis();
+    let journal_path = workflow_journal::run_dir(&execution.workspace_root, &run_id)
+        .join("journal.jsonl")
+        .to_string_lossy()
+        .to_string();
+    Ok(WorkflowRunProgress {
+        run_id: run_id.clone(),
+        name: format!("{} / retry {}", parent.name, failed.label),
+        definition_name,
+        status: WorkflowStatus::Running,
+        cancel_requested: false,
+        current_phase: failed.phase.clone(),
+        agents: Vec::new(),
+        logs: vec![format!(
+            "retrying node {} from run {}",
+            failed.node_id, parent_run_id
+        )],
+        journal_path,
+        started_at: now,
+        updated_at: now,
+        error: None,
+        budget: parent.budget.clone(),
+        steps_total: count_steps(std::slice::from_ref(&step)),
+        steps_done: 0,
+        input_values: parent.input_values.clone(),
+        failed_node: None,
+        parent_run_id: Some(parent_run_id.to_string()),
+        retry_node_id: Some(failed.node_id.clone()),
+        execution: Some(execution),
+        definition_snapshot: Some(rendered),
+        storage_root: None,
+    })
 }
 
 pub async fn run_failed_node_retry(app: AppHandle, run_id: String) {
@@ -520,12 +566,7 @@ pub async fn run_failed_node_retry(app: AppHandle, run_id: String) {
             .retry_node_id
             .clone()
             .ok_or_else(|| "retry run is missing its node id".to_string())?;
-        let (workflow, _) = load_workflow(state.inner(), &run.definition_name)?;
-        let report = validate_workflow(&workflow, &run.input_values);
-        if !report.valid {
-            return Err(format_validation_errors(&report.issues));
-        }
-        let rendered = render_workflow(&workflow, &report.normalized_inputs)?;
+        let (_, rendered) = owned_definition(state.inner(), &run)?;
         let (step, phase) = find_step(&rendered.steps, &node_id)
             .ok_or_else(|| format!("retry node `{node_id}` no longer exists"))?;
         run_step(&app, state.inner(), &run_id, phase, node_id, step).await?;
@@ -624,16 +665,11 @@ pub fn workflow_retry_failed_node(
     Ok(retry_run_id)
 }
 
-pub async fn run_launched(app: AppHandle, run_id: String, name: String) {
+pub async fn run_launched(app: AppHandle, run_id: String, _name: String) {
     let state = app.state::<crate::AppState>();
     let result = async {
-        let (workflow, _) = load_workflow(state.inner(), &name)?;
-        let inputs = run_inputs(state.inner(), &run_id);
-        let report = validate_workflow(&workflow, &inputs);
-        if !report.valid {
-            return Err(format_validation_errors(&report.issues));
-        }
-        let workflow = render_workflow(&workflow, &report.normalized_inputs)?;
+        let run = registered_run(state.inner(), &run_id)?;
+        let (_, workflow) = owned_definition(state.inner(), &run)?;
         for (index, step) in workflow.steps.into_iter().enumerate() {
             let generated = format!("steps[{index}]");
             let step_id = node_id(&step, &generated);
@@ -869,7 +905,15 @@ async fn run_agent_step(
         json!({ "agent_id": id, "node_id": node_id, "label": label, "phase": phase, "prompt": prompt, "agent": agent_name.clone() }),
     );
     let mode = SubagentContextMode::parse(context_mode.as_deref());
-    let cancel = state.workflow_cancels.lock().unwrap().get(run_id).cloned();
+    let run = registered_run(state, run_id)?;
+    let (execution, _) = owned_definition(state, &run)?;
+    let cancel = state
+        .workflow_cancels
+        .lock()
+        .unwrap()
+        .get(run_id)
+        .cloned()
+        .ok_or_else(|| "Workflow has no live cancellation token.".to_string())?;
     let result = subagent::run(
         state,
         SubagentRequest {
@@ -884,7 +928,8 @@ async fn run_agent_step(
             max_total_tokens: workflow_budget(state, run_id).and_then(|budget| budget.remaining()),
             output_format: subagent::SubagentOutputFormat::Plain,
             reviewer_count: 1,
-            cancel,
+            cancel: Some(cancel),
+            execution: Some(execution),
         },
     )
     .await;
@@ -988,6 +1033,14 @@ fn format_validation_errors(issues: &[WorkflowValidationIssue]) -> String {
 
 fn load_workflow(state: &crate::AppState, name: &str) -> Result<(WorkflowFile, PathBuf), String> {
     let dir = ensure_dir(state)?;
+    load_workflow_from_dir(dir, name)
+}
+
+fn load_workflow_in_root(root: &Path, name: &str) -> Result<(WorkflowFile, PathBuf), String> {
+    load_workflow_from_dir(root.join(WORKFLOW_DIR), name)
+}
+
+fn load_workflow_from_dir(dir: PathBuf, name: &str) -> Result<(WorkflowFile, PathBuf), String> {
     let requested = name.trim();
     if requested.is_empty() {
         return Err("workflow 名称不能为空。".to_string());
@@ -1095,17 +1148,6 @@ fn push_agent(
     }
     drop(runs);
     emit_update(app, state);
-}
-
-fn run_inputs(state: &crate::AppState, run_id: &str) -> BTreeMap<String, Value> {
-    state
-        .workflow_runs
-        .lock()
-        .unwrap()
-        .iter()
-        .find(|run| run.run_id == run_id)
-        .map(|run| run.input_values.clone())
-        .unwrap_or_default()
 }
 
 fn record_failed_node(
@@ -1257,33 +1299,98 @@ fn push_log(app: &AppHandle, state: &crate::AppState, run_id: &str, message: Str
     emit_update(app, state);
 }
 
+fn registered_run(state: &crate::AppState, run_id: &str) -> Result<WorkflowRunProgress, String> {
+    state
+        .workflow_runs
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|run| run.run_id == run_id)
+        .cloned()
+        .ok_or_else(|| format!("Workflow run `{run_id}` was not found."))
+}
+
+fn owned_definition(
+    state: &crate::AppState,
+    run: &WorkflowRunProgress,
+) -> Result<(ExecutionContext, WorkflowFile), String> {
+    let execution = run.execution.clone().ok_or_else(|| {
+        "Legacy workflow has no verified execution identity; start a new run.".to_string()
+    })?;
+    execution.validate(state)?;
+    let definition = run
+        .definition_snapshot
+        .clone()
+        .ok_or_else(|| "Workflow has no captured definition; start a new run.".to_string())?;
+    Ok((execution, definition))
+}
+
+fn storage_root(run: &WorkflowRunProgress) -> Result<PathBuf, String> {
+    if let Some(execution) = &run.execution {
+        execution.validate_root()?;
+        return Ok(execution.workspace_root.clone());
+    }
+    let root = run
+        .storage_root
+        .clone()
+        .ok_or_else(|| "Workflow has no verified storage location.".to_string())?;
+    if fs::canonicalize(&root).ok().as_ref() != Some(&root) || !root.is_dir() {
+        return Err("Workflow storage location changed or is unavailable.".to_string());
+    }
+    Ok(root)
+}
+
+pub(crate) fn registered_storage_root(
+    state: &crate::AppState,
+    run_id: &str,
+) -> Result<Option<PathBuf>, String> {
+    let run = state
+        .workflow_runs
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|run| run.run_id == run_id)
+        .cloned();
+    run.map(|run| storage_root(&run)).transpose()
+}
+
 fn persist_all_run_snapshots(state: &crate::AppState) {
+    // Serialize before cloning so a delayed emitter cannot overwrite a newer snapshot.
+    static WRITE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _write = WRITE_LOCK.lock().unwrap_or_else(|error| error.into_inner());
     let runs = state.workflow_runs.lock().unwrap().clone();
-    let sandbox = state.sandbox_dir.lock().unwrap().clone();
     for run in runs {
         if run.status == WorkflowStatus::Journaled {
             continue;
         }
-        let _ = write_run_state_in_root(&sandbox, &run);
+        match storage_root(&run).and_then(|root| write_run_state_in_root(&root, &run)) {
+            Ok(()) => {}
+            Err(error) => eprintln!(
+                "Workflow snapshot {} was not persisted: {error}",
+                run.run_id
+            ),
+        }
     }
 }
 
 fn write_run_state_in_root(root: &Path, run: &WorkflowRunProgress) -> Result<(), String> {
+    if let Some(execution) = &run.execution {
+        execution.validate_root()?;
+        if fs::canonicalize(root).ok().as_ref() != Some(&execution.workspace_root) {
+            return Err("Refusing to persist workflow outside its launch workspace.".to_string());
+        }
+    }
     let dir = workflow_journal::run_dir(root, &run.run_id);
     fs::create_dir_all(&dir).map_err(|e| format!("创建 workflow state 目录失败：{e}"))?;
     let target = dir.join(RUN_STATE_FILE);
-    let tmp = dir.join(RUN_STATE_TMP_FILE);
     let payload = WorkflowRunStateFile {
         schema_version: RUN_STATE_SCHEMA_VERSION,
         run: run.clone(),
     };
     let body = serde_json::to_vec_pretty(&payload)
         .map_err(|e| format!("序列化 workflow state 失败：{e}"))?;
-    fs::write(&tmp, body).map_err(|e| format!("写入 workflow state 临时文件失败：{e}"))?;
-    if target.exists() {
-        fs::remove_file(&target).map_err(|e| format!("替换 workflow state 失败：{e}"))?;
-    }
-    fs::rename(&tmp, &target).map_err(|e| format!("提交 workflow state 失败：{e}"))
+    demiurge_framework::persistence::atomic_write(&target, &body, false)
+        .map_err(|e| format!("提交 workflow state 失败：{e}"))
 }
 
 fn list_persisted_run_states(state: &crate::AppState) -> Vec<WorkflowRunProgress> {
@@ -1292,8 +1399,11 @@ fn list_persisted_run_states(state: &crate::AppState) -> Vec<WorkflowRunProgress
 }
 
 fn read_run_state_in_root(root: &Path, run_id: &str) -> Option<WorkflowRunProgress> {
-    read_run_state_file(&workflow_journal::run_dir(root, run_id).join(RUN_STATE_FILE))
-        .map(normalize_restored_run)
+    read_run_state_file(
+        &workflow_journal::run_dir(root, run_id).join(RUN_STATE_FILE),
+        root,
+    )
+    .map(normalize_restored_run)
 }
 
 fn list_run_states_in_root(root: &Path) -> Vec<WorkflowRunProgress> {
@@ -1303,21 +1413,41 @@ fn list_run_states_in_root(root: &Path) -> Vec<WorkflowRunProgress> {
     };
     let mut runs = entries
         .filter_map(Result::ok)
-        .filter_map(|entry| read_run_state_file(&entry.path().join(RUN_STATE_FILE)))
+        .filter_map(|entry| read_run_state_file(&entry.path().join(RUN_STATE_FILE), root))
         .map(normalize_restored_run)
         .collect::<Vec<_>>();
     runs.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
     runs
 }
 
-fn read_run_state_file(path: &Path) -> Option<WorkflowRunProgress> {
+fn read_run_state_file(path: &Path, root: &Path) -> Option<WorkflowRunProgress> {
     let raw = fs::read_to_string(path).ok()?;
-    let parsed = serde_json::from_str::<WorkflowRunStateFile>(&raw).ok()?;
-    if parsed.schema_version != RUN_STATE_SCHEMA_VERSION {
+    let mut parsed = serde_json::from_str::<WorkflowRunStateFile>(&raw).ok()?;
+    if !matches!(parsed.schema_version, 1 | RUN_STATE_SCHEMA_VERSION) {
         return None;
     }
     if parsed.run.run_id.trim().is_empty() {
         return None;
+    }
+    let root = fs::canonicalize(root).ok()?;
+    let expected_path = workflow_journal::run_dir(&root, &parsed.run.run_id).join(RUN_STATE_FILE);
+    if fs::canonicalize(path).ok()? != expected_path {
+        return None;
+    }
+    if let Some(execution) = &parsed.run.execution {
+        if execution.workspace_root != root || execution.validate_root().is_err() {
+            return None;
+        }
+    }
+    parsed.run.storage_root = Some(root.clone());
+    parsed.run.journal_path = workflow_journal::run_dir(&root, &parsed.run.run_id)
+        .join("journal.jsonl")
+        .to_string_lossy()
+        .to_string();
+    if parsed.run.execution.is_none() || parsed.run.definition_snapshot.is_none() {
+        if let Some(failed) = parsed.run.failed_node.as_mut() {
+            failed.retryable = false;
+        }
     }
     Some(parsed.run)
 }
@@ -1376,6 +1506,253 @@ fn cap_chars(s: &str, max: usize) -> String {
 mod tests {
     use super::*;
 
+    fn ownership_fixture() -> (
+        PathBuf,
+        crate::AppState,
+        PathBuf,
+        PathBuf,
+        WorkflowRunProgress,
+    ) {
+        let root = std::env::temp_dir().join(format!(
+            "demiurge_workflow_fixture_{}",
+            store::new_session_id()
+        ));
+        let a = root.join("a");
+        let b = root.join("b");
+        for (dir, marker) in [(&a, "PROJECT_A_MARKER"), (&b, "PROJECT_B_MARKER")] {
+            fs::create_dir_all(dir.join(WORKFLOW_DIR)).unwrap();
+            fs::write(dir.join("AGENTS.md"), marker).unwrap();
+            fs::write(dir.join("sample.txt"), marker).unwrap();
+            fs::write(dir.join(format!("{marker}.txt")), marker).unwrap();
+            fs::create_dir_all(dir.join(".demiurge/agents")).unwrap();
+            fs::write(
+                dir.join(".demiurge/agents/reader.json"),
+                json!({"name":"reader", "prompt":marker}).to_string(),
+            )
+            .unwrap();
+            fs::write(
+                dir.join("package.json"),
+                json!({"scripts": {"inspect": marker}}).to_string(),
+            )
+            .unwrap();
+            fs::write(
+                dir.join(WORKFLOW_DIR).join("owner.json"),
+                json!({"name":"owner", "steps":[{"type":"log", "id":"first", "message":marker}]})
+                    .to_string(),
+            )
+            .unwrap();
+        }
+        let a = fs::canonicalize(a).unwrap();
+        let b = fs::canonicalize(b).unwrap();
+        let state = crate::AppState::new(reqwest::Client::new());
+        *state.data_dir.lock().unwrap() = root.join("data");
+        *state.packs_dir.lock().unwrap() = root.join("packs");
+        *state.sandbox_dir.lock().unwrap() = a.clone();
+        let mut session_a = store::Session::new();
+        session_a.id = "session-a".to_string();
+        session_a.workspace_path = a.to_string_lossy().to_string();
+        let mut session_b = store::Session::new();
+        session_b.id = "session-b".to_string();
+        session_b.workspace_path = b.to_string_lossy().to_string();
+        *state.sessions.lock().unwrap() = store::SessionStore {
+            active: session_a.id.clone(),
+            sessions: vec![session_a, session_b],
+        };
+        let run = prepare_run(&state, "owner", BTreeMap::new()).unwrap();
+        (root, state, a, b, run)
+    }
+
+    #[tokio::test]
+    async fn workflow_ownership_tools_prompt_and_definition_stay_with_launch_project() {
+        let (root, state, a, b, run) = ownership_fixture();
+        let execution = run.execution.clone().unwrap();
+        state.sessions.lock().unwrap().active = "session-b".to_string();
+        *state.sandbox_dir.lock().unwrap() = b;
+        fs::remove_file(a.join(WORKFLOW_DIR).join("owner.json")).unwrap();
+        let (owner, definition) = owned_definition(&state, &run).unwrap();
+        assert_eq!(owner.session_id, "session-a");
+        assert!(
+            matches!(&definition.steps[0], WorkflowStep::Log { message, .. } if message == "PROJECT_A_MARKER")
+        );
+        for (name, args) in [
+            ("read_file", json!({"path":"sample.txt"})),
+            (
+                "grep",
+                json!({"query":"PROJECT_A_MARKER", "path":"sample.txt"}),
+            ),
+            ("package_scripts", json!({})),
+            ("glob", json!({"pattern":"*.txt"})),
+            ("list_dir", json!({})),
+        ] {
+            let result =
+                crate::tools::execute_subagent_readonly_in_context(&state, &execution, name, args)
+                    .await
+                    .unwrap();
+            assert!(
+                result.contains("PROJECT_A_MARKER"),
+                "{name} returned {result}"
+            );
+            assert!(!result.contains("PROJECT_B_MARKER"));
+        }
+        let inspected = crate::tools::execute_subagent_readonly_in_context(
+            &state,
+            &execution,
+            "context_inspect",
+            json!({}),
+        )
+        .await
+        .unwrap();
+        assert!(inspected.contains("session-a"));
+        let settings = state.settings.lock().unwrap().clone();
+        let prompt = super::super::prompt::build_for_execution(
+            &state, &execution, &settings, "", None, "inspect",
+        );
+        assert!(prompt.contains("PROJECT_A_MARKER"));
+        assert!(!prompt.contains("PROJECT_B_MARKER"));
+        let template = super::super::custom::load_agent_in_workspace(
+            &state,
+            &execution.workspace_root,
+            "reader",
+        )
+        .unwrap();
+        assert_eq!(template.prompt, "PROJECT_A_MARKER");
+        assert!(crate::tools::execute_subagent_readonly_in_context(
+            &state,
+            &execution,
+            "read_file",
+            json!({"path":"../b/sample.txt"})
+        )
+        .await
+        .is_err());
+        state
+            .sessions
+            .lock()
+            .unwrap()
+            .sessions
+            .retain(|session| session.id != "session-a");
+        assert!(crate::tools::execute_subagent_readonly_in_context(
+            &state,
+            &execution,
+            "read_file",
+            json!({"path":"sample.txt"})
+        )
+        .await
+        .is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn workflow_ownership_recovery_preserves_identity_and_rejects_relocated_snapshots() {
+        let (root, state, a, b, run) = ownership_fixture();
+        write_run_state_in_root(&a, &run).unwrap();
+        let restored = read_run_state_in_root(&a, &run.run_id).unwrap();
+        assert_eq!(restored.status, WorkflowStatus::StaleRunning);
+        assert_eq!(restored.execution, run.execution);
+        assert!(owned_definition(&state, &restored).is_ok());
+        assert!(write_run_state_in_root(&b, &run).is_err());
+        let original = workflow_journal::run_dir(&a, &run.run_id).join(RUN_STATE_FILE);
+        let relocated = workflow_journal::run_dir(&b, &run.run_id).join(RUN_STATE_FILE);
+        fs::create_dir_all(relocated.parent().unwrap()).unwrap();
+        fs::copy(&original, &relocated).unwrap();
+        assert!(read_run_state_in_root(&b, &run.run_id).is_none());
+        let mut legacy: Value =
+            serde_json::from_str(&fs::read_to_string(&original).unwrap()).unwrap();
+        legacy["schema_version"] = json!(1);
+        legacy["run"].as_object_mut().unwrap().remove("execution");
+        legacy["run"]
+            .as_object_mut()
+            .unwrap()
+            .remove("definition_snapshot");
+        fs::write(&original, legacy.to_string()).unwrap();
+        let legacy = read_run_state_in_root(&a, &run.run_id).unwrap();
+        assert_eq!(storage_root(&legacy).unwrap(), a);
+        assert!(owned_definition(&state, &legacy).is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn workflow_ownership_retry_and_resume_use_captured_definition_and_owner() {
+        let (root, state, a, b, mut run) = ownership_fixture();
+        run.status = WorkflowStatus::Failed;
+        run.failed_node = Some(WorkflowFailedNode {
+            node_id: "first".to_string(),
+            kind: "log".to_string(),
+            label: "first".to_string(),
+            phase: None,
+            error: "test failure".to_string(),
+            retryable: true,
+        });
+        write_run_state_in_root(&a, &run).unwrap();
+        let overlay = resume_overlay(&state, &run.run_id).unwrap();
+        assert!(overlay.contains("durable state snapshot"));
+        assert!(overlay.contains("PROJECT_A_MARKER"));
+        state.sessions.lock().unwrap().active = "session-b".to_string();
+        *state.sandbox_dir.lock().unwrap() = b.clone();
+        state.workflow_runs.lock().unwrap().push(run.clone());
+        fs::remove_file(a.join(WORKFLOW_DIR).join("owner.json")).unwrap();
+        assert!(resume_overlay(&state, &run.run_id)
+            .unwrap_err()
+            .contains("original session"));
+        let retry = prepare_retry(&state, &run).unwrap();
+        assert_eq!(retry.execution, run.execution);
+        assert_eq!(retry.parent_run_id.as_deref(), Some(run.run_id.as_str()));
+        assert_eq!(storage_root(&retry).unwrap(), a);
+        assert!(
+            matches!(&retry.definition_snapshot.as_ref().unwrap().steps[0], WorkflowStep::Log { message, .. } if message == "PROJECT_A_MARKER")
+        );
+        state.workflow_runs.lock().unwrap().push(retry.clone());
+        workflow_journal::append(&state, &retry.run_id, "retry", json!({})).unwrap();
+        persist_all_run_snapshots(&state);
+        assert!(!b.join(workflow_journal::JOURNAL_DIR).exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn workflow_ownership_project_switch_keeps_journal_and_snapshot() {
+        let root = std::env::temp_dir().join(format!(
+            "demiurge_workflow_ownership_{}",
+            store::new_session_id()
+        ));
+        let project_a = root.join("a");
+        let project_b = root.join("b");
+        fs::create_dir_all(&project_a).unwrap();
+        fs::create_dir_all(&project_b).unwrap();
+        let project_a = fs::canonicalize(project_a).unwrap();
+        let project_b = fs::canonicalize(project_b).unwrap();
+        let state = crate::AppState::new(reqwest::Client::new());
+        *state.sandbox_dir.lock().unwrap() = project_a.clone();
+        let run: WorkflowRunProgress = serde_json::from_value(json!({
+            "run_id": "wf_ownership", "name": "owner", "definition_name": "owner",
+            "status": "running", "current_phase": null, "agents": [], "logs": [],
+            "journal_path": workflow_journal::run_dir(&project_a, "wf_ownership").join("journal.jsonl"),
+            "started_at": 1, "updated_at": 1, "error": null, "budget": {"total": null, "used_exact": 0, "used_estimated": 0},
+            "steps_total": 0, "steps_done": 0,
+            "execution": {"session_id": "session-a", "workspace_root": project_a},
+            "definition_snapshot": {"schema_version": 1, "name": "owner", "description": null, "inputs": [], "steps": []}
+        })).unwrap();
+        state.workflow_runs.lock().unwrap().push(run);
+        *state.sandbox_dir.lock().unwrap() = project_b.clone();
+        workflow_journal::append(&state, "wf_ownership", "after_switch", json!({})).unwrap();
+        persist_all_run_snapshots(&state);
+        assert!(
+            workflow_journal::run_dir(&project_a, "wf_ownership")
+                .join("journal.jsonl")
+                .exists(),
+            "journal must stay in its launch project"
+        );
+        assert!(
+            workflow_journal::run_dir(&project_a, "wf_ownership")
+                .join(RUN_STATE_FILE)
+                .exists(),
+            "snapshot must stay in its launch project"
+        );
+        assert!(
+            !project_b.join(workflow_journal::JOURNAL_DIR).exists(),
+            "an unrelated selected project must receive no workflow writes"
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn sanitizes_workflow_names() {
         assert_eq!(sanitize_name(" review plan! "), "review-plan");
@@ -1431,6 +1808,9 @@ mod tests {
             run_id: "wf_state_test".to_string(),
             name: "state-test".to_string(),
             definition_name: "state-test".to_string(),
+            execution: None,
+            definition_snapshot: None,
+            storage_root: None,
             status: WorkflowStatus::Killed,
             cancel_requested: true,
             current_phase: Some("phase-a".to_string()),
@@ -1491,6 +1871,9 @@ mod tests {
             run_id: "wf_restore_test".to_string(),
             name: "restore-test".to_string(),
             definition_name: "restore-test".to_string(),
+            execution: None,
+            definition_snapshot: None,
+            storage_root: None,
             status: WorkflowStatus::Running,
             cancel_requested: false,
             current_phase: Some("phase-a".to_string()),
@@ -1534,7 +1917,7 @@ mod tests {
     }
 
     #[test]
-    fn resume_overlay_falls_back_to_state_snapshot() {
+    fn legacy_resume_overlay_refuses_to_guess_execution_identity() {
         let root = std::env::temp_dir().join(format!(
             "demiurge_workflow_resume_state_{}",
             store::new_session_id()
@@ -1545,6 +1928,9 @@ mod tests {
             run_id: "wf_resume_state".to_string(),
             name: "resume-state".to_string(),
             definition_name: "resume-state".to_string(),
+            execution: None,
+            definition_snapshot: None,
+            storage_root: None,
             status: WorkflowStatus::Failed,
             cancel_requested: false,
             current_phase: Some("verify".to_string()),
@@ -1578,11 +1964,8 @@ mod tests {
         };
         write_run_state_in_root(&root, &run).unwrap();
 
-        let overlay = resume_overlay(&state, "wf_resume_state").unwrap();
-
-        assert!(overlay.contains("durable state snapshot"));
-        assert!(overlay.contains("wf_resume_state"));
-        assert!(overlay.contains("\"steps_done\": 3"));
+        let error = resume_overlay(&state, "wf_resume_state").unwrap_err();
+        assert!(error.contains("verified execution identity"));
 
         let _ = std::fs::remove_dir_all(root);
     }
